@@ -257,11 +257,29 @@ window.AgentRuntime = window.AgentRuntime || {};
         'form', 'dialog', 'tablist', 'menu', 'aside', 'section', 'article', 'search', 'region'
       ]);
       // 1. 候选锚点:结构性语义角色 + 面积 > 视口 2%(避免把普通小按钮/链接当街区)
-      const anchors = elements.filter(e =>
+      const candidates = elements.filter(e =>
         anchorSems.has(e.semantic) &&
         (e.bounds.w * e.bounds.h) > viewportArea * 0.02 &&
         e.tag !== 'html' && e.tag !== 'body'
       ).sort((a, b) => (b.bounds.w * b.bounds.h) - (a.bounds.w * a.bounds.h));
+
+      // 1.5 去重叠锚点:多个容器叠在同一位置(如 fixed header + 语义 header)会产生空壳区域,
+      // 判定:交集占"两者中较大面积"的比例 ≥ 85% 视为几乎完全重合 → 只保留面积最大的。
+      // 注意用 maxArea 而非 minArea:main 套 nav 这种"大容器包含小容器"是正常层级(交集/小面积=100%
+      // 但交集/大面积≈0),不应合并;只有两个差不多大的容器几乎完全叠在一起才该合并。
+      const kept = [];
+      for (const a of candidates) {
+        let dup = false;
+        for (const k of kept) {
+          const ix = Math.max(0, Math.min(a.bounds.x + a.bounds.w, k.bounds.x + k.bounds.w) - Math.max(a.bounds.x, k.bounds.x));
+          const iy = Math.max(0, Math.min(a.bounds.y + a.bounds.h, k.bounds.y + k.bounds.h) - Math.max(a.bounds.y, k.bounds.y));
+          const inter = ix * iy;
+          const maxArea = Math.max(a.bounds.w * a.bounds.h, k.bounds.w * k.bounds.h);
+          if (maxArea > 0 && inter / maxArea >= 0.85) { dup = true; break; }
+        }
+        if (!dup) kept.push(a);
+      }
+      const anchors = kept;
 
       // 2. 构件归属:每个构件分给"包含其中心点的最小锚点"(避免 form 套 main 时重复归属)
       const regionOf = new Map(); // element id -> anchor id
@@ -282,7 +300,6 @@ window.AgentRuntime = window.AgentRuntime || {};
 
       // 3. 组装街区
       const regions = [];
-      const anchorById = new Map(anchors.map(a => [a.id, a]));
       for (const a of anchors) {
         const members = elements.filter(e => regionOf.get(e.id) === a.id && e.id !== a.id);
         const interactive = members.filter(m => m.interactive);
@@ -301,7 +318,9 @@ window.AgentRuntime = window.AgentRuntime || {};
           }))
         });
       }
-      regions.sort((a, b) => a.region.bounds.y - b.region.bounds.y); // 按页面从上到下
+      // 过滤空壳区域:去重叠后仍可能残留"无构件且无入口"的纯容器(如纯定位壳),不输出
+      const nonEmpty = regions.filter(r => r.total > 0 || r.entries.length > 0);
+      nonEmpty.sort((a, b) => a.region.bounds.y - b.region.bounds.y); // 按页面从上到下
 
       // 4. 散件(other)
       const assigned = new Set(regionOf.values());
@@ -313,7 +332,7 @@ window.AgentRuntime = window.AgentRuntime || {};
       return {
         total: elements.length,
         interactive: elements.filter(e => e.interactive).length,
-        regions,
+        regions: nonEmpty,
         other: {
           total: others.length,
           interactive: otherInteractive.length,

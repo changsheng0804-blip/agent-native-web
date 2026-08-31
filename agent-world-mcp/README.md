@@ -69,6 +69,7 @@
 - **anomaly 口径修复(2026-08-31)**:anomaly 检测原用"裸可见 DOM"计数(`querySelectorAll('*')`),而原生网页世界 scanner 会过滤装饰标签(br/svg/path/script 等)+ 小元素。重型 SPA 合法地"DOM 多、模型少" → 误报反爬。改为与 scanner 同口径(排除装饰标签 + <3px)后再比较。涉及 `server.py` 状态卡。
 - **observer 补状态/显隐属性监听(2026-08-31)**:实战验证发现 HTML 原生弹窗用 `open` 属性切换显隐、tab/折叠用 `aria-selected`/`aria-expanded`,原 attributeFilter 不含这些属性 → 元素变可见/变状态但世界不更新。attributeFilter 补 `open`/`aria-expanded`/`aria-selected`,重建 all-in-one.js。涉及 `content/observer.js`。
 - **可见性过滤增强:识别难识别内容(2026-08-31)**:scanner 原只过滤 display/visibility/opacity 三种结构性隐藏 + 小元素,对"肉眼难识别但仍占位/有文本"的内容(同色文字 / 绝对定位脱出视口 / font-size:0 / 大幅负 text-indent / aria-hidden)判断不足,这些内容会以失真的形态混进原生网页世界。新增 `engine/visibility.js#isPseudoHidden` 补五类判断(同色文字/绝对定位脱出视口上方左侧/font-size:0/大幅负 text-indent/aria-hidden 祖先链),scanner + 状态卡 dialogs 统一接入;observer 补 aria-hidden 属性监听,运行时变隐藏的元素从世界移除(含子树)。修复后五类内容全被识别过滤,正常元素不误伤,动态"先可见后隐藏"的内容也会被及时移除。涉及 `engine/visibility.js`、`engine/scanner.js`、`content/observer.js`、`content/runtime.js`,改后重建 `all-in-one.js`。
+- **world_map 去重叠锚点(2026-08-31)**:多真站体检发现空区域噪音(多个 header/导航容器叠同一位置)。修复:① 锚点去重叠——交集占**较大面积** ≥85% 视为几乎重合,只保留面积最大(**必须用大面积判据**:main 套 nav 是"包含"非"重叠",用交集/小面积会误合并,曾把 GitHub 误并成 3 区已修正);② 过滤空壳区域。修复后空区域 18→0。涉及 `engine/query.js#map`,重建 all-in-one.js。百度类纯 div 页(0 语义容器)不强求地图,散件可找。
 
 操作类工具(`world_click`/`world_fill`/`world_press`)执行后自动刷新状态卡(等待渲染),返回即见操作结果。
 
@@ -246,6 +247,7 @@ agent-world-mcp/
 ├── validate_closed_loop.py  # 实时闭环实战验证:effect 判定一致性矩阵(truth oracle)+ 报告
 ├── test_fingerprint.py     # 稳定指纹:同站两次进站指纹一致 + 按指纹一步定位(认路记忆)
 ├── test_map.py             # 页面结构导览 world_map:语义分区 + 各区入口 + 强 ID 可钻取
+├── test_map_real.py        # world_map 多真站体检:区域/空区/散件/钻取(去重叠锚点验证)
 └── test_gf_final.py   # 正常站点(GF)上 frames/anomaly/navigate 冒烟
 
 (monorepo 根)
