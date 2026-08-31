@@ -41,8 +41,9 @@ async def main():
             print(f"   状态卡 JSON 长度: {len(json.dumps(st, ensure_ascii=False))} 字符")
 
             # 2. 本地动态页验证 forms(受控组件稳定的站点)
+            dyn_uri = (Path(__file__).resolve().parent.parent / "test_fixtures" / "dyn.html").as_uri()
             r = await asyncio.wait_for(
-                session.call_tool("world_open", {"url": "http://127.0.0.1:8001/dyn.html", "wait_ms": 1000}),
+                session.call_tool("world_open", {"url": dyn_uri, "wait_ms": 1000}),
                 timeout=60,
             )
             w2 = json.loads(r.content[0].text)["world_id"]

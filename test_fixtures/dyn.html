@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>动态测试页</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; }
+        .box { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+    <h1>动态测试页</h1>
+    <div class="box">
+        <label for="search-input">搜索</label>
+        <input id="search-input" name="search" placeholder="搜索" type="text" />
+        <button id="search-btn">搜索</button>
+        <div id="suggestions" style="margin-top:5px; color:blue;"></div>
+    </div>
+    <div class="box">
+        <label for="username">用户名</label>
+        <input id="username" name="username" placeholder="用户名" type="text" />
+        <label for="email">邮箱</label>
+        <input id="email" name="email" placeholder="邮箱" type="text" />
+    </div>
+    <div id="dynamic-list" class="box">
+        <p>初始内容</p>
+    </div>
+    <script>
+        let count = 0;
+        setInterval(() => {
+            count++;
+            const p = document.createElement("p");
+            p.id = "item-" + count;
+            p.textContent = "动态项 " + count;
+            document.getElementById("dynamic-list").appendChild(p);
+        }, 300);
+    </script>
+</body>
+</html>

@@ -19,13 +19,15 @@
 
 | 工具 | 作用 | 心智类比 |
 |---|---|---|
-| `world_open(url, headful?, profile?)` | 打开网页,返回世界 ID + 摘要(可开窗/持久化登录态) | 摊开图纸 |
+| `world_open(url, headful?, profile?, cdp_url?)` | 打开网页,返回世界 ID + 摘要(可开窗/持久化登录态/CDP 日常浏览器挂载) | 摊开图纸 |
 | `world_entities({role, text, name, ...})` | 过滤查构件清单 | 构件表(BOM) |
 | `world_entity(id)` | 单构件详情(坐标/邻居/区域) | 构件详图 |
 | `world_layers()` | 结构/语义/空间/交互统计 | 图纸图层 |
 | `world_resolve("combobox.round-trip")` | 名字 → 稳定编号 | 查门牌号 |
 | `world_changes(since)` | 增量变更流,游标续读 | 视频帧续读 |
-| `world_click(id)` / `world_fill(id, text)` / `world_press(id, key)` | 编号驱动操作 | 按编号施工 |
+| `world_click(id)` / `world_press(id, key)` | 编号驱动点击(带遮挡检测)/ 按键 | 按编号施工 |
+| `world_fill(id, text, type_delay_ms?)` | 编号填表(支持打字间隔模拟触发联想) | 填入内容 |
+| `world_batch_fill(fields)` | 批量填多个字段(逐字段容错,单次往返) | 批量填写 |
 | `world_wait(appear/disappear, ...)` | 等待构件状态 | 检查施工结果 |
 | `world_screenshot(id?)` | 整页/局部截图 | 拍照存档 |
 | `world_navigate(url)` | 世界内导航(SPA 换页不用重开) | 图纸翻页 |
@@ -154,6 +156,7 @@ agent-world-mcp/
 ├── test_click.py      # 点击乘客按钮 -> 面板弹出 -> Adults 元素出现
 ├── test_fill.py       # 填出发地 Tokyo -> 建议列表出现
 ├── test_action_layer.py  # 行动层:locator 优先 + 覆盖层验证 + world_press
+├── test_enhancements.py  # 进阶增强:逐字打字/批量填表/遮挡诊断(本地夹具)
 ├── test_value.py      # value 入图:fill 后原生网页世界可见输入框值
 ├── test_profile.py    # headful + profile:登录态持久化验证
 ├── test_compare.py    # profile vs 普通 launch 的原生网页世界对比
@@ -161,6 +164,10 @@ agent-world-mcp/
 ├── test_status.py     # 世界状态卡:auth/dialogs/page/forms/changed
 ├── test_eval.py       # world_eval:只读查询/函数表达式/截断/错误
 └── test_gf_final.py   # 正常站点(GF)上 frames/anomaly/navigate 冒烟
+
+(monorepo 根)
+├── test_fixtures/dyn.html     # 本地动态测试页夹具(供 test_enhancements/test_status 用)
+└── skills/agent-world/SKILL.md # Agent World 标准化技能包(四层能力 Playbook)
 ```
 
 ## 实战验证矩阵(2026-08-31)
@@ -205,11 +212,12 @@ python test_official.py       # 官方客户端全链路:握手/工具列表/wor
 python test_click.py          # 点击乘客按钮 -> 面板弹出 -> Adults 元素出现
 python test_fill.py           # 填出发地 Tokyo -> 建议列表(option.tokyo-japan)出现
 python test_action_layer.py   # 行动层:locator 优先 + 覆盖层验证降级 + world_press
+python test_enhancements.py   # 进阶增强:逐字打字/批量填表(容错)/遮挡诊断(本地夹具,不依赖外网)
 python test_value.py          # value 入图:fill 后原生网页世界可见输入框值
 python test_profile.py        # headful + profile:登录态持久化验证
 python test_compare.py        # profile vs 普通 launch:原生网页世界对比
 python test_frames.py         # frame 感知 + anomaly + navigate + click_at
-python test_status.py         # 世界状态卡:auth/dialogs/page/forms/changed
+python test_status.py         # 世界状态卡:auth/dialogs/page/forms/changed(本地夹具)
 python test_eval.py           # world_eval:JS 查询/截断/错误处理
 python test_gf_final.py       # Google Flights 冒烟:frames/anomaly/navigate 无异常
 ```

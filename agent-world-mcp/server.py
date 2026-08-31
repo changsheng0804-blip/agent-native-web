@@ -94,15 +94,16 @@ async def list_tools():
     return [
         types.Tool(
             name="world_open",
-            description="打开一个网页并建立原生网页世界(注入 agent-runtime)。返回世界 ID 和页面摘要。可并行打开多个世界互不干扰。headful=true 时弹出可见窗口(人工介入点:登录/验证码/真人确认);profile=名称 时使用持久化登录态(同一名称复用)。",
+            description="打开一个网页并建立原生网页世界(注入 agent-runtime)。返回世界 ID 和页面摘要。可并行打开多个世界互不干扰。headful=true 时弹出可见窗口(人工介入点:登录/验证码/真人确认);profile=名称 时使用持久化登录态(同一名称复用);cdp_url 可连接已有 Chrome 调试端口(如 http://localhost:9222),复用日常已登录浏览器(注意:不会关闭用户浏览器)。",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "要打开的网址"},
+                    "url": {"type": "string", "description": "要打开的网址(使用 cdp_url 时可填当前页地址,与当前页相同则跳过导航;填空则直接注入当前页)"},
                     "wait_ms": {"type": "number", "description": "初始等待毫秒(动态页面建议 3000-6000)", "default": 3000},
                     "stabilize_ms": {"type": "number", "description": "等待世界稳定(状态卡 stable)的最大毫秒,渐进渲染页面自动等", "default": 10000},
                     "headful": {"type": "boolean", "description": "是否弹出可见窗口(登录/验证码/人工确认场景用)", "default": False},
                     "profile": {"type": "string", "description": "持久化登录态名称(如 login-taobao),同一名称复用 cookie/会话;留空则不持久化"},
+                    "cdp_url": {"type": "string", "description": "连接已有 Chrome 的 CDP 调试地址(如 http://localhost:9222),复用日常已登录浏览器;与 profile/headless 互斥"},
                 },
                 "required": ["url"],
             },
@@ -172,7 +173,7 @@ async def list_tools():
         ),
         types.Tool(
             name="world_click",
-            description="按编号点击元素(原生 click 事件)。",
+            description="按编号点击元素(原生 click 事件)。带遮挡检测与自动等待。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -184,15 +185,40 @@ async def list_tools():
         ),
         types.Tool(
             name="world_fill",
-            description="按编号填入文本(优先 Playwright 原生 fill:自动等待+React 兼容;失败自动降级 JS setter+覆盖层切换)。",
+            description="按编号填入文本(优先 Playwright 原生 fill/press_sequentially;支持打字间隔模拟触发联想;失败自动降级 JS setter+覆盖层切换)。",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "world_id": {"type": "integer"},
                     "id": {"type": "string", "description": "构件编号或名字"},
                     "text": {"type": "string", "description": "要填入的文本"},
+                    "type_delay_ms": {"type": "integer", "description": "逐字打字延迟毫秒(>0 时模拟真实键盘输入,触发自动联想下拉)", "default": 0},
                 },
                 "required": ["world_id", "id", "text"],
+            },
+        ),
+        types.Tool(
+            name="world_batch_fill",
+            description="批量填入多个表单字段(单次 MCP 往返完成多个输入框填写,减少交互延迟;逐字段容错,失败不影响后续)。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "fields": {
+                        "type": "array",
+                        "description": "表单字段列表: [{ id, text, type_delay_ms? }]",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "description": "构件编号或名字"},
+                                "text": {"type": "string", "description": "填入内容"},
+                                "type_delay_ms": {"type": "integer", "description": "逐字打字延迟毫秒", "default": 0},
+                            },
+                            "required": ["id", "text"],
+                        },
+                    },
+                },
+                "required": ["world_id", "fields"],
             },
         ),
         types.Tool(
@@ -457,6 +483,8 @@ def _impl(name, args):
         return _t_world_click(args)
     if name == "world_fill":
         return _t_world_fill(args)
+    if name == "world_batch_fill":
+        return _t_world_batch_fill(args)
     if name == "world_press":
         return _t_world_press(args)
     if name == "world_wait":
@@ -492,12 +520,20 @@ def _resolve_id(world_id, q):
 
 def _t_world_open(args):
     global _next_world_id
-    url = args["url"]
+    url = args["url"] or ""
     wait_ms = int(args.get("wait_ms", 3000))
     headful = bool(args.get("headful", False))
     profile = args.get("profile") or None
+    cdp_url = args.get("cdp_url") or None
     pw = _get_pw()
-    if profile:
+    if cdp_url:
+        # CDP 挂载:连接已有 Chrome 的调试端口(复用日常登录态/已打开页面)。
+        # 注意:这是连接而非启动,world_close 时只断开不关闭用户浏览器。
+        browser = pw.chromium.connect_over_cdp(cdp_url)
+        context = browser.contexts[0] if browser.contexts else browser.new_context()
+        page = context.pages[0] if context.pages else context.new_page()
+        handle = browser
+    elif profile:
         profile_dir = PROFILES_DIR / str(profile)
         profile_dir.mkdir(parents=True, exist_ok=True)
         # 持久化上下文:cookie/会话按 profile 名复用
@@ -524,16 +560,34 @@ def _t_world_open(args):
         page = context.new_page()
         handle = browser
     page.add_init_script(INJECT_JS)
-    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    if cdp_url:
+        # 已存在的页面 add_init_script 不会立即生效(只对后续导航生效),
+        # 若指定 url 且与当前页不同则导航(init 脚本随导航注入),否则手动注入当前页。
+        if url and page.url != url:
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        else:
+            try:
+                page.evaluate(INJECT_JS)
+            except Exception:
+                pass
+    else:
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
     if wait_ms:
         page.wait_for_timeout(wait_ms)
     ready = _wait_world_ready(page)
     if not ready:
-        handle.close()
-        raise ValueError(f"世界注入失败(页面可能拦截了脚本): {url}")
+        # CDP 连接失败时只断开,不关闭用户浏览器
+        if cdp_url:
+            try:
+                browser.close()
+            except Exception:
+                pass
+        else:
+            handle.close()
+        raise ValueError(f"世界注入失败(页面可能拦截了脚本): {url or '(CDP 当前页)'}")
     wid = _next_world_id
     _next_world_id += 1
-    _worlds[wid] = {"handle": handle, "context": context, "page": page, "url": url, "opened_at": time.time(), "profile": profile}
+    _worlds[wid] = {"handle": handle, "context": context, "page": page, "url": page.url, "opened_at": time.time(), "profile": profile, "cdp_url": cdp_url}
     # 等待世界稳定(分层加载:渐进渲染/懒加载,固定秒数不可靠,以状态卡 stable 为准)
     stabilize_ms = int(args.get("stabilize_ms", 10000))
     deadline = time.time() + stabilize_ms / 1000
@@ -546,7 +600,7 @@ def _t_world_open(args):
             pass
         time.sleep(0.5)
     summary = _evaluate(wid, "agentWorld.query.getPageSummary()")
-    return _ok({"world_id": wid, "url": url, "ready": True, "headful": headful, "profile": profile, "summary": summary})
+    return _ok({"world_id": wid, "url": page.url, "ready": True, "headful": headful, "profile": profile, "cdp_url": cdp_url, "summary": summary})
 
 
 def _t_world_entities(args):
@@ -601,16 +655,24 @@ def _build_locator(w, ent):
         except Exception:
             return 0
 
-    # 1. 页面原生 id(精确唯一)
+    # 1. 页面原生 id(精确唯一;多匹配时优先可见的那个——SPA 常保留隐藏副本)
     if attrs.get("id"):
         loc = page.locator(f'[id="{attrs["id"]}"]')
         if _count(loc) == 1:
             return loc
+        elif _count(loc) > 1:
+            loc_vis = loc.filter(visible=True)
+            if _count(loc_vis) == 1:
+                return loc_vis
     # 2. placeholder 属性(输入框常见)
     if attrs.get("placeholder"):
         loc = page.locator(f'[placeholder="{attrs["placeholder"]}"]')
         if _count(loc) == 1:
             return loc
+        elif _count(loc) > 1:
+            loc_vis = loc.filter(visible=True)
+            if _count(loc_vis) == 1:
+                return loc_vis
     # 3. ARIA role + 可访问名(Playwright 语义定位)
     pw_roles = {
         "button": "button", "link": "link", "input": "textbox",
@@ -622,14 +684,26 @@ def _build_locator(w, ent):
         loc = page.get_by_role(pw_roles[semantic], name=acc_name, exact=False)
         if _count(loc) == 1:
             return loc
+        elif _count(loc) > 1:
+            loc_vis = loc.filter(visible=True)
+            if _count(loc_vis) == 1:
+                return loc_vis
     # 4. 文本唯一匹配(短文本)
     if text and 1 <= len(text) <= 50:
         loc = page.get_by_text(text, exact=True)
         if _count(loc) == 1:
             return loc
+        elif _count(loc) > 1:
+            loc_vis = loc.filter(visible=True)
+            if _count(loc_vis) == 1:
+                return loc_vis
         loc = page.get_by_text(text, exact=False)
         if _count(loc) == 1:
             return loc
+        elif _count(loc) > 1:
+            loc_vis = loc.filter(visible=True)
+            if _count(loc_vis) == 1:
+                return loc_vis
     return None
 
 
@@ -680,13 +754,42 @@ def _t_world_click(args):
     ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target)
     if not ent:
         raise ValueError(f"构件不存在: {args['id']}")
+
+    # 遮挡检测:检查元素中心点是否被上层弹窗/遮罩层挡住(信息提示,不改变点击行为)
+    hit_info = _evaluate(
+        wid,
+        """(id) => {
+            const el = agentWorld._runtime.world.elements.get(id);
+            if (!el) return null;
+            el._el.scrollIntoView({ block: 'center', inline: 'center' });
+            const r = el._el.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) return { visible: false };
+            const cx = Math.round(r.x + r.width / 2), cy = Math.round(r.y + r.height / 2);
+            const top = document.elementFromPoint(cx, cy);
+            const obscured = (top && top !== el._el && !el._el.contains(top));
+            return {
+                visible: true,
+                obscured: Boolean(obscured),
+                topTag: top ? top.tagName.toLowerCase() : null,
+                topRole: top ? (top.getAttribute('role') || '') : null
+            };
+        }""",
+        target,
+    )
+    obscured_note = None
+    if hit_info and hit_info.get("obscured"):
+        obscured_note = f"目标上方存在层级: <{hit_info.get('topTag')}> role={hit_info.get('topRole') or 'none'}"
+
     loc = _build_locator(w, ent)
     if loc:
         try:
             # Playwright locator:自动等待可见/稳定/可点击,错误信息清晰
             loc.click(timeout=10000)
             _refresh_core_status(wid)
-            return _ok({"world_id": wid, "clicked": target, "method": "locator"})
+            ret = {"world_id": wid, "clicked": target, "method": "locator"}
+            if obscured_note:
+                ret["obscured_note"] = obscured_note
+            return _ok(ret)
         except Exception as e:
             loc_err = f"{type(e).__name__}: {str(e)[:200]}"
     else:
@@ -711,13 +814,17 @@ def _t_world_click(args):
     w["page"].mouse.down()
     w["page"].mouse.up()
     _refresh_core_status(wid)
-    return _ok({"world_id": wid, "clicked": target, "method": "mouse-gesture", "at": [cx, cy], "locator_note": loc_err})
+    ret = {"world_id": wid, "clicked": target, "method": "mouse-gesture", "at": [cx, cy], "locator_note": loc_err}
+    if obscured_note:
+        ret["obscured_note"] = obscured_note
+    return _ok(ret)
 
 
 def _t_world_fill(args):
     wid = args["world_id"]
     target = _resolve_id(wid, args["id"])
     text = args["text"]
+    type_delay_ms = int(args.get("type_delay_ms", 0))
     w = _world(wid)
     ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target)
     if not ent:
@@ -725,13 +832,18 @@ def _t_world_fill(args):
     loc = _build_locator(w, ent)
     if loc:
         try:
-            # Playwright fill:自动等待 + React 兼容输入 + 清晰错误
-            loc.fill(text, timeout=10000)
+            if type_delay_ms > 0:
+                # 逐字打字:模拟真实键盘输入,触发受控组件/自动联想下拉
+                loc.press_sequentially(text, delay=type_delay_ms, timeout=10000)
+            else:
+                # Playwright fill:自动等待 + React 兼容输入 + 清晰错误
+                loc.fill(text, timeout=10000)
             # 关键验证:locator 不检测遮挡,SPA 会把值填进被覆盖的旧输入框而"静默成功"。
             # 未在可见输入框验证到文本 → 判定失败,降级到 js-setter(自带覆盖层切换)。
             if _fill_visible(wid, text):
                 _refresh_core_status(wid)
-                return _ok({"world_id": wid, "filled": target, "text": text, "method": "locator-fill"})
+                method = "locator-sequential-type" if type_delay_ms > 0 else "locator-fill"
+                return _ok({"world_id": wid, "filled": target, "text": text, "method": method})
             fill_err = "fill 后未在可见输入框验证到文本(可能被 SPA 覆盖层拦截)"
         except Exception as e:
             fill_err = f"{type(e).__name__}: {str(e)[:200]}"
@@ -776,6 +888,38 @@ def _t_world_fill(args):
     return _ok({"world_id": wid, "filled": target, "text": text, "target_tag": r.get("tag"), "method": "js-setter", "locator_note": fill_err})
 
 
+def _t_world_batch_fill(args):
+    """批量填入表单字段:单次 MCP 往返完成多个输入框填写。
+    逐字段容错:单个字段失败记录 error 并继续,不中断整个批次。
+    """
+    wid = args["world_id"]
+    fields = args.get("fields") or []
+    if not fields:
+        raise ValueError("fields 列表不能为空")
+    results = []
+    for f in fields:
+        fid = f.get("id")
+        if not fid:
+            results.append({"id": None, "ok": False, "error": "缺少 id"})
+            continue
+        try:
+            sub_args = {
+                "world_id": wid,
+                "id": fid,
+                "text": f.get("text", ""),
+                "type_delay_ms": int(f.get("type_delay_ms", 0)),
+            }
+            res = _t_world_fill(sub_args)
+            if res and res[0].type == "text":
+                data = json.loads(res[0].text)
+                results.append({"id": fid, "target": data.get("filled"), "method": data.get("method"), "ok": True})
+        except Exception as e:
+            results.append({"id": fid, "ok": False, "error": f"{type(e).__name__}: {str(e)[:150]}"})
+    _refresh_core_status(wid)
+    ok_count = sum(1 for r in results if r.get("ok"))
+    return _ok({"world_id": wid, "batch_count": len(results), "ok_count": ok_count, "results": results})
+
+
 def _t_world_press(args):
     """按编号聚焦并按按键(如 Enter/Escape/Tab)"""
     wid = args["world_id"]
@@ -792,13 +936,17 @@ def _t_world_press(args):
             return _ok({"world_id": wid, "pressed": target, "key": key, "method": "locator-press"})
         except Exception as e:
             raise ValueError(f"按键失败: {type(e).__name__}: {str(e)[:200]}")
-    # 兜底:JS focus + dispatch keydown/keyup
+    # 兜底:JS focus + dispatch keydown/keyup + 真实键盘事件(比纯 JS dispatch 更可靠)
     ok = _evaluate(
         wid,
         """(args) => {
             const el = agentWorld._runtime.world.elements.get(args.id);
             if (!el) return false;
-            const node = el._el.querySelector('input, textarea') || el._el;
+            let node = el._el;
+            if (node.tagName !== 'INPUT' && node.tagName !== 'TEXTAREA') {
+                const child = node.querySelector('input, textarea, [contenteditable="true"]');
+                if (child) node = child;
+            }
             node.focus();
             for (const t of ['keydown', 'keyup']) {
                 node.dispatchEvent(new KeyboardEvent(t, { key: args.key, bubbles: true }));
@@ -809,7 +957,12 @@ def _t_world_press(args):
     )
     if not ok:
         raise ValueError(f"构件不存在: {args['id']}")
-    return _ok({"world_id": wid, "pressed": target, "key": key, "method": "js-keydown"})
+    try:
+        w["page"].keyboard.press(key)
+    except Exception:
+        pass
+    _refresh_core_status(wid)
+    return _ok({"world_id": wid, "pressed": target, "key": key, "method": "native-keyboard"})
 
 
 def _t_world_wait(args):
@@ -897,6 +1050,13 @@ def _t_world_close(args):
     wid = args["world_id"]
     w = _worlds.pop(int(wid), None)
     if w:
+        # CDP 连接:只断开,不关闭用户浏览器,也不导出 profile(会话属于用户日常浏览器)
+        if w.get("cdp_url"):
+            try:
+                w["handle"].close()
+            except Exception:
+                pass
+            return _ok({"world_id": wid, "closed": True, "cdp_disconnected": True})
         try:
             # 导出会话状态(session cookie 也保留),供同 profile 重开时恢复登录态
             if w.get("profile") and w.get("context"):
