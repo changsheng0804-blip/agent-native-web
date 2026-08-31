@@ -354,8 +354,10 @@ def _status(wid):
             if not f.url or f.url.startswith("about:"):
                 continue
             fcnt = f.evaluate("document.querySelectorAll('*').length")
+            # 可见元素计数采用"世界模型 scanner 同口径"(排除装饰标签/小元素),
+            # 避免重型 SPA 的合法 DOM 膨胀被误判为 anomaly(实战: Booking.com 误报)
             fvisible = f.evaluate(
-                "[...document.querySelectorAll('*')].filter(e => { const s = getComputedStyle(e); const r = e.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) !== 0 && r.width > 3 && r.height > 3; }).length"
+                "[...document.querySelectorAll('*')].filter(e => { const t = e.tagName.toLowerCase(); if (['br','hr','script','style','link','meta','noscript','svg','path','g','defs','use'].includes(t)) return false; const s = getComputedStyle(e); const r = e.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) !== 0 && r.width > 3 && r.height > 3; }).length"
             )
             fready = f.evaluate("typeof window.agentWorld !== 'undefined'")
             frames.append({"url": f.url[:100], "elements": fcnt, "visible": fvisible, "ready": bool(fready)})
@@ -641,6 +643,36 @@ def _refresh_core_status(wid, settle_ms=300):
         pass
 
 
+def _fill_visible(wid, text):
+    """验证目标文本是否已落入页面某个"可见且未被覆盖"的输入框。
+
+    背景:SPA 对话框(如 Google Flights)点击输入框后会新建一个可见输入框副本,
+    原输入框被覆盖。Playwright locator.fill() 只要求元素可见可编辑、不检测遮挡,
+    会把值填进被覆盖的旧框而"静默成功"。此验证用 elementFromPoint 排除被覆盖框。
+    """
+    try:
+        ok = _evaluate(
+            wid,
+            """(text) => {
+                const nodes = [...document.querySelectorAll('input, textarea, [contenteditable="true"]')].filter(n => {
+                    const r = n.getBoundingClientRect();
+                    if (r.width < 5 || r.height < 5) return false;
+                    const s = getComputedStyle(n);
+                    if (s.display === 'none' || s.visibility === 'hidden' || parseFloat(s.opacity) === 0) return false;
+                    const cx = r.x + r.width / 2, cy = r.y + r.height / 2;
+                    const top = document.elementFromPoint(cx, cy);
+                    // 顶层是自己或包含自己 = 未被覆盖
+                    return top === n || n.contains(top) || (top && top.contains(n));
+                });
+                return nodes.some(n => ((n.value || '') + ' ' + (n.textContent || '')).includes(text));
+            }""",
+            text,
+        )
+        return bool(ok)
+    except Exception:
+        return False
+
+
 def _t_world_click(args):
     wid = args["world_id"]
     target = _resolve_id(wid, args["id"])
@@ -695,8 +727,12 @@ def _t_world_fill(args):
         try:
             # Playwright fill:自动等待 + React 兼容输入 + 清晰错误
             loc.fill(text, timeout=10000)
-            _refresh_core_status(wid)
-            return _ok({"world_id": wid, "filled": target, "text": text, "method": "locator-fill"})
+            # 关键验证:locator 不检测遮挡,SPA 会把值填进被覆盖的旧输入框而"静默成功"。
+            # 未在可见输入框验证到文本 → 判定失败,降级到 js-setter(自带覆盖层切换)。
+            if _fill_visible(wid, text):
+                _refresh_core_status(wid)
+                return _ok({"world_id": wid, "filled": target, "text": text, "method": "locator-fill"})
+            fill_err = "fill 后未在可见输入框验证到文本(可能被 SPA 覆盖层拦截)"
         except Exception as e:
             fill_err = f"{type(e).__name__}: {str(e)[:200]}"
     else:

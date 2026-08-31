@@ -6,6 +6,7 @@
 import asyncio
 import json
 import sys
+from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -18,7 +19,7 @@ LOCAL = "http://127.0.0.1:8001/dyn.html"
 async def main():
     params = StdioServerParameters(
         command=sys.executable,
-        args=[r"F:\成果库\Agent 友好插件\agent-world-mcp\server.py"],
+        args=[str(Path(__file__).resolve().parent / "server.py")],
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
@@ -45,7 +46,7 @@ from playwright.sync_api import sync_playwright
 sys.stdout.reconfigure(encoding="utf-8")
 with sync_playwright() as p:
     ctx = p.chromium.launch_persistent_context(
-        user_data_dir=r"F:\\成果库\\Agent 友好插件\\agent-world-mcp\\profiles\\test-profile-1",
+        user_data_dir=str(Path(__file__).resolve().parent / "profiles" / "test-profile-1"),
         headless=True,
     )
     pg = ctx.new_page()
@@ -78,7 +79,7 @@ from playwright.sync_api import sync_playwright
 sys.stdout.reconfigure(encoding="utf-8")
 with sync_playwright() as p:
     ctx = p.chromium.launch_persistent_context(
-        user_data_dir=r"F:\\成果库\\Agent 友好插件\\agent-world-mcp\\profiles\\test-profile-1",
+        user_data_dir=str(Path(__file__).resolve().parent / "profiles" / "test-profile-1"),
         headless=True,
     )
     pg = ctx.new_page()

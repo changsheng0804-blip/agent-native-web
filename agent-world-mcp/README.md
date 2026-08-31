@@ -5,14 +5,15 @@
 
 ## 这是什么
 
-一个 MCP 服务器。启动后,AI agent(Claude Code、Cursor、opencode 等)通过 12 个标准工具:
+一个 MCP 服务器。启动后,AI agent(Claude Code、Cursor、opencode 等)通过 16 个标准工具:
 
 - **打开世界**:`world_open` —— 打开网页并建立世界模型(可并行多开,互不干扰,不打扰你的桌面)
 - **看图**:`world_entities`(构件清单)/ `world_entity`(构件详情)/ `world_layers`(图层视图)/ `world_resolve`(名字查编号)
 - **看视频**:`world_changes` —— 页面变化增量续读(游标),不用每次全量重看
-- **动手**:`world_click` / `world_fill` —— 全部编号驱动,无选择器脆弱性
+- **动手**:`world_click` / `world_fill` / `world_press` —— 全部编号驱动,无选择器脆弱性
 - **验证**:`world_wait`(等待构件出现/消失)/ `world_screenshot`(截图兜底)
 - **管理**:`world_list` / `world_close`
+- **补充**:`world_navigate`(世界内导航)/ `world_click_at`(坐标点击兜底)/ `world_eval`(世界内 JS 调试)
 
 ## 工具速查
 
@@ -27,6 +28,9 @@
 | `world_click(id)` / `world_fill(id, text)` / `world_press(id, key)` | 编号驱动操作 | 按编号施工 |
 | `world_wait(appear/disappear, ...)` | 等待构件状态 | 检查施工结果 |
 | `world_screenshot(id?)` | 整页/局部截图 | 拍照存档 |
+| `world_navigate(url)` | 世界内导航(SPA 换页不用重开) | 图纸翻页 |
+| `world_click_at(x, y)` | 视口坐标点击(世界模型外元素兜底) | 按坐标施工 |
+| `world_eval(expression)` | 世界内执行 JS(调试/特殊查询) | 现场勘察 |
 | `world_list` / `world_close` | 管理世界 | 图纸归档 |
 
 ## 世界状态卡(仪表盘)
@@ -58,6 +62,8 @@
 - `world_click_at(x,y)`:视口坐标点击(世界模型外元素兜底)
 - `world_open` 增加 `stabilize_ms`:等待世界稳定(状态卡 stable)才返回,解决渐进渲染/分层加载的"读太早"问题
 - `page.state: anomaly`:反爬/异常页检测(如闲鱼对自动化会话返回简化页或增删循环页时,世界模型严重缩水 → 标记)
+- **内核观察器饿死修复(2026-08-31)**:observer 原用"每次 mutation 重置 150ms 防抖"设计,持续变更页面(懒加载/轮播/广告刷新,如 Booking)会让 `onChange` 永远不触发 → 世界模型停更。实测 Booking 上 world 停滞在 678 个、forceRefresh 却抓到 2426 个。改为**累积式防抖 + maxWait(1000ms)兜底**:mutation 累积到 pending,变更停止 150ms 后处理;若持续变更导致防抖被不断重置,最多 1000ms 强制 flush 一次。修复后捕获率 28% → 98%。涉及 `content/observer.js`,改后需重新构建 `all-in-one.js`。
+- **anomaly 口径修复(2026-08-31)**:anomaly 检测原用"裸可见 DOM"计数(`querySelectorAll('*')`),而世界模型 scanner 会过滤装饰标签(br/svg/path/script 等)+ 小元素。重型 SPA 合法地"DOM 多、模型少" → 误报反爬。改为与 scanner 同口径(排除装饰标签 + <3px)后再比较。涉及 `server.py` 状态卡。
 
 操作类工具(`world_click`/`world_fill`/`world_press`)执行后自动刷新状态卡(等待渲染),返回即见操作结果。
 
@@ -94,6 +100,8 @@ world_open(url, profile="login-淘宝", headful=true)   # 弹窗
 3. **JS 注入**(fill 再降级):React 受控组件 setter + 覆盖层自动切换
 
 工具返回的 `method` 字段标明实际走哪条路径(`locator` / `mouse-gesture` / `js-setter`),agent 可据此判断可靠性。
+
+**实战修复:fill 覆盖层验证(2026-08-31)**。Playwright 的 `locator.fill()` 只要求元素"可见可编辑",**不检测遮挡**。SPA 对话框(如 Google Flights 点出发地后弹出"输入您的出发地")会新建一个可见输入框副本、覆盖原输入框——此时 `world_fill` 会"静默成功"地把值填进被覆盖的旧框,可见输入框实际为空。修复:locator fill 成功后用 `elementFromPoint` 验证文本是否落在"可见且未被覆盖"的输入框,未验证到则判定失败、降级到 js-setter(自带覆盖层切换,自动改填顶层可见输入框)。
 
 ## 安装与配置
 
@@ -138,10 +146,43 @@ python test_official.py   # 官方客户端全链路测试
 ```
 agent-world-mcp/
 ├── server.py          # MCP 服务器(核心)
-├── test_official.py   # 官方客户端测试
+├── profiles/          # world_open 的 profile 持久化登录态目录
 ├── screenshots/       # world_screenshot 输出目录
-└── README.md          # 本文件
+├── probe_site.py      # 通用站点探针:对新站点做标准体检(摘要/状态卡/图层/交互/变更流)
+├── probe_fill.py      # 行动层 fill 探针:click+fill+DOM 验证+模型验证(URL/目标/文本)
+├── test_official.py   # 官方客户端全链路:握手/工具列表/world_open
+├── test_click.py      # 点击乘客按钮 -> 面板弹出 -> Adults 元素出现
+├── test_fill.py       # 填出发地 Tokyo -> 建议列表出现
+├── test_action_layer.py  # 行动层:locator 优先 + 覆盖层验证 + world_press
+├── test_value.py      # value 入图:fill 后世界模型可见输入框值
+├── test_profile.py    # headful + profile:登录态持久化验证
+├── test_compare.py    # profile vs 普通 launch 的世界模型对比
+├── test_frames.py     # frame 感知 + anomaly + navigate + click_at
+├── test_status.py     # 世界状态卡:auth/dialogs/page/forms/changed
+├── test_eval.py       # world_eval:只读查询/函数表达式/截断/错误
+└── test_gf_final.py   # 正常站点(GF)上 frames/anomaly/navigate 冒烟
 ```
+
+## 实战验证矩阵(2026-08-31)
+
+| 站点 | 特点 | 世界模型捕获 | 状态卡 | 行动层 |
+|---|---|---|---|---|
+| Wikipedia | 简单静态 | 154/189 (81%) | stable, 无 anomaly | click=locator ✅ |
+| Google Flights | 重型 SPA+覆盖层 | 461+ | stable | click/fill/press 三层降级 ✅ |
+| Booking.com | 重型 SPA+懒加载 | 1843/1883 (**98%**) | stable | click=mouse-gesture ✅ |
+| Amazon | 电商重型 | 1328/1386 (**96%**) | stable, 无 anomaly | click=locator, fill=js-setter ✅ |
+| GitHub | SPA 导航 | 649/658 (**98.6%**) | stable | click=locator ✅ |
+| Stack Overflow | 表单+弹窗 | 957/957 (**100%**) | loading(持续渲染), 无 anomaly | fill=locator-fill ✅ |
+| 百度 | 中文搜索 | 136/155 (88%) | loading | fill=locator-fill ✅ |
+| BBC | 重型新闻页+多 iframe | 926/927 (**99.9%**) | loading | click=mouse-gesture ✅ |
+| OpenStreetMap | 地图+iframe | 110/122 (90%) | stable | click=locator ✅ |
+| Reddit | 反爬拦截页 | 14/14 | **anomaly 不误报** ✅ | — |
+| eBay | 反爬拦截页 | 14/14 | **anomaly 不误报** ✅ | — |
+
+**实战要点**:
+- 反爬拦截页(Reddit/eBay 的简化页)会正常建模,且 **anomaly 口径修复后不再误报**(模型与 DOM 一致就不算缩水)
+- 百度搜索框语义是 `textbox`(名字来自热门词占位符,易变)——定位输入框应**用 role 查询**(`role=textbox/input/combobox/searchbox`)而非猜名字
+- 观察器饿死修复后,持续变更站点(Booking/Amazon)世界模型能追上 DOM(捕获率 28%→96%+)
 
 ## 依赖说明
 
@@ -152,17 +193,23 @@ agent-world-mcp/
 ## 已知限制
 
 - 页面拒绝注入时(极少数反自动化站点)world_open 会报错
-- 登录态需要 cookie 的场景暂不支持(无持久化 profile)
 - 每个世界约 200MB 内存,并行数量受机器内存限制
-- 点击/填表采用真实鼠标手势 + React 兼容 setter(对 Google Flights 等重型组件实测有效)
+- 无 profile 的会话不持久化登录态(需要持久化登录态请用 profile,见上文「登录态与人工介入」)
 
 ## 测试脚本
 
 ```bash
-python test_official.py   # 官方客户端全链路:握手/工具列表/world_open
-python test_click.py      # 点击乘客按钮 -> 面板弹出 -> Adults 元素出现
-python test_fill.py       # 填出发地 Tokyo -> 建议列表(option.tokyo-japan)出现
-python test_action_layer.py  # 行动层:locator 优先策略 + world_press
-python test_value.py      # value 入图:fill 后世界模型可见输入框值
-python test_profile.py    # headful + profile:登录态持久化验证
+python probe_site.py <url> [wait_ms] [stabilize_ms]  # 通用站点探针:新站点体检(摘要/状态卡/图层/交互/变更流)
+python probe_fill.py <url> <目标> <文本> [wait_ms]    # fill 探针:click+fill+DOM/模型双验证
+python test_official.py       # 官方客户端全链路:握手/工具列表/world_open
+python test_click.py          # 点击乘客按钮 -> 面板弹出 -> Adults 元素出现
+python test_fill.py           # 填出发地 Tokyo -> 建议列表(option.tokyo-japan)出现
+python test_action_layer.py   # 行动层:locator 优先 + 覆盖层验证降级 + world_press
+python test_value.py          # value 入图:fill 后世界模型可见输入框值
+python test_profile.py        # headful + profile:登录态持久化验证
+python test_compare.py        # profile vs 普通 launch:世界模型对比
+python test_frames.py         # frame 感知 + anomaly + navigate + click_at
+python test_status.py         # 世界状态卡:auth/dialogs/page/forms/changed
+python test_eval.py           # world_eval:JS 查询/截断/错误处理
+python test_gf_final.py       # Google Flights 冒烟:frames/anomaly/navigate 无异常
 ```
