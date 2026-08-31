@@ -32,6 +32,7 @@ window.AgentRuntime = window.AgentRuntime || {};
         findEntities: (filter) => query.findEntities(filter),
         getEntity: (id) => query.getEntity(id),
         layers: () => query.layers(),
+        map: (maxEntries) => query.map(maxEntries),
         resolve: (q) => query.resolve(q),
         getStatus: () => query.getStatus()
       },

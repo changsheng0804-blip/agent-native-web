@@ -906,6 +906,92 @@ window.AgentRuntime = window.AgentRuntime || {};
     }
 
     /**
+     * 页面结构导览(地图)——让 agent 第一次"看"页面时一眼懂布局,不用翻 200 条清单。
+     * 设计(最小版):
+     *   1. 找"语义地标容器"作为街区锚点:navigation/banner/main/contentinfo/complementary/form/
+     *      dialog/tablist/menu/aside/section/article 等结构性角色,且面积够大(>视口 2%)
+     *   2. 每个锚点 = 一个街区,聚合"中心点落在其范围内"的构件
+     *   3. 每个街区列出可交互入口(带强 ID/名字/指纹)——agent 看地图就知道"侧栏有导航、
+     *      主体有表单",再按编号钻取 world_entity
+     *   4. 未落入任何街区的构件归 "other"
+     * 对控制台类复杂结构页面(左导航+右内容+工具栏)尤其有效。
+     */
+    map(maxEntries = 6) {
+      const elements = [...this.world.elements.values()];
+      const viewportArea = Math.max(1, window.innerWidth * window.innerHeight);
+      const anchorSems = new Set([
+        'navigation', 'banner', 'main', 'contentinfo', 'complementary',
+        'form', 'dialog', 'tablist', 'menu', 'aside', 'section', 'article', 'search', 'region'
+      ]);
+      // 1. 候选锚点:结构性语义角色 + 面积 > 视口 2%(避免把普通小按钮/链接当街区)
+      const anchors = elements.filter(e =>
+        anchorSems.has(e.semantic) &&
+        (e.bounds.w * e.bounds.h) > viewportArea * 0.02 &&
+        e.tag !== 'html' && e.tag !== 'body'
+      ).sort((a, b) => (b.bounds.w * b.bounds.h) - (a.bounds.w * a.bounds.h));
+
+      // 2. 构件归属:每个构件分给"包含其中心点的最小锚点"(避免 form 套 main 时重复归属)
+      const regionOf = new Map(); // element id -> anchor id
+      for (const e of elements) {
+        if (e.tag === 'html' || e.tag === 'body') continue;
+        const cx = e.bounds.x + e.bounds.w / 2;
+        const cy = e.bounds.y + e.bounds.h / 2;
+        let best = null, bestArea = Infinity;
+        for (const a of anchors) {
+          const ax1 = a.bounds.x, ay1 = a.bounds.y, ax2 = a.bounds.x + a.bounds.w, ay2 = a.bounds.y + a.bounds.h;
+          if (cx >= ax1 && cx <= ax2 && cy >= ay1 && cy <= ay2) {
+            const area = a.bounds.w * a.bounds.h;
+            if (area < bestArea) { best = a; bestArea = area; }
+          }
+        }
+        if (best) regionOf.set(e.id, best.id);
+      }
+
+      // 3. 组装街区
+      const regions = [];
+      const anchorById = new Map(anchors.map(a => [a.id, a]));
+      for (const a of anchors) {
+        const members = elements.filter(e => regionOf.get(e.id) === a.id && e.id !== a.id);
+        const interactive = members.filter(m => m.interactive);
+        regions.push({
+          region: {
+            id: a.id,
+            name: a.name,
+            semantic: a.semantic,
+            bounds: a.bounds
+          },
+          total: members.length,
+          interactive: interactive.length,
+          types: [...new Set(members.map(m => m.semantic))].slice(0, 8),
+          entries: interactive.slice(0, maxEntries).map(m => ({
+            id: m.id, name: m.name, semantic: m.semantic, fingerprint: m.fingerprint
+          }))
+        });
+      }
+      regions.sort((a, b) => a.region.bounds.y - b.region.bounds.y); // 按页面从上到下
+
+      // 4. 散件(other)
+      const assigned = new Set(regionOf.values());
+      const others = elements.filter(e =>
+        e.tag !== 'html' && e.tag !== 'body' && !assigned.has(e.id) && regionOf.has(e.id) === false
+      );
+      const otherInteractive = others.filter(m => m.interactive);
+
+      return {
+        total: elements.length,
+        interactive: elements.filter(e => e.interactive).length,
+        regions,
+        other: {
+          total: others.length,
+          interactive: otherInteractive.length,
+          entries: otherInteractive.slice(0, maxEntries).map(m => ({
+            id: m.id, name: m.name, semantic: m.semantic, fingerprint: m.fingerprint
+          }))
+        }
+      };
+    }
+
+    /**
      * 弱 ID 解析：强 ID / name / 页面原生 id / name 模糊
      */
     resolve(q) {
@@ -1587,6 +1673,7 @@ window.AgentRuntime = window.AgentRuntime || {};
         findEntities: (filter) => query.findEntities(filter),
         getEntity: (id) => query.getEntity(id),
         layers: () => query.layers(),
+        map: (maxEntries) => query.map(maxEntries),
         resolve: (q) => query.resolve(q),
         getStatus: () => query.getStatus()
       },

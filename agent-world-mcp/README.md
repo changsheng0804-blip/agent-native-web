@@ -5,10 +5,10 @@
 
 ## 这是什么
 
-一个 MCP 服务器。启动后,AI agent(Claude Code、Cursor、opencode 等)通过 16 个标准工具:
+一个 MCP 服务器。启动后,AI agent(Claude Code、Cursor、opencode 等)通过 17 个标准工具:
 
 - **打开世界**:`world_open` —— 打开网页并建立原生网页世界(可并行多开,互不干扰,不打扰你的桌面)
-- **看图**:`world_entities`(构件清单)/ `world_entity`(构件详情)/ `world_layers`(图层视图)/ `world_resolve`(名字查编号)
+- **看图**:`world_entities`(构件清单)/ `world_entity`(构件详情)/ `world_layers`(图层视图)/ `world_map`(页面结构导览)/ `world_resolve`(名字查编号)
 - **看视频**:`world_changes` —— 页面变化增量续读(游标),不用每次全量重看
 - **动手**:`world_click` / `world_fill` / `world_press` —— 全部编号驱动,无选择器脆弱性
 - **验证**:`world_wait`(等待构件出现/消失)/ `world_screenshot`(截图兜底)
@@ -23,6 +23,7 @@
 | `world_entities({role, text, name, ...})` | 过滤查构件清单 | 构件表(BOM) |
 | `world_entity(id)` | 单构件详情(坐标/邻居/区域) | 构件详图 |
 | `world_layers()` | 结构/语义/空间/交互统计 | 图纸图层 |
+| `world_map(max_entries?)` | 页面结构导览:语义容器分区 + 各区可交互入口(带强 ID) | **整页地图** |
 | `world_resolve("combobox.round-trip")` | 名字 → 稳定编号 | 查门牌号 |
 | `world_changes(since)` | 增量变更流,游标续读 | 视频帧续读 |
 | `world_click(id)` / `world_press(id, key)` | 编号驱动点击(带遮挡检测)/ 按键 | 按编号施工 |
@@ -243,6 +244,8 @@ agent-world-mcp/
 ├── test_click_effect.py   # 点击生效报告:正例 GF 面板 effected/high + 负例 no-change
 ├── test_wait_event.py     # world_wait 事件驱动:已满足/动态出现/消失/超时兜底
 ├── validate_closed_loop.py  # 实时闭环实战验证:effect 判定一致性矩阵(truth oracle)+ 报告
+├── test_fingerprint.py     # 稳定指纹:同站两次进站指纹一致 + 按指纹一步定位(认路记忆)
+├── test_map.py             # 页面结构导览 world_map:语义分区 + 各区入口 + 强 ID 可钻取
 └── test_gf_final.py   # 正常站点(GF)上 frames/anomaly/navigate 冒烟
 
 (monorepo 根)
@@ -305,5 +308,7 @@ python test_change_digest.py  # 变更可读化:world_changes digest + importanc
 python test_click_effect.py   # 点击生效报告:正例 GF 面板 effected/high + 负例 no-change 不误报
 python test_wait_event.py     # world_wait 事件驱动:已满足/动态出现/消失/超时兜底
 python validate_closed_loop.py [--local]  # 实时闭环实战验证:effect 一致性矩阵 + truth oracle + 报告
+python test_fingerprint.py    # 稳定指纹:同站两次进站指纹一致 + 按指纹一步定位
+python test_map.py            # 页面结构导览 world_map:语义分区 + 各区入口 + 强 ID 可钻取
 python test_gf_final.py       # Google Flights 冒烟:frames/anomaly/navigate 无异常
 ```

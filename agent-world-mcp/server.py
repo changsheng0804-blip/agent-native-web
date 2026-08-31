@@ -10,6 +10,7 @@ Agent World MCP Server
   world_entities 构件清单(按角色/文本/名字/交互过滤)
   world_entity   构件详情(编号/名字/坐标/邻居/区域)
   world_layers   图层视图(结构/语义/空间/交互)
+  world_map      页面结构导览(地图):语义容器分区 + 各区可交互入口
   world_resolve  弱 ID 解析(名字/强 ID/页面原生 id)
   world_changes  变更流(增量续读,游标)
   world_click    编号驱动点击
@@ -145,6 +146,18 @@ async def list_tools():
             inputSchema={
                 "type": "object",
                 "properties": {"world_id": {"type": "integer"}},
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_map",
+            description="页面结构导览(地图):按语义地标容器(导航/侧栏/主体/页脚/表单/弹窗/标签栏等)分区,每区给出范围、构件数、可交互入口(带强 ID 和指纹)。适合控制台类复杂页面——agent 看一次地图就知道'哪里有什么、点哪个编号过去',不必翻全部清单。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "max_entries": {"type": "integer", "description": "每区最多列出几个可交互入口", "default": 6},
+                },
                 "required": ["world_id"],
             },
         ),
@@ -476,6 +489,8 @@ def _impl(name, args):
         return _t_world_entity(args)
     if name == "world_layers":
         return _t_world_layers(args)
+    if name == "world_map":
+        return _t_world_map(args)
     if name == "world_resolve":
         return _t_world_resolve(args)
     if name == "world_changes":
@@ -627,6 +642,12 @@ def _t_world_entity(args):
 def _t_world_layers(args):
     wid = args["world_id"]
     return _ok(_evaluate(wid, "agentWorld.query.layers()"))
+
+
+def _t_world_map(args):
+    wid = args["world_id"]
+    max_entries = int(args.get("max_entries", 6))
+    return _ok(_evaluate(wid, "(n) => agentWorld.query.map(n)", max_entries))
 
 
 def _t_world_resolve(args):
