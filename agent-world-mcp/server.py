@@ -1215,15 +1215,31 @@ def _t_world_wait(args):
         f["text"] = args["text"]
     if args.get("name"):
         f["name"] = args["name"]
-    deadline = time.time() + timeout_ms / 1000
-    while time.time() < deadline:
-        found = _evaluate(wid, "(f) => agentWorld.query.findEntities(f).length", f)
-        if mode == "appear" and found > 0:
-            return _ok({"world_id": wid, "matched": True, "mode": mode, "filter": f, "count": found})
-        if mode == "disappear" and found == 0:
-            return _ok({"world_id": wid, "matched": True, "mode": mode, "filter": f, "count": 0})
-        time.sleep(0.3)
-    return _ok({"world_id": wid, "matched": False, "mode": mode, "filter": f, "timeout_ms": timeout_ms})
+    w = _world(wid)
+    page = w["page"]
+    # 事件驱动(替代 0.3s 轮询):内核 waitFor 注册 waiter,
+    # MutationObserver flush 命中条件即 resolve;超时由内核 setTimeout 兜底。
+    # Playwright evaluate 自动 await Promise;临时放大 page 默认超时,避免
+    # timeout_ms > 30s 时被 Playwright 先掐断。
+    prev_timeout = 30000
+    try:
+        page.set_default_timeout(timeout_ms + 3000)
+        result = page.evaluate(
+            "(a) => agentWorld._runtime.waitFor(a.filter, a.mode, a.timeout_ms)",
+            {"filter": f, "mode": mode, "timeout_ms": timeout_ms},
+        )
+    except Exception as e:
+        result = {"matched": False, "mode": mode, "timeout_ms": timeout_ms, "error": str(e)[:120]}
+    finally:
+        page.set_default_timeout(prev_timeout)
+    out = {"world_id": wid, "matched": bool(result.get("matched")), "mode": mode, "filter": f}
+    if result.get("matched"):
+        out["count"] = result.get("count", 0)
+        out["driven"] = "event"
+    else:
+        out["timeout_ms"] = timeout_ms
+        out["driven"] = "timeout"
+    return _ok(out)
 
 
 def _t_world_screenshot(args):

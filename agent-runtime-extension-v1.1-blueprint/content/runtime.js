@@ -17,6 +17,8 @@ window.AgentRuntime = window.AgentRuntime || {};
       this.occupancyGrid = null;
       this.spatialQuery = null;
       this.updateCount = 0;
+      // 事件驱动等待器:world_wait 由 MutationObserver 驱动,不再 server 端轮询
+      this._waiters = [];
       this.changelog = {
         seq: 0,
         events: [],
@@ -109,6 +111,53 @@ window.AgentRuntime = window.AgentRuntime || {};
      */
     log(n = 50) {
       return this.changelog.events.slice(-n);
+    }
+
+    /**
+     * 事件驱动等待(替代 server 端 0.3s 轮询):
+     * 注册一个 waiter,MutationObserver 每次 flush(handleMutation)后检查条件,
+     * 命中即 resolve(无需轮询);超时 setTimeout 兜底 resolve(false)。
+     * filter 透传 findEntities({role,text,name,...});mode=appear/disappear。
+     */
+    waitFor(filter = {}, mode = 'appear', timeoutMs = 30000) {
+      return new Promise((resolve) => {
+        let settled = false;
+        const finish = (result) => { if (!settled) { settled = true; resolve(result); } };
+        const cleanup = () => {
+          const i = this._waiters.indexOf(waiter);
+          if (i >= 0) this._waiters.splice(i, 1);
+          clearTimeout(waiter.timer);
+        };
+        const waiter = {
+          filter, mode,
+          timer: null,
+          check: () => {
+            try {
+              const n = this.world.query.findEntities(filter).length;
+              const ok = mode === 'appear' ? n > 0 : n === 0;
+              if (ok) {
+                cleanup();
+                finish({ matched: true, mode, count: n });
+                return true;
+              }
+            } catch (e) { /* query 未就绪等场景:继续等 */ }
+            return false;
+          }
+        };
+        waiter.timer = setTimeout(() => {
+          cleanup();
+          finish({ matched: false, mode, timeout_ms: timeoutMs });
+        }, timeoutMs);
+        this._waiters.push(waiter);
+        waiter.check(); // 立即检查一次:条件已满足时立即返回
+      });
+    }
+
+    /**
+     * MutationObserver flush 后检查所有 waiter(事件驱动核心)
+     */
+    checkWaiters() {
+      for (const w of this._waiters.slice()) w.check();
     }
 
     /**
@@ -289,6 +338,9 @@ window.AgentRuntime = window.AgentRuntime || {};
       
       // 刷新世界状态卡
       this.refreshStatus();
+      
+      // 事件驱动等待器:每次 flush 后检查(命中即 resolve,替代轮询)
+      this.checkWaiters();
       
       // 更新 meta
       this.world.meta.elementCount = this.world.elements.size;

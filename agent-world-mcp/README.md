@@ -153,6 +153,8 @@ world_open(url, cdp_url="http://localhost:9222")
    - 判定:区域新增关键交互构件(dialog/button/menu/option 等)→ `effected/high`;仅 URL 变化 → `effected/high`(导航类);区域有变化无关键构件 → `changed/medium`;无变化 → `no-change`
    - 世界出证据 + 分级置信度,**最终判断权留给 agent**(避免把页面自身波动误判为操作失败)
 
+3. **`world_wait` 事件驱动(替代轮询)**:内核 `AgentRuntime.waitFor()` 注册 waiter,MutationObserver 每次 flush(`handleMutation`)后检查条件、命中即 resolve;server 端用 `page.evaluate` 的 Promise await 机制等待,彻底去掉旧的 `time.sleep(0.3)` 轮询循环。实测:条件已满足 0.04s 返回、动态出现 0.03s 命中、消失 0.16s、超时精确(2s 超时 2.04s 返回)。返回带 `driven: event|timeout` 标明路径。
+
 **语义摘要 + 重要性加权是闭环的基础设施**:闭环反馈不能把原始 diff 全塞给 agent(信息洪水、上下文爆炸),"快"靠"给得更少但更准"。实测路线:全页 digest(变更可读化)+ 空间作用域 effect(操作生效报告),两级配合。
 
 ## 安装与配置
@@ -217,6 +219,7 @@ agent-world-mcp/
 ├── test_ipi_filter.py # IPI 伪隐藏过滤:VEC_4~VEC_8 阻断 + 对照不误伤 + 动态时序移除
 ├── test_change_digest.py  # 变更可读化:world_changes digest+importance(本地动态页+GF)
 ├── test_click_effect.py   # 点击生效报告:正例 GF 面板 effected/high + 负例 no-change
+├── test_wait_event.py     # world_wait 事件驱动:已满足/动态出现/消失/超时兜底
 └── test_gf_final.py   # 正常站点(GF)上 frames/anomaly/navigate 冒烟
 
 (monorepo 根)
@@ -277,5 +280,6 @@ python test_eval.py           # world_eval:JS 查询/截断/错误处理
 python test_ipi_filter.py     # IPI 伪隐藏过滤:VEC_4~VEC_8 阻断 + 对照不误伤 + 动态时序(本地夹具)
 python test_change_digest.py  # 变更可读化:world_changes digest + importance(本地动态页 + GF)
 python test_click_effect.py   # 点击生效报告:正例 GF 面板 effected/high + 负例 no-change 不误报
+python test_wait_event.py     # world_wait 事件驱动:已满足/动态出现/消失/超时兜底
 python test_gf_final.py       # Google Flights 冒烟:frames/anomaly/navigate 无异常
 ```
