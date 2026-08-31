@@ -32,7 +32,8 @@ window.AgentRuntime = window.AgentRuntime || {};
         findEntities: (filter) => query.findEntities(filter),
         getEntity: (id) => query.getEntity(id),
         layers: () => query.layers(),
-        resolve: (q) => query.resolve(q)
+        resolve: (q) => query.resolve(q),
+        getStatus: () => query.getStatus()
       },
       
       // 变更日志（视频流）

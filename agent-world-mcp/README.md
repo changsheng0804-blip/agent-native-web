@@ -29,6 +29,31 @@
 | `world_screenshot(id?)` | 整页/局部截图 | 拍照存档 |
 | `world_list` / `world_close` | 管理世界 | 图纸归档 |
 
+## 世界状态卡(仪表盘)
+
+**所有工具返回自动附带 `status` 字段**——登录态/弹窗/页面/表单状态显式暴露,agent 无需猜测:
+
+```json
+"status": {
+  "auth":    { "loggedIn": true, "via": "cookie:.goofish.com" },
+  "dialogs": [{ "id": "dom:div", "name": "number of passengers" }],
+  "page":    { "state": "stable", "scrollY": 0, "totalHeight": 3043 },
+  "forms":   [{ "id": "el_5", "name": "input.搜索", "value": "hello world" }],
+  "world":   { "elements": 461, "changesSeq": 102 },
+  "changed": { "dialogs": true, "forms": true }
+}
+```
+
+| 字段 | 含义 | 推断来源 |
+|---|---|---|
+| `auth` | 登录态 | 双信号:cookie(server 层,HttpOnly 可读)+ DOM 登录入口 |
+| `dialogs` | 打开的弹窗 | 直接 DOM 查询 `role=dialog`/`aria-modal`,可见性过滤(预渲染隐藏弹窗不误报) |
+| `page` | 加载/稳定、滚动 | readyState + 滚动/尺寸 |
+| `forms` | 有值的输入框 | 内核增量维护(受控组件重置值属站点特性,不稳定的场景用视觉兜底) |
+| `changed` | 本轮变化高亮 | 对比上次状态 |
+
+操作类工具(`world_click`/`world_fill`/`world_press`)执行后自动刷新状态卡(等待渲染),返回即见操作结果。
+
 ## 登录态与人工介入(headful + profile)
 
 `world_open` 支持两个参数,解决登录/验证码/真人确认场景:

@@ -703,6 +703,24 @@ window.AgentRuntime = window.AgentRuntime || {};
     }
 
     /**
+     * 世界状态卡:显式暴露当前状态(弹窗/页面/表单/世界规模)
+     * auth 登录态由 MCP server 层补充(cookie 信号,内核读不到 HttpOnly)
+     */
+    getStatus() {
+      const s = this.world.status || {};
+      return {
+        dialogs: s.dialogs || [],
+        page: s.page || {},
+        forms: s.forms || [],
+        world: {
+          elements: this.world.elements.size,
+          changesSeq: s.changesSeq || 0,
+          version: this.world.version
+        }
+      };
+    }
+
+    /**
      * 构件详情（getElement 超集：含邻居/区域，不含 DOM 引用）
      */
     getEntity(id) {
@@ -895,6 +913,52 @@ window.AgentRuntime = window.AgentRuntime || {};
         events: [],
         maxEvents: 2000
       };
+      // 世界状态卡:显式暴露"现在是什么"(登录/弹窗/页面/表单)
+      this.world.status = {
+        dialogs: [],
+        page: { state: 'stable', scrollY: 0, totalHeight: 0 },
+        forms: [],
+        changesSeq: 0
+      };
+    }
+
+    /**
+     * 刷新世界状态(增量维护,防抖后调用)
+     */
+    refreshStatus() {
+      const elements = [...this.world.elements.values()];
+      const byNode = new Map(elements.map(e => [e._el, e]));
+      // 弹窗/对话框:直接 DOM 查询(预渲染隐藏弹窗会被可见性过滤掉,不依赖世界模型)
+      const dialogs = [];
+      const dialogNodes = document.querySelectorAll('[role="dialog"], [role="alertdialog"], [aria-modal="true"]');
+      for (const node of dialogNodes) {
+        const rect = node.getBoundingClientRect();
+        const st = getComputedStyle(node);
+        if (rect.width < 3 || rect.height < 3 || st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') continue;
+        const el = byNode.get(node);
+        dialogs.push({
+          id: el ? el.id : 'dom:' + node.tagName.toLowerCase(),
+          name: el ? el.name : ((node.getAttribute('aria-label') || node.getAttribute('role') || node.tagName).toLowerCase())
+        });
+      }
+      // 表单(有值的输入框,取前 10)
+      const forms = [];
+      for (const el of elements) {
+        if (!el._el) continue;
+        const tag = el._el.tagName;
+        if ((tag === 'INPUT' || tag === 'TEXTAREA') && el._el.value) {
+          forms.push({ id: el.id, name: el.name, value: String(el._el.value).slice(0, 50) });
+          if (forms.length >= 10) break;
+        }
+      }
+      this.world.status.dialogs = dialogs;
+      this.world.status.forms = forms;
+      this.world.status.page = {
+        state: document.readyState === 'complete' ? 'stable' : 'loading',
+        scrollY: Math.round(window.scrollY),
+        totalHeight: document.body.scrollHeight
+      };
+      this.world.status.changesSeq = this.changelog.seq;
     }
 
     /**
@@ -965,6 +1029,9 @@ window.AgentRuntime = window.AgentRuntime || {};
       
       // 记录初始事件
       this.logEvent('init', null, { count: this.world.elements.size });
+      
+      // 刷新世界状态卡
+      this.refreshStatus();
       
       console.log(`[Agent Runtime] Initialized: ${this.world.elements.size} elements in ${this.world.meta.initTime}ms`);
       
@@ -1075,6 +1142,9 @@ window.AgentRuntime = window.AgentRuntime || {};
       
       // 名字去重（保证弱 ID 唯一）
       global.AgentRuntime.semantics.dedupeNames(allElements);
+      
+      // 刷新世界状态卡
+      this.refreshStatus();
       
       // 更新 meta
       this.world.meta.elementCount = this.world.elements.size;
@@ -1263,7 +1333,8 @@ window.AgentRuntime = window.AgentRuntime || {};
         findEntities: (filter) => query.findEntities(filter),
         getEntity: (id) => query.getEntity(id),
         layers: () => query.layers(),
-        resolve: (q) => query.resolve(q)
+        resolve: (q) => query.resolve(q),
+        getStatus: () => query.getStatus()
       },
       
       // 变更日志（视频流）

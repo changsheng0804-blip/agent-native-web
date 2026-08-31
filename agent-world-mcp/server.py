@@ -256,10 +256,111 @@ async def list_tools():
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     try:
-        return await asyncio.get_event_loop().run_in_executor(None, _impl, name, arguments)
+        # 全部在 executor 线程执行(Playwright 同步 API 线程亲和)
+        return await asyncio.get_event_loop().run_in_executor(None, _impl_with_status, name, arguments)
     except Exception as e:
         traceback.print_exc()
         return [types.TextContent(type="text", text=f"错误: {e}")]
+
+
+def _impl_with_status(name, args):
+    result = _impl(name, args)
+    return _inject_status(result, args.get("world_id"))
+
+
+# ── 世界状态卡(仪表盘)────────────────────────────────────────
+AUTH_COOKIE_HINTS = ["passport", "session", "token", "sid", "uid", "unb", "sso", "login", "auth"]
+
+
+def _auth_status(wid):
+    """登录态检测:双信号交叉(cookie 为主,DOM 特征辅助)"""
+    w = _world(wid)
+    try:
+        cookies = w["context"].cookies()
+    except Exception:
+        cookies = []
+    hits = []
+    for c in cookies:
+        hay = (c.get("name", "") + " " + c.get("domain", "")).lower()
+        if any(h in hay for h in AUTH_COOKIE_HINTS):
+            hits.append(c)
+    if hits:
+        domains = sorted({c["domain"] for c in hits})[:3]
+        return {"loggedIn": True, "via": "cookie:" + ",".join(domains)}
+    # DOM 特征:登录入口存在与否(辅助信号)
+    try:
+        login_btns = _evaluate(
+            wid,
+            "() => agentWorld.query.findEntities({ name: '登录' }).length + agentWorld.query.findEntities({ name: 'login' }).length",
+        )
+        if login_btns and login_btns > 0:
+            return {"loggedIn": False, "via": "dom:login-entry-present"}
+    except Exception:
+        pass
+    return {"loggedIn": False, "via": "no-signal"}
+
+
+def _status(wid):
+    """聚合世界状态卡(内核状态 + 登录态),附带变化高亮"""
+    w = _world(wid)
+    try:
+        core = _evaluate(wid, "() => agentWorld.query.getStatus()")
+    except Exception:
+        core = {"dialogs": [], "page": {}, "forms": [], "world": {}}
+    cur = {
+        "auth": _auth_status(wid),
+        "dialogs": core.get("dialogs", []),
+        "page": core.get("page", {}),
+        "forms": core.get("forms", []),
+        "world": core.get("world", {}),
+    }
+    last = w.get("last_status")
+    w["last_status"] = cur
+    changed = {}
+    if last:
+        if last["auth"]["loggedIn"] != cur["auth"]["loggedIn"]:
+            changed["auth"] = True
+        if len(last["dialogs"]) != len(cur["dialogs"]):
+            changed["dialogs"] = True
+        if last["page"].get("state") != cur["page"].get("state"):
+            changed["page"] = True
+        if len(last["forms"]) != len(cur["forms"]):
+            changed["forms"] = True
+    cur["changed"] = changed
+    return cur
+
+
+def _inject_status(result, wid):
+    """给工具返回 JSON 注入状态卡(所有工具统一附带)"""
+    if wid is None:
+        # world_open 的返回里包含新建的 world_id
+        for item in result:
+            if item.type == "text":
+                try:
+                    data = json.loads(item.text)
+                    if isinstance(data, dict) and data.get("world_id") is not None:
+                        wid = data["world_id"]
+                        break
+                except Exception:
+                    pass
+    if wid is None:
+        return result
+    try:
+        wid_i = int(wid)
+        if wid_i not in _worlds:
+            return result
+    except Exception:
+        return result
+    for item in result:
+        if item.type == "text":
+            try:
+                data = json.loads(item.text)
+                if isinstance(data, dict):
+                    data["status"] = _status(wid_i)
+                    item.text = json.dumps(data, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+    return result
 
 
 def _impl(name, args):
@@ -438,6 +539,16 @@ def _build_locator(w, ent):
     return None
 
 
+def _refresh_core_status(wid, settle_ms=300):
+    """操作后等防抖+渲染,主动刷新内核状态(状态卡反映操作结果)"""
+    w = _world(wid)
+    time.sleep(settle_ms / 1000)
+    try:
+        _evaluate(wid, "() => { agentWorld._runtime.refreshStatus(); return true; }")
+    except Exception:
+        pass
+
+
 def _t_world_click(args):
     wid = args["world_id"]
     target = _resolve_id(wid, args["id"])
@@ -450,6 +561,7 @@ def _t_world_click(args):
         try:
             # Playwright locator:自动等待可见/稳定/可点击,错误信息清晰
             loc.click(timeout=10000)
+            _refresh_core_status(wid)
             return _ok({"world_id": wid, "clicked": target, "method": "locator"})
         except Exception as e:
             loc_err = f"{type(e).__name__}: {str(e)[:200]}"
@@ -474,6 +586,7 @@ def _t_world_click(args):
     w["page"].mouse.move(cx, cy)
     w["page"].mouse.down()
     w["page"].mouse.up()
+    _refresh_core_status(wid)
     return _ok({"world_id": wid, "clicked": target, "method": "mouse-gesture", "at": [cx, cy], "locator_note": loc_err})
 
 
@@ -490,6 +603,7 @@ def _t_world_fill(args):
         try:
             # Playwright fill:自动等待 + React 兼容输入 + 清晰错误
             loc.fill(text, timeout=10000)
+            _refresh_core_status(wid)
             return _ok({"world_id": wid, "filled": target, "text": text, "method": "locator-fill"})
         except Exception as e:
             fill_err = f"{type(e).__name__}: {str(e)[:200]}"
@@ -530,6 +644,7 @@ def _t_world_fill(args):
     )
     if not r.get("ok"):
         raise ValueError(f"fill 失败: {r} (locator: {fill_err})")
+    _refresh_core_status(wid)
     return _ok({"world_id": wid, "filled": target, "text": text, "target_tag": r.get("tag"), "method": "js-setter", "locator_note": fill_err})
 
 

@@ -175,6 +175,24 @@ window.AgentRuntime = window.AgentRuntime || {};
     }
 
     /**
+     * 世界状态卡:显式暴露当前状态(弹窗/页面/表单/世界规模)
+     * auth 登录态由 MCP server 层补充(cookie 信号,内核读不到 HttpOnly)
+     */
+    getStatus() {
+      const s = this.world.status || {};
+      return {
+        dialogs: s.dialogs || [],
+        page: s.page || {},
+        forms: s.forms || [],
+        world: {
+          elements: this.world.elements.size,
+          changesSeq: s.changesSeq || 0,
+          version: this.world.version
+        }
+      };
+    }
+
+    /**
      * 构件详情（getElement 超集：含邻居/区域，不含 DOM 引用）
      */
     getEntity(id) {
