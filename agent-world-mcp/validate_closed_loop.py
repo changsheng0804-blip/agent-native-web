@@ -158,6 +158,41 @@ CASES = [
         "expect": "effected",
         "note": "先点开弹窗再按 Escape → 弹窗应消失(disappear 信号)",
     },
+    {
+        "name": "wiki-search(填搜索框触发联想)",
+        "url": "https://en.wikipedia.org/wiki/Main_Page",
+        "open_wait_ms": 3000,
+        "find": {"role": "input"},
+        "action": "fill",
+        "action_text": "Python programming",
+        "truth_mode": "input_value",
+        "truth_text": "Python programming",
+        "expect": "effected",
+        "note": "真站填搜索框 → 值进入 + 联想下拉出现(填表生效报告)",
+    },
+    {
+        "name": "github-repo-tab(仓库标签切换→URL)",
+        "url": "https://github.com/git/git",
+        "open_wait_ms": 3500,
+        "find": {"text": "Issues"},
+        "action": "click",
+        "action_text": None,
+        "truth_mode": "url_change",
+        "expect": "effected",
+        "note": "GitHub 仓库点 Issues 标签 → URL 变 /issues(导航类)",
+    },
+    {
+        "name": "so-search(填搜索框触发联想)",
+        "url": "https://stackoverflow.com/",
+        "open_wait_ms": 3000,
+        "find": {"role": "textbox"},
+        "action": "fill",
+        "action_text": "playwright python",
+        "truth_mode": "input_value",
+        "truth_text": "playwright python",
+        "expect": "effected",
+        "note": "SO 填搜索框 → 值进入(联想下拉出现为加分信号)",
+    },
 ]
 
 # 持续变更 + waitFor 专项(独立段,不计入矩阵)
@@ -309,6 +344,7 @@ async def run_case(session, case):
         "why": why[:160],
         "action_note": action_note,
         "truth_detail": truth_detail,
+        "evidence": (effect or {}).get("evidence"),
         "note": case.get("note", ""),
     }
 
@@ -352,6 +388,9 @@ async def main():
                     print(f"        truth: {res['truth_detail']}")
                 if res.get("action_note"):
                     print(f"        action: {res['action_note']}")
+                if res.get("evidence"):
+                    ev = res["evidence"]
+                    print(f"        证据窗: polls={ev.get('polls')} total={ev.get('total_ms')}ms first_change={ev.get('first_change_ms')}ms stop={ev.get('stop')}")
 
             if not local_only:
                 await run_waitfor_cases(session)
@@ -396,6 +435,9 @@ async def main():
                     lines.append(f"- truth: {r['truth_detail']}")
                 if r.get("action_note"):
                     lines.append(f"- action: {r['action_note']}")
+                if r.get("evidence"):
+                    ev = r["evidence"]
+                    lines.append(f"- 证据窗: polls={ev.get('polls')} total={ev.get('total_ms')}ms first_change={ev.get('first_change_ms')}ms stop={ev.get('stop')}")
                 lines.append(f"- note: {r.get('note', '')}")
                 lines.append("")
             report = Path(__file__).resolve().parent / "validate_report.md"

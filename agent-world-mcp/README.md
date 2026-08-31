@@ -153,6 +153,7 @@ world_open(url, cdp_url="http://localhost:9222")
    - 证据窗口:轮询"区域有变化即停"(不傻等满),最多 2.5s
    - 判定:区域新增关键交互构件(dialog/button/menu/option 等)→ `effected/high`;仅 URL 变化 → `effected/high`(导航类);区域有变化无关键构件 → `changed/medium`;无变化 → `no-change`
    - **三层证据兜底(2026-08-31 实战验证后)**:① 全页可见 dialog/menu 扫描——远距弹窗(离目标 ±200px 外)也能识别;② 目标自身状态翻转(aria-selected/aria-expanded/checked/class)——tab/折叠/勾选类"无新构件"交互;③ URL 变化——导航/提交类
+   - **证据窗"聪明早停"(2026-08-31)**:原为"看到变化后再等 0.4s 稳定"——对已见决定性证据(弹窗出现/URL变/状态翻转/值进框)的 case 是白等。改为每轮轮询后先判"是否已见铁证",是则立即返回。实测普通操作 0.6s→0.2s、持续变化页(维基搜索联想)1.6s→0.21s,正确性不变(体检 100%)。评估结论:**不需纯事件驱动**(边际收益仅 ~0.2s,内核复杂度上升不值)。effect 返回 `evidence:{polls,total_ms,first_change_ms,stop}` 计时字段
    - 世界出证据 + 分级置信度,**最终判断权留给 agent**(避免把页面自身波动误判为操作失败)
 
 3. **`world_fill` / `world_press` 也返回 `effect`(2026-08-31)**:填表以"值已进入可见输入框"(`_fill_visible` 验证)为强证据 → `effected/high`;按键按类型判定——Escape/关闭类看"全页 dialog 消失"(disappear 信号),Enter/提交类看 URL 变化,方向键看目标状态翻转。

@@ -1092,8 +1092,14 @@ def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500, disappear
     last_dialogs = None
     last_target_state = None
     last_seen = 0
+    # 证据窗计时埋点(用于评估轮询式证据窗的收益/浪费)
+    t_start = time.time()
+    poll_count = 0
+    first_change_at = None
+    stop_reason = "timeout"
     while time.time() < deadline:
         time.sleep(0.2)
+        poll_count += 1
         try:
             rows, dialogs, target_state = _click_region_after(wid, region, page_id)
         except Exception:
@@ -1101,19 +1107,45 @@ def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500, disappear
         if (rows, dialogs, target_state) != (last_rows, last_dialogs, last_target_state):
             last_rows, last_dialogs, last_target_state = rows, dialogs, target_state
             last_seen = time.time()
+            if first_change_at is None:
+                first_change_at = time.time() - t_start
+            # 聪明早停:已看到"决定性证据"(弹窗出现/URL变/状态翻转/关键构件/值进框)就直接返回,
+            # 不必再等 0.4s 稳定——弹窗都弹出来了,等稳定是白等(对持续变化页收益最大)
+            if rows:
+                early = _build_click_effect(before_rows, rows, w["page"].url != url_before,
+                                            before_dialogs, dialogs,
+                                            before_target_state, target_state,
+                                            disappear_ok, fill_verified)
+                if early["verdict"] == "effected":
+                    early["evidence"] = {
+                        "polls": poll_count,
+                        "total_ms": int((time.time() - t_start) * 1000),
+                        "first_change_ms": int((first_change_at or 0) * 1000),
+                        "stop": "early-effect",
+                    }
+                    return early
         # 区域稳定(0.4s 无变化)且距首次观察足够(让重渲染完成)即停
         if rows and (time.time() - last_seen > 0.4) and (time.time() - last_seen < 5):
+            stop_reason = "stable"
             break
+    total_ms = int((time.time() - t_start) * 1000)
     url_changed = w["page"].url != url_before
     if last_rows is None:
         try:
             last_rows, last_dialogs, last_target_state = _click_region_after(wid, region, page_id)
         except Exception:
             last_rows, last_dialogs, last_target_state = [], [], None
-    return _build_click_effect(before_rows, last_rows or [], url_changed,
-                               before_dialogs, last_dialogs or [],
-                               before_target_state, last_target_state,
-                               disappear_ok, fill_verified)
+    effect = _build_click_effect(before_rows, last_rows or [], url_changed,
+                                 before_dialogs, last_dialogs or [],
+                                 before_target_state, last_target_state,
+                                 disappear_ok, fill_verified)
+    effect["evidence"] = {
+        "polls": poll_count,
+        "total_ms": total_ms,
+        "first_change_ms": int((first_change_at or 0) * 1000),
+        "stop": stop_reason,
+    }
+    return effect
 
 
 def _t_world_click(args):
