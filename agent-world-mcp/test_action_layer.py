@@ -3,7 +3,7 @@
 1. world_click 走 locator 路径(method=locator,带 auto-wait)
 2. world_fill 走 locator-fill
 3. world_press Enter 选择建议
-4. 世界模型确认结果
+4. 原生网页世界确认结果
 """
 import asyncio
 import json

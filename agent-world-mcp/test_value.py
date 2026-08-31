@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""验证 value 字段:fill 后世界模型能看到输入框的值"""
+"""验证 value 字段:fill 后原生网页世界能看到输入框的值"""
 import asyncio
 import json
 import sys

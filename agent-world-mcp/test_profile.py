@@ -69,8 +69,8 @@ with sync_playwright() as p:
                 session.call_tool("world_entity", {"world_id": wid, "id": "root.html"}),
                 timeout=15,
             )
-            # 直接读 cookie(世界模型不含 cookie,用世界内 evaluate 兜底不了,通过 screenshot 验证不必要;
-            # 这里用世界模型的 __evaluate 能力没有暴露,所以用 playwright 直连同 profile 再验证一次)
+            # 直接读 cookie(原生网页世界不含 cookie,用世界内 evaluate 兜底不了,通过 screenshot 验证不必要;
+            # 这里用原生网页世界的 __evaluate 能力没有暴露,所以用 playwright 直连同 profile 再验证一次)
             await asyncio.wait_for(session.call_tool("world_close", {"world_id": wid}), timeout=15)
 
             code2 = """

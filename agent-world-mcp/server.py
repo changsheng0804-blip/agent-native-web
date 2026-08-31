@@ -2,7 +2,7 @@
 """
 Agent World MCP Server
 ======================
-把 agent-runtime-extension 的"世界模型"以 MCP 工具暴露给任何 AI agent。
+把 agent-runtime-extension 的"原生网页世界"以 MCP 工具暴露给任何 AI agent。
 心智模型:CAD 图纸 + 网页视频。
 
 工具:
@@ -94,7 +94,7 @@ async def list_tools():
     return [
         types.Tool(
             name="world_open",
-            description="打开一个网页并建立世界模型(注入 agent-runtime)。返回世界 ID 和页面摘要。可并行打开多个世界互不干扰。headful=true 时弹出可见窗口(人工介入点:登录/验证码/真人确认);profile=名称 时使用持久化登录态(同一名称复用)。",
+            description="打开一个网页并建立原生网页世界(注入 agent-runtime)。返回世界 ID 和页面摘要。可并行打开多个世界互不干扰。headful=true 时弹出可见窗口(人工介入点:登录/验证码/真人确认);profile=名称 时使用持久化登录态(同一名称复用)。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -210,7 +210,7 @@ async def list_tools():
         ),
         types.Tool(
             name="world_wait",
-            description="等待条件满足:构件出现/消失/文本变化。轮询内部世界模型,操作后验证结果的利器。",
+            description="等待条件满足:构件出现/消失/文本变化。轮询内部原生网页世界,操作后验证结果的利器。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -226,7 +226,7 @@ async def list_tools():
         ),
         types.Tool(
             name="world_click_at",
-            description="按视口坐标点击(世界模型外的元素/iframe 区域兜底,坐标来自截图或视觉)。",
+            description="按视口坐标点击(原生网页世界外的元素/iframe 区域兜底,坐标来自截图或视觉)。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -354,7 +354,7 @@ def _status(wid):
             if not f.url or f.url.startswith("about:"):
                 continue
             fcnt = f.evaluate("document.querySelectorAll('*').length")
-            # 可见元素计数采用"世界模型 scanner 同口径"(排除装饰标签/小元素),
+            # 可见元素计数采用"原生网页世界 scanner 同口径"(排除装饰标签/小元素),
             # 避免重型 SPA 的合法 DOM 膨胀被误判为 anomaly(实战: Booking.com 误报)
             fvisible = f.evaluate(
                 "[...document.querySelectorAll('*')].filter(e => { const t = e.tagName.toLowerCase(); if (['br','hr','script','style','link','meta','noscript','svg','path','g','defs','use'].includes(t)) return false; const s = getComputedStyle(e); const r = e.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) !== 0 && r.width > 3 && r.height > 3; }).length"
@@ -363,7 +363,7 @@ def _status(wid):
             frames.append({"url": f.url[:100], "elements": fcnt, "visible": fvisible, "ready": bool(fready)})
         except Exception:
             pass
-    # 环境异常检测:稳定后,世界模型 vs 可见 DOM(阈值 35%,排除隐藏/装饰元素)
+    # 环境异常检测:稳定后,原生网页世界 vs 可见 DOM(阈值 35%,排除隐藏/装饰元素)
     visible_dom = frames[0].get("visible", 0) if frames else 0
     world_count = core.get("world", {}).get("elements", 0)
     anomaly = False
@@ -586,7 +586,7 @@ def _t_world_changes(args):
 
 
 def _build_locator(w, ent):
-    """根据世界模型元素信息构建 Playwright locator(行动层整合)。
+    """根据原生网页世界元素信息构建 Playwright locator(行动层整合)。
     优先级:页面原生 id > placeholder 属性 > ARIA role+可访问名 > 文本。找不到返回 None。
     """
     page = w["page"]
@@ -691,7 +691,7 @@ def _t_world_click(args):
             loc_err = f"{type(e).__name__}: {str(e)[:200]}"
     else:
         loc_err = "no-locator"
-    # 兜底:坐标鼠标手势(世界模型实时 rect + scrollIntoView)
+    # 兜底:坐标鼠标手势(原生网页世界实时 rect + scrollIntoView)
     rect = _evaluate(
         wid,
         """(id) => {
@@ -869,7 +869,7 @@ def _t_world_eval(args):
 
 
 def _t_world_click_at(args):
-    """视口坐标点击(世界模型外元素兜底,坐标来自截图/视觉)"""
+    """视口坐标点击(原生网页世界外元素兜底,坐标来自截图/视觉)"""
     wid = args["world_id"]
     x = int(args["x"])
     y = int(args["y"])

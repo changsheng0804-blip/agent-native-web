@@ -6,7 +6,7 @@ window.AgentRuntime = window.AgentRuntime || {};
   let observer = null;
   const DEBOUNCE_MS = 150;
   // 持续变更兜底:页面懒加载/轮播/广告刷新会不断重置防抖计时器,
-  // 若不设上限,onChange 可能永远不触发(世界模型饿死)。实战验证:
+  // 若不设上限,onChange 可能永远不触发(原生网页世界饿死)。实战验证:
   // Booking.com 上 world 停滞在 678 个,forceRefresh 却抓到 2426 个。
   const MAX_WAIT_MS = 1000;
 

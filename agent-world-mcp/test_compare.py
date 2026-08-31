@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""对比:persistent context(profile)vs 普通 launch 的世界模型差异"""
+"""对比:persistent context(profile)vs 普通 launch 的原生网页世界差异"""
 import asyncio
 import json
 import sys

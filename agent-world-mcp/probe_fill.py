@@ -6,7 +6,7 @@
   1. click 走哪条路径(method)
   2. fill 走哪条路径(method) —— 修复后应能在可见输入框验证到文本,必要时降级 js-setter
   3. fill 后可见输入框真实 value(直接 DOM 验证)
-  4. 世界模型是否能查到填入文本的构件(模型视角)
+  4. 原生网页世界是否能查到填入文本的构件(模型视角)
 """
 import asyncio
 import json
@@ -87,9 +87,9 @@ async def main():
             matched = any(text in (x.get("val") or "") for x in filled)
             print(f"fill 是否真正生效: {'✅ 是' if matched else '❌ 否'}")
 
-            # 世界模型视角:含文本的构件
+            # 原生网页世界视角:含文本的构件
             r = await call(session, "world_entities", {"world_id": wid, "text": text, "max_results": 5}, timeout=30)
-            print(f"世界模型含 '{text}' 构件: {r['count']} 个")
+            print(f"原生网页世界含 '{text}' 构件: {r['count']} 个")
             for e in r["entities"][:3]:
                 print(f"   {e['id']:12s} {e['name'][:44]:44s} text={e.get('text','')[:30]!r}")
 

@@ -823,7 +823,7 @@ window.AgentRuntime = window.AgentRuntime || {};
   let observer = null;
   const DEBOUNCE_MS = 150;
   // 持续变更兜底:页面懒加载/轮播/广告刷新会不断重置防抖计时器,
-  // 若不设上限,onChange 可能永远不触发(世界模型饿死)。实战验证:
+  // 若不设上限,onChange 可能永远不触发(原生网页世界饿死)。实战验证:
   // Booking.com 上 world 停滞在 678 个,forceRefresh 却抓到 2426 个。
   const MAX_WAIT_MS = 1000;
 
@@ -954,7 +954,7 @@ window.AgentRuntime = window.AgentRuntime || {};
     refreshStatus() {
       const elements = [...this.world.elements.values()];
       const byNode = new Map(elements.map(e => [e._el, e]));
-      // 弹窗/对话框:直接 DOM 查询(预渲染隐藏弹窗会被可见性过滤掉,不依赖世界模型)
+      // 弹窗/对话框:直接 DOM 查询(预渲染隐藏弹窗会被可见性过滤掉,不依赖原生网页世界)
       const dialogs = [];
       const dialogNodes = document.querySelectorAll('[role="dialog"], [role="alertdialog"], [aria-modal="true"]');
       for (const node of dialogNodes) {

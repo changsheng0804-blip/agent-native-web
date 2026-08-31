@@ -7,7 +7,7 @@
 
 一个 MCP 服务器。启动后,AI agent(Claude Code、Cursor、opencode 等)通过 16 个标准工具:
 
-- **打开世界**:`world_open` —— 打开网页并建立世界模型(可并行多开,互不干扰,不打扰你的桌面)
+- **打开世界**:`world_open` —— 打开网页并建立原生网页世界(可并行多开,互不干扰,不打扰你的桌面)
 - **看图**:`world_entities`(构件清单)/ `world_entity`(构件详情)/ `world_layers`(图层视图)/ `world_resolve`(名字查编号)
 - **看视频**:`world_changes` —— 页面变化增量续读(游标),不用每次全量重看
 - **动手**:`world_click` / `world_fill` / `world_press` —— 全部编号驱动,无选择器脆弱性
@@ -29,7 +29,7 @@
 | `world_wait(appear/disappear, ...)` | 等待构件状态 | 检查施工结果 |
 | `world_screenshot(id?)` | 整页/局部截图 | 拍照存档 |
 | `world_navigate(url)` | 世界内导航(SPA 换页不用重开) | 图纸翻页 |
-| `world_click_at(x, y)` | 视口坐标点击(世界模型外元素兜底) | 按坐标施工 |
+| `world_click_at(x, y)` | 视口坐标点击(原生网页世界外元素兜底) | 按坐标施工 |
 | `world_eval(expression)` | 世界内执行 JS(调试/特殊查询) | 现场勘察 |
 | `world_list` / `world_close` | 管理世界 | 图纸归档 |
 
@@ -52,18 +52,18 @@
 |---|---|---|
 | `auth` | 登录态 | 双信号:cookie(server 层,HttpOnly 可读)+ DOM 登录入口 |
 | `dialogs` | 打开的弹窗 | 直接 DOM 查询 `role=dialog`/`aria-modal`,可见性过滤(预渲染隐藏弹窗不误报) |
-| `page` | 加载/稳定/异常、URL、滚动 | 稳定性=元素数连续两次一致;`anomaly`=世界模型 vs 可见 DOM 严重缩水(反爬/异常页信号) |
+| `page` | 加载/稳定/异常、URL、滚动 | 稳定性=元素数连续两次一致;`anomaly`=原生网页世界 vs 可见 DOM 严重缩水(反爬/异常页信号) |
 | `frames` | iframe 感知:逐层 URL/元素数/就绪 | server 层遍历 page.frames(跨域可访问) |
 | `forms` | 有值的输入框 | 内核增量维护(受控组件重置值属站点特性,不稳定的场景用视觉兜底) |
 | `changed` | 本轮变化高亮 | 对比上次状态 |
 
 **感知盲区修复记录**(实战驱动):
 - `world_navigate(url)`:世界内导航(SPA 换页无需关闭重开)
-- `world_click_at(x,y)`:视口坐标点击(世界模型外元素兜底)
+- `world_click_at(x,y)`:视口坐标点击(原生网页世界外元素兜底)
 - `world_open` 增加 `stabilize_ms`:等待世界稳定(状态卡 stable)才返回,解决渐进渲染/分层加载的"读太早"问题
-- `page.state: anomaly`:反爬/异常页检测(如闲鱼对自动化会话返回简化页或增删循环页时,世界模型严重缩水 → 标记)
-- **内核观察器饿死修复(2026-08-31)**:observer 原用"每次 mutation 重置 150ms 防抖"设计,持续变更页面(懒加载/轮播/广告刷新,如 Booking)会让 `onChange` 永远不触发 → 世界模型停更。实测 Booking 上 world 停滞在 678 个、forceRefresh 却抓到 2426 个。改为**累积式防抖 + maxWait(1000ms)兜底**:mutation 累积到 pending,变更停止 150ms 后处理;若持续变更导致防抖被不断重置,最多 1000ms 强制 flush 一次。修复后捕获率 28% → 98%。涉及 `content/observer.js`,改后需重新构建 `all-in-one.js`。
-- **anomaly 口径修复(2026-08-31)**:anomaly 检测原用"裸可见 DOM"计数(`querySelectorAll('*')`),而世界模型 scanner 会过滤装饰标签(br/svg/path/script 等)+ 小元素。重型 SPA 合法地"DOM 多、模型少" → 误报反爬。改为与 scanner 同口径(排除装饰标签 + <3px)后再比较。涉及 `server.py` 状态卡。
+- `page.state: anomaly`:反爬/异常页检测(如闲鱼对自动化会话返回简化页或增删循环页时,原生网页世界严重缩水 → 标记)
+- **内核观察器饿死修复(2026-08-31)**:observer 原用"每次 mutation 重置 150ms 防抖"设计,持续变更页面(懒加载/轮播/广告刷新,如 Booking)会让 `onChange` 永远不触发 → 原生网页世界停更。实测 Booking 上 world 停滞在 678 个、forceRefresh 却抓到 2426 个。改为**累积式防抖 + maxWait(1000ms)兜底**:mutation 累积到 pending,变更停止 150ms 后处理;若持续变更导致防抖被不断重置,最多 1000ms 强制 flush 一次。修复后捕获率 28% → 98%。涉及 `content/observer.js`,改后需重新构建 `all-in-one.js`。
+- **anomaly 口径修复(2026-08-31)**:anomaly 检测原用"裸可见 DOM"计数(`querySelectorAll('*')`),而原生网页世界 scanner 会过滤装饰标签(br/svg/path/script 等)+ 小元素。重型 SPA 合法地"DOM 多、模型少" → 误报反爬。改为与 scanner 同口径(排除装饰标签 + <3px)后再比较。涉及 `server.py` 状态卡。
 
 操作类工具(`world_click`/`world_fill`/`world_press`)执行后自动刷新状态卡(等待渲染),返回即见操作结果。
 
@@ -72,7 +72,7 @@
 `world_open` 支持两个参数,解决登录/验证码/真人确认场景:
 
 - **`profile: "名称"`**:使用持久化登录态(独立浏览器 profile 目录 `profiles/<名称>/`)。同一名称复用 cookie/会话——登录一次,长期有效。适合 OAuth、需要账号的任务。
-- **`headful: true`**:弹出可见浏览器窗口。配合 profile 使用:agent 打开页面 → 你在弹出的窗口里完成登录/验证码 → agent 的世界模型自动同步,继续操作。
+- **`headful: true`**:弹出可见浏览器窗口。配合 profile 使用:agent 打开页面 → 你在弹出的窗口里完成登录/验证码 → agent 的原生网页世界自动同步,继续操作。
 
 **会话保存机制(双保险)**:
 1. Chromium profile 目录持久化(持久 cookie)
@@ -84,7 +84,7 @@
 world_open(url, profile="login-淘宝", headful=true)   # 弹窗
   → agent 检测到登录页,提示你完成登录
   → 你在窗口里登录
-  → agent 世界模型同步到登录后状态,继续任务
+  → agent 原生网页世界同步到登录后状态,继续任务
   → world_close 自动导出会话
   → 以后同 profile 打开,免登录(无需再弹窗)
 ```
@@ -93,10 +93,10 @@ world_open(url, profile="login-淘宝", headful=true)   # 弹窗
 
 ## 行动层策略(locator 优先,双重降级)
 
-操作类工具(world_click/fill/press)采用三层策略,兼顾"原生能力"与"世界模型兜底":
+操作类工具(world_click/fill/press)采用三层策略,兼顾"原生能力"与"原生网页世界兜底":
 
-1. **Playwright locator**(默认):根据世界模型元素信息(页面 id → placeholder → ARIA role+可访问名 → 文本)自动构建语义定位,自带自动等待、可见性检查、清晰错误诊断
-2. **坐标鼠标手势**(降级):locator 失败时,用世界模型实时 rect + scrollIntoView + 真实鼠标事件
+1. **Playwright locator**(默认):根据原生网页世界元素信息(页面 id → placeholder → ARIA role+可访问名 → 文本)自动构建语义定位,自带自动等待、可见性检查、清晰错误诊断
+2. **坐标鼠标手势**(降级):locator 失败时,用原生网页世界实时 rect + scrollIntoView + 真实鼠标事件
 3. **JS 注入**(fill 再降级):React 受控组件 setter + 覆盖层自动切换
 
 工具返回的 `method` 字段标明实际走哪条路径(`locator` / `mouse-gesture` / `js-setter`),agent 可据此判断可靠性。
@@ -154,9 +154,9 @@ agent-world-mcp/
 ├── test_click.py      # 点击乘客按钮 -> 面板弹出 -> Adults 元素出现
 ├── test_fill.py       # 填出发地 Tokyo -> 建议列表出现
 ├── test_action_layer.py  # 行动层:locator 优先 + 覆盖层验证 + world_press
-├── test_value.py      # value 入图:fill 后世界模型可见输入框值
+├── test_value.py      # value 入图:fill 后原生网页世界可见输入框值
 ├── test_profile.py    # headful + profile:登录态持久化验证
-├── test_compare.py    # profile vs 普通 launch 的世界模型对比
+├── test_compare.py    # profile vs 普通 launch 的原生网页世界对比
 ├── test_frames.py     # frame 感知 + anomaly + navigate + click_at
 ├── test_status.py     # 世界状态卡:auth/dialogs/page/forms/changed
 ├── test_eval.py       # world_eval:只读查询/函数表达式/截断/错误
@@ -165,7 +165,7 @@ agent-world-mcp/
 
 ## 实战验证矩阵(2026-08-31)
 
-| 站点 | 特点 | 世界模型捕获 | 状态卡 | 行动层 |
+| 站点 | 特点 | 原生网页世界捕获 | 状态卡 | 行动层 |
 |---|---|---|---|---|
 | Wikipedia | 简单静态 | 154/189 (81%) | stable, 无 anomaly | click=locator ✅ |
 | Google Flights | 重型 SPA+覆盖层 | 461+ | stable | click/fill/press 三层降级 ✅ |
@@ -182,7 +182,7 @@ agent-world-mcp/
 **实战要点**:
 - 反爬拦截页(Reddit/eBay 的简化页)会正常建模,且 **anomaly 口径修复后不再误报**(模型与 DOM 一致就不算缩水)
 - 百度搜索框语义是 `textbox`(名字来自热门词占位符,易变)——定位输入框应**用 role 查询**(`role=textbox/input/combobox/searchbox`)而非猜名字
-- 观察器饿死修复后,持续变更站点(Booking/Amazon)世界模型能追上 DOM(捕获率 28%→96%+)
+- 观察器饿死修复后,持续变更站点(Booking/Amazon)原生网页世界能追上 DOM(捕获率 28%→96%+)
 
 ## 依赖说明
 
@@ -205,9 +205,9 @@ python test_official.py       # 官方客户端全链路:握手/工具列表/wor
 python test_click.py          # 点击乘客按钮 -> 面板弹出 -> Adults 元素出现
 python test_fill.py           # 填出发地 Tokyo -> 建议列表(option.tokyo-japan)出现
 python test_action_layer.py   # 行动层:locator 优先 + 覆盖层验证降级 + world_press
-python test_value.py          # value 入图:fill 后世界模型可见输入框值
+python test_value.py          # value 入图:fill 后原生网页世界可见输入框值
 python test_profile.py        # headful + profile:登录态持久化验证
-python test_compare.py        # profile vs 普通 launch:世界模型对比
+python test_compare.py        # profile vs 普通 launch:原生网页世界对比
 python test_frames.py         # frame 感知 + anomaly + navigate + click_at
 python test_status.py         # 世界状态卡:auth/dialogs/page/forms/changed
 python test_eval.py           # world_eval:JS 查询/截断/错误处理
