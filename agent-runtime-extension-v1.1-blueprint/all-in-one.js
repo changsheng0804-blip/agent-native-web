@@ -812,11 +812,13 @@ window.AgentRuntime = window.AgentRuntime || {};
 
     /**
      * 构件清单（统一过滤式查询，CAD 构件表）
-     * filter: { role, tag, text, name, fingerprint, interactive, inViewport, maxResults }
+     * filter: { role, tag, text, name, fingerprint, bounds, interactive, inViewport, maxResults }
+     * bounds: {x, y, w, h} 空间矩形过滤——与 world_map 返回的 region.bounds 结构一致,
+     *         只返回"中心点落在矩形内"的构件(区域钻取:地图拿到某区 bounds → 查该区内构件)
      */
     findEntities(filter = {}) {
       const {
-        role, tag, text, name, fingerprint, interactive, inViewport, maxResults = 200
+        role, tag, text, name, fingerprint, bounds, interactive, inViewport, maxResults = 200
       } = filter;
       const result = [];
       for (const el of this.world.elements.values()) {
@@ -825,6 +827,11 @@ window.AgentRuntime = window.AgentRuntime || {};
         if (text && !(el.text || '').toLowerCase().includes(String(text).toLowerCase())) continue;
         if (name && !(el.name || '').toLowerCase().includes(String(name).toLowerCase())) continue;
         if (fingerprint && el.fingerprint !== fingerprint) continue;
+        if (bounds) {
+          const b = el.bounds;
+          const cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+          if (cx < bounds.x || cx > bounds.x + bounds.w || cy < bounds.y || cy > bounds.y + bounds.h) continue;
+        }
         if (interactive !== undefined && el.interactive !== !!interactive) continue;
         if (inViewport !== undefined && el.inViewport !== !!inViewport) continue;
         result.push({

@@ -111,7 +111,7 @@ async def list_tools():
         ),
         types.Tool(
             name="world_entities",
-            description="构件清单(图纸构件表):按角色/标签/文本/名字/稳定指纹/可交互/视口过滤查询元素,返回编号、名字、坐标、指纹。指纹=跨会话稳定的第二 ID(同站多次进出可快速认路)。",
+            description="构件清单(图纸构件表):按角色/标签/文本/名字/稳定指纹/空间范围/可交互/视口过滤查询元素,返回编号、名字、坐标、指纹。指纹=跨会话稳定的第二 ID(同站多次进出可快速认路)。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -121,6 +121,14 @@ async def list_tools():
                     "text": {"type": "string", "description": "文本包含(子串匹配)"},
                     "name": {"type": "string", "description": "名字包含(如 round-trip 匹配 combobox.round-trip)"},
                     "fingerprint": {"type": "string", "description": "稳定指纹精确匹配(同站多次进出的认路记忆,从上次 world_entity 详图里取)"},
+                    "bounds": {
+                        "type": "object",
+                        "description": "空间矩形过滤 {x,y,w,h}——与 world_map 返回的 region.bounds 一致。区域钻取:地图拿到某区 bounds 后,只查该区内的构件(中心点落在矩形内)",
+                        "properties": {
+                            "x": {"type": "number"}, "y": {"type": "number"},
+                            "w": {"type": "number"}, "h": {"type": "number"},
+                        },
+                    },
                     "interactive": {"type": "boolean", "description": "是否可交互"},
                     "in_viewport": {"type": "boolean", "description": "是否在当前视口内"},
                     "max_results": {"type": "integer", "description": "最多返回条数", "default": 100},

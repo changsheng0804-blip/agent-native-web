@@ -20,7 +20,7 @@
 | 工具 | 作用 | 心智类比 |
 |---|---|---|
 | `world_open(url, headful?, profile?, cdp_url?)` | 打开网页,返回世界 ID + 摘要(可开窗/持久化登录态/CDP 日常浏览器挂载) | 摊开图纸 |
-| `world_entities({role, text, name, ...})` | 过滤查构件清单 | 构件表(BOM) |
+| `world_entities({role, text, name, bounds, ...})` | 过滤查构件清单(支持 bounds 空间范围=区域钻取) | 构件表(BOM) |
 | `world_entity(id)` | 单构件详情(坐标/邻居/区域) | 构件详图 |
 | `world_layers()` | 结构/语义/空间/交互统计 | 图纸图层 |
 | `world_map(max_entries?)` | 页面结构导览:语义容器分区 + 各区可交互入口(带强 ID) | **整页地图** |
@@ -70,6 +70,7 @@
 - **observer 补状态/显隐属性监听(2026-08-31)**:实战验证发现 HTML 原生弹窗用 `open` 属性切换显隐、tab/折叠用 `aria-selected`/`aria-expanded`,原 attributeFilter 不含这些属性 → 元素变可见/变状态但世界不更新。attributeFilter 补 `open`/`aria-expanded`/`aria-selected`,重建 all-in-one.js。涉及 `content/observer.js`。
 - **可见性过滤增强:识别难识别内容(2026-08-31)**:scanner 原只过滤 display/visibility/opacity 三种结构性隐藏 + 小元素,对"肉眼难识别但仍占位/有文本"的内容(同色文字 / 绝对定位脱出视口 / font-size:0 / 大幅负 text-indent / aria-hidden)判断不足,这些内容会以失真的形态混进原生网页世界。新增 `engine/visibility.js#isPseudoHidden` 补五类判断(同色文字/绝对定位脱出视口上方左侧/font-size:0/大幅负 text-indent/aria-hidden 祖先链),scanner + 状态卡 dialogs 统一接入;observer 补 aria-hidden 属性监听,运行时变隐藏的元素从世界移除(含子树)。修复后五类内容全被识别过滤,正常元素不误伤,动态"先可见后隐藏"的内容也会被及时移除。涉及 `engine/visibility.js`、`engine/scanner.js`、`content/observer.js`、`content/runtime.js`,改后重建 `all-in-one.js`。
 - **world_map 去重叠锚点(2026-08-31)**:多真站体检发现空区域噪音(多个 header/导航容器叠同一位置)。修复:① 锚点去重叠——交集占**较大面积** ≥85% 视为几乎重合,只保留面积最大(**必须用大面积判据**:main 套 nav 是"包含"非"重叠",用交集/小面积会误合并,曾把 GitHub 误并成 3 区已修正);② 过滤空壳区域。修复后空区域 18→0。涉及 `engine/query.js#map`,重建 all-in-one.js。百度类纯 div 页(0 语义容器)不强求地图,散件可找。
+- **world_entities 区域钻取(bounds 空间过滤,2026-08-31)**:地图→钻取闭环——`world_entities` 加 `bounds` 参数({x,y,w,h},与 world_map 的 region.bounds 一致),只返回中心点落在矩形内的构件。agent 用 `world_map` 拿某区 bounds → `world_entities({bounds, role})` 查该区内构件 → `world_entity` 详图,三层链路闭环。实测:GitHub main 区按 role=button 过滤命中、极小矩形 0 命中(空间过滤生效)。涉及 `engine/query.js#findEntities` + server schema,重建 all-in-one.js。
 
 操作类工具(`world_click`/`world_fill`/`world_press`)执行后自动刷新状态卡(等待渲染),返回即见操作结果。
 
@@ -248,6 +249,7 @@ agent-world-mcp/
 ├── test_fingerprint.py     # 稳定指纹:同站两次进站指纹一致 + 按指纹一步定位(认路记忆)
 ├── test_map.py             # 页面结构导览 world_map:语义分区 + 各区入口 + 强 ID 可钻取
 ├── test_map_real.py        # world_map 多真站体检:区域/空区/散件/钻取(去重叠锚点验证)
+├── test_map_drill.py       # 区域钻取:world_map bounds → world_entities 空间过滤 → 详图
 └── test_gf_final.py   # 正常站点(GF)上 frames/anomaly/navigate 冒烟
 
 (monorepo 根)
@@ -312,5 +314,7 @@ python test_wait_event.py     # world_wait 事件驱动:已满足/动态出现/�
 python validate_closed_loop.py [--local]  # 实时闭环实战验证:effect 一致性矩阵 + truth oracle + 报告
 python test_fingerprint.py    # 稳定指纹:同站两次进站指纹一致 + 按指纹一步定位
 python test_map.py            # 页面结构导览 world_map:语义分区 + 各区入口 + 强 ID 可钻取
+python test_map_real.py       # world_map 多真站体检:区域/空区/散件/钻取
+python test_map_drill.py      # 区域钻取:world_map bounds → world_entities 空间过滤 → 详图
 python test_gf_final.py       # Google Flights 冒烟:frames/anomaly/navigate 无异常
 ```
