@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>远距弹窗测试页</title>
+    <style>
+        body { font-family: sans-serif; background: white; color: black; }
+        /* 角落按钮:固定定位在视口左上角 */
+        #corner-btn {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            padding: 10px 16px;
+            font-size: 16px;
+            cursor: pointer;
+            z-index: 10;
+        }
+        /* 居中的远距弹窗:离角落按钮非常远 */
+        #far-modal {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 400px;
+            background: white;
+            border: 2px solid #333;
+            padding: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,.3);
+            z-index: 100;
+        }
+        #far-modal[open] { display: block; }
+        .plain { margin-top: 30px; }
+    </style>
+</head>
+<body>
+    <h1>Far Modal Test</h1>
+    <button id="corner-btn">打开居中弹窗</button>
+    <div id="far-modal" role="dialog" aria-modal="true">
+        <h2>FAR_MODAL_TITLE 居中弹窗</h2>
+        <p>这个弹窗离角落按钮很远,用于验证 ±200px 空间区域是否会漏判。</p>
+        <button id="close-modal">关闭</button>
+    </div>
+    <div class="plain">
+        <p>FAR_MODAL_PLAIN 普通可见文本</p>
+    </div>
+    <script>
+        const btn = document.getElementById('corner-btn');
+        const modal = document.getElementById('far-modal');
+        btn.addEventListener('click', () => modal.setAttribute('open', ''));
+        document.getElementById('close-modal').addEventListener('click', () => modal.removeAttribute('open'));
+    </script>
+</body>
+</html>

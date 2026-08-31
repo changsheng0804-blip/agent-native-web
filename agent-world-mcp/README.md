@@ -66,6 +66,7 @@
 - `page.state: anomaly`:反爬/异常页检测(如闲鱼对自动化会话返回简化页或增删循环页时,原生网页世界严重缩水 → 标记)
 - **内核观察器饿死修复(2026-08-31)**:observer 原用"每次 mutation 重置 150ms 防抖"设计,持续变更页面(懒加载/轮播/广告刷新,如 Booking)会让 `onChange` 永远不触发 → 原生网页世界停更。实测 Booking 上 world 停滞在 678 个、forceRefresh 却抓到 2426 个。改为**累积式防抖 + maxWait(1000ms)兜底**:mutation 累积到 pending,变更停止 150ms 后处理;若持续变更导致防抖被不断重置,最多 1000ms 强制 flush 一次。修复后捕获率 28% → 98%。涉及 `content/observer.js`,改后需重新构建 `all-in-one.js`。
 - **anomaly 口径修复(2026-08-31)**:anomaly 检测原用"裸可见 DOM"计数(`querySelectorAll('*')`),而原生网页世界 scanner 会过滤装饰标签(br/svg/path/script 等)+ 小元素。重型 SPA 合法地"DOM 多、模型少" → 误报反爬。改为与 scanner 同口径(排除装饰标签 + <3px)后再比较。涉及 `server.py` 状态卡。
+- **observer 补状态/显隐属性监听(2026-08-31)**:实战验证发现 HTML 原生弹窗用 `open` 属性切换显隐、tab/折叠用 `aria-selected`/`aria-expanded`,原 attributeFilter 不含这些属性 → 元素变可见/变状态但世界不更新。attributeFilter 补 `open`/`aria-expanded`/`aria-selected`,重建 all-in-one.js。涉及 `content/observer.js`。
 - **可见性过滤增强:识别难识别内容(2026-08-31)**:scanner 原只过滤 display/visibility/opacity 三种结构性隐藏 + 小元素,对"肉眼难识别但仍占位/有文本"的内容(同色文字 / 绝对定位脱出视口 / font-size:0 / 大幅负 text-indent / aria-hidden)判断不足,这些内容会以失真的形态混进原生网页世界。新增 `engine/visibility.js#isPseudoHidden` 补五类判断(同色文字/绝对定位脱出视口上方左侧/font-size:0/大幅负 text-indent/aria-hidden 祖先链),scanner + 状态卡 dialogs 统一接入;observer 补 aria-hidden 属性监听,运行时变隐藏的元素从世界移除(含子树)。修复后五类内容全被识别过滤,正常元素不误伤,动态"先可见后隐藏"的内容也会被及时移除。涉及 `engine/visibility.js`、`engine/scanner.js`、`content/observer.js`、`content/runtime.js`,改后重建 `all-in-one.js`。
 
 操作类工具(`world_click`/`world_fill`/`world_press`)执行后自动刷新状态卡(等待渲染),返回即见操作结果。
@@ -220,6 +221,7 @@ agent-world-mcp/
 ├── test_change_digest.py  # 变更可读化:world_changes digest+importance(本地动态页+GF)
 ├── test_click_effect.py   # 点击生效报告:正例 GF 面板 effected/high + 负例 no-change
 ├── test_wait_event.py     # world_wait 事件驱动:已满足/动态出现/消失/超时兜底
+├── validate_closed_loop.py  # 实时闭环实战验证:effect 判定一致性矩阵(truth oracle)+ 报告
 └── test_gf_final.py   # 正常站点(GF)上 frames/anomaly/navigate 冒烟
 
 (monorepo 根)
@@ -281,5 +283,6 @@ python test_ipi_filter.py     # IPI 伪隐藏过滤:VEC_4~VEC_8 阻断 + 对照�
 python test_change_digest.py  # 变更可读化:world_changes digest + importance(本地动态页 + GF)
 python test_click_effect.py   # 点击生效报告:正例 GF 面板 effected/high + 负例 no-change 不误报
 python test_wait_event.py     # world_wait 事件驱动:已满足/动态出现/消失/超时兜底
+python validate_closed_loop.py [--local]  # 实时闭环实战验证:effect 一致性矩阵 + truth oracle + 报告
 python test_gf_final.py       # Google Flights 冒烟:frames/anomaly/navigate 无异常
 ```

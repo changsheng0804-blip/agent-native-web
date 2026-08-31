@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>标签切换测试页</title>
+    <style>
+        body { font-family: sans-serif; padding: 20px; background: white; color: black; }
+        .tablist { display: flex; gap: 8px; margin-bottom: 16px; }
+        .tab { padding: 8px 16px; border: 1px solid #999; cursor: pointer; background: #eee; }
+        .tab[aria-selected="true"] { background: #337ab7; color: white; }
+        .panel { border: 1px solid #ccc; padding: 12px; min-height: 120px; }
+        .panel[hidden] { display: none; }
+    </style>
+</head>
+<body>
+    <h1>Tab Switch Test</h1>
+    <div class="tablist" role="tablist">
+        <button class="tab" role="tab" id="tab-a" aria-selected="true" aria-controls="panel-a">TAB_A 概览</button>
+        <button class="tab" role="tab" id="tab-b" aria-selected="false" aria-controls="panel-b">TAB_B 详情</button>
+        <button class="tab" role="tab" id="tab-c" aria-selected="false" aria-controls="panel-c">TAB_C 设置</button>
+    </div>
+    <div class="panel" id="panel-a" role="tabpanel" aria-labelledby="tab-a">TAB_PANEL_A 概览内容</div>
+    <div class="panel" id="panel-b" role="tabpanel" aria-labelledby="tab-b" hidden>TAB_PANEL_B 详情内容</div>
+    <div class="panel" id="panel-c" role="tabpanel" aria-labelledby="tab-c" hidden>TAB_PANEL_C 设置内容</div>
+    <script>
+        const tabs = document.querySelectorAll('.tab');
+        const panels = { 'tab-a': 'panel-a', 'tab-b': 'panel-b', 'tab-c': 'panel-c' };
+        tabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                tabs.forEach(t => t.setAttribute('aria-selected', String(t === tab)));
+                for (const [tid, pid] of Object.entries(panels)) {
+                    const p = document.getElementById(pid);
+                    if (p) p.toggleAttribute('hidden', tid !== tab.id);
+                }
+            });
+        });
+    </script>
+</body>
+</html>

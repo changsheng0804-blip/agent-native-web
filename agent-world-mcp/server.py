@@ -849,7 +849,10 @@ def _fill_visible(wid, text):
 def _click_region_snapshot(wid, target_id):
     """点击前冻结目标空间区域:以目标 bounds 中心 ±CLICK_REGION_PAD 为矩形。
     返回 (region, rows)——region 是固定坐标,点击后 target 可能消失也用它做 diff。
+    附带全页可见 dialog/menu 集合(远距弹窗兜底)与目标自身状态(状态切换兜底,如 tab/折叠/勾选)。
     rows: 区域内构件 [id, semantic, name]
+    dialogs: 全页可见 dialog/alertdialog/menu 构件 [id, semantic, name]
+    target: {page_id, state} —— state={ariaSelected, ariaExpanded, checked, className}
     """
     raw = _evaluate(
         wid,
@@ -866,7 +869,29 @@ def _click_region_snapshot(wid, target_id):
                     rows.push([e.id, e.semantic, (e.name || '').slice(0, 60)]);
                 }
             }
-            return JSON.stringify({ region: reg, rows });
+            // 全页可见弹窗/菜单(远距弹窗兜底)
+            const dialogs = [];
+            for (const e of agentWorld._runtime.world.elements.values()) {
+                if (e.semantic === 'dialog' || e.semantic === 'alertdialog' || e.semantic === 'menu') {
+                    if (e.inViewport) dialogs.push([e.id, e.semantic, (e.name || '').slice(0, 60)]);
+                }
+            }
+            // 目标自身状态(用页面原生 id 寻 DOM,SPA 重建后依然可读)
+            let target = null;
+            if (el._el) {
+                const page_id = (el.attributes && el.attributes.id) || '';
+                const n = page_id ? (document.getElementById(page_id) || el._el) : el._el;
+                target = {
+                    page_id,
+                    state: {
+                        ariaSelected: n.getAttribute('aria-selected'),
+                        ariaExpanded: n.getAttribute('aria-expanded'),
+                        checked: n.hasAttribute('checked'),
+                        className: (n.className && n.className.baseVal !== undefined ? n.className.baseVal : n.className) || ''
+                    }
+                };
+            }
+            return JSON.stringify({ region: reg, rows, dialogs, target });
         }""",
         target_id,
     )
@@ -875,11 +900,14 @@ def _click_region_snapshot(wid, target_id):
     return json.loads(raw)
 
 
-def _click_region_after(wid, region):
-    """点击后用冻结区域取当前构件(不依赖目标是否仍存在)"""
+def _click_region_after(wid, region, page_id=None):
+    """点击后用冻结区域取当前构件(不依赖目标是否仍存在)。
+    附带全页可见 dialog/menu 集合(远距弹窗兜底)与目标自身状态(状态切换兜底)。
+    """
     raw = _evaluate(
         wid,
-        """(reg) => {
+        """(arg) => {
+            const reg = arg.region, page_id = arg.page_id;
             const rows = [];
             for (const e of agentWorld._runtime.world.elements.values()) {
                 const x = e.bounds.x, y = e.bounds.y;
@@ -887,17 +915,66 @@ def _click_region_after(wid, region):
                     rows.push([e.id, e.semantic, (e.name || '').slice(0, 60)]);
                 }
             }
-            return JSON.stringify(rows);
+            const dialogs = [];
+            for (const e of agentWorld._runtime.world.elements.values()) {
+                if (e.semantic === 'dialog' || e.semantic === 'alertdialog' || e.semantic === 'menu') {
+                    if (e.inViewport) dialogs.push([e.id, e.semantic, (e.name || '').slice(0, 60)]);
+                }
+            }
+            // 目标自身状态(用页面原生 id 寻 DOM,SPA 重建后依然可读)
+            let target_state = null;
+            if (page_id) {
+                const n = document.getElementById(page_id);
+                if (n) {
+                    target_state = {
+                        ariaSelected: n.getAttribute('aria-selected'),
+                        ariaExpanded: n.getAttribute('aria-expanded'),
+                        checked: n.hasAttribute('checked'),
+                        className: (n.className && n.className.baseVal !== undefined ? n.className.baseVal : n.className) || ''
+                    };
+                }
+            }
+            return JSON.stringify({ rows, dialogs, target_state });
         }""",
-        region,
+        {"region": region, "page_id": page_id},
     )
-    return json.loads(raw) if raw else []
+    if not raw:
+        return [], [], None
+    data = json.loads(raw)
+    return data.get("rows", []), data.get("dialogs", []), data.get("target_state")
 
 
-def _build_click_effect(before_rows, after_rows, url_changed=False):
+def _target_state_flip(before_state, after_state):
+    """目标自身状态是否翻转(状态切换类交互的证据,如 tab 的 aria-selected、
+    折叠的 aria-expanded、勾选 checked)。返回 (flipped, what)"""
+    if not before_state or not after_state:
+        return False, None
+    for key in ("ariaSelected", "ariaExpanded", "checked"):
+        b = before_state.get(key)
+        a = after_state.get(key)
+        if b is not None or a is not None:
+            if (b or None) != (a or None):
+                return True, key
+    # className 变化(弱信号,仅当前面三个都无差异时考虑)
+    bc = (before_state.get("className") or "").strip()
+    ac = (after_state.get("className") or "").strip()
+    if bc and ac and bc != ac:
+        return True, "className"
+    return False, None
+
+
+def _build_click_effect(before_rows, after_rows, url_changed=False, before_dialogs=None,
+                        after_dialogs=None, before_target_state=None, after_target_state=None):
     """空间区域 diff → 操作生效报告。
-    区域新增高价值构件(dialog/button/menu/option 等)= 强证据;仅 URL 变= 导航类强证据;
-    区域有变化但无关键构件= changed(中等);区域无变化+URL 未变= no-change。
+    判定优先级(从强到弱):
+      1. URL 变化 → effected/high(导航/提交类)
+      2. 全页出现"新的可见 dialog/menu"(点击前没有、点击后有)→ effected/high
+         —— 远距弹窗兜底:弹窗出现在 ±200px 区域外时,靠全页 dialog 扫描识别(F1 修复)
+      3. 目标自身状态翻转(aria-selected/aria-expanded/checked/class)→ effected/high
+         —— 状态切换类交互兜底:tab/折叠/勾选无新构件,只有目标状态变
+      4. 目标区域新增关键构件(dialog/button/menu/option 等)→ effected/high
+      5. 区域有变化但无关键构件 → changed/medium
+      6. 区域无变化+URL 未变 → no-change
     """
     before_ids = {r[0] for r in before_rows}
     after_ids = {r[0] for r in after_rows}
@@ -909,11 +986,38 @@ def _build_click_effect(before_rows, after_rows, url_changed=False):
     for r in key_rows[:8]:
         observed.append({"type": "add", "id": r[0], "semantic": r[1], "name": r[2]})
 
+    # 全页新出现 dialog/menu 兜底(远距弹窗 F1 修复)
+    before_d = set((d[0] for d in before_dialogs or []))
+    new_dialogs = [d for d in (after_dialogs or []) if d[0] not in before_d]
+
     if url_changed:
         return {
             "verdict": "effected",
             "confidence": "high",
             "why": "URL 变化(导航/提交类)",
+            "observed": observed,
+            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
+        }
+    if new_dialogs:
+        names = "、".join(f"{_ROLE_LABEL.get(d[1], d[1])} {d[2]}" for d in new_dialogs[:5])
+        for d in new_dialogs[:8]:
+            if not any(o["id"] == d[0] for o in observed):
+                observed.append({"type": "add", "id": d[0], "semantic": d[1], "name": d[2]})
+        return {
+            "verdict": "effected",
+            "confidence": "high",
+            "why": f"页面出现新的弹窗/菜单(可能远离目标): {names}",
+            "observed": observed,
+            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
+        }
+    state_flip, state_key = _target_state_flip(before_target_state, after_target_state)
+    if state_flip:
+        label = {"ariaSelected": "选中态(aria-selected)", "ariaExpanded": "展开态(aria-expanded)",
+                 "checked": "勾选(checked)", "className": "样式(className)"}.get(state_key, state_key)
+        return {
+            "verdict": "effected",
+            "confidence": "high",
+            "why": f"目标自身状态变化: {label} 翻转",
             "observed": observed,
             "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
         }
@@ -945,24 +1049,31 @@ def _build_click_effect(before_rows, after_rows, url_changed=False):
 
 def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500):
     """点击后轮询目标区域:有变化即停(不等满),最多 max_wait_ms。
+    同时采集全页可见 dialog 集合(远距弹窗兜底)与目标自身状态(状态切换兜底)。
     返回 effect 报告;捕获失败时返回 None(调用方省略字段)。
     """
     if not snap_before:
         return None
     region = snap_before["region"]
-    before_rows = snap_before["rows"]
+    before_rows = snap_before.get("rows", [])
+    before_dialogs = snap_before.get("dialogs", [])
+    before_target = snap_before.get("target") or {}
+    page_id = before_target.get("page_id") or None
+    before_target_state = before_target.get("state")
     w = _world(wid)
     deadline = time.time() + max_wait_ms / 1000
     last_rows = None
+    last_dialogs = None
+    last_target_state = None
     last_seen = 0
     while time.time() < deadline:
         time.sleep(0.2)
         try:
-            rows = _click_region_after(wid, region)
+            rows, dialogs, target_state = _click_region_after(wid, region, page_id)
         except Exception:
-            rows = []
-        if rows != last_rows:
-            last_rows = rows
+            rows, dialogs, target_state = [], [], None
+        if (rows, dialogs, target_state) != (last_rows, last_dialogs, last_target_state):
+            last_rows, last_dialogs, last_target_state = rows, dialogs, target_state
             last_seen = time.time()
         # 区域稳定(0.4s 无变化)且距首次观察足够(让重渲染完成)即停
         if rows and (time.time() - last_seen > 0.4) and (time.time() - last_seen < 5):
@@ -970,10 +1081,12 @@ def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500):
     url_changed = w["page"].url != url_before
     if last_rows is None:
         try:
-            last_rows = _click_region_after(wid, region)
+            last_rows, last_dialogs, last_target_state = _click_region_after(wid, region, page_id)
         except Exception:
-            last_rows = []
-    return _build_click_effect(before_rows, last_rows or [], url_changed)
+            last_rows, last_dialogs, last_target_state = [], [], None
+    return _build_click_effect(before_rows, last_rows or [], url_changed,
+                               before_dialogs, last_dialogs or [],
+                               before_target_state, last_target_state)
 
 
 def _t_world_click(args):
