@@ -66,6 +66,7 @@
 - `page.state: anomaly`:反爬/异常页检测(如闲鱼对自动化会话返回简化页或增删循环页时,原生网页世界严重缩水 → 标记)
 - **内核观察器饿死修复(2026-08-31)**:observer 原用"每次 mutation 重置 150ms 防抖"设计,持续变更页面(懒加载/轮播/广告刷新,如 Booking)会让 `onChange` 永远不触发 → 原生网页世界停更。实测 Booking 上 world 停滞在 678 个、forceRefresh 却抓到 2426 个。改为**累积式防抖 + maxWait(1000ms)兜底**:mutation 累积到 pending,变更停止 150ms 后处理;若持续变更导致防抖被不断重置,最多 1000ms 强制 flush 一次。修复后捕获率 28% → 98%。涉及 `content/observer.js`,改后需重新构建 `all-in-one.js`。
 - **anomaly 口径修复(2026-08-31)**:anomaly 检测原用"裸可见 DOM"计数(`querySelectorAll('*')`),而原生网页世界 scanner 会过滤装饰标签(br/svg/path/script 等)+ 小元素。重型 SPA 合法地"DOM 多、模型少" → 误报反爬。改为与 scanner 同口径(排除装饰标签 + <3px)后再比较。涉及 `server.py` 状态卡。
+- **可见性过滤增强:识别难识别内容(2026-08-31)**:scanner 原只过滤 display/visibility/opacity 三种结构性隐藏 + 小元素,对"肉眼难识别但仍占位/有文本"的内容(同色文字 / 绝对定位脱出视口 / font-size:0 / 大幅负 text-indent / aria-hidden)判断不足,这些内容会以失真的形态混进原生网页世界。新增 `engine/visibility.js#isPseudoHidden` 补五类判断(同色文字/绝对定位脱出视口上方左侧/font-size:0/大幅负 text-indent/aria-hidden 祖先链),scanner + 状态卡 dialogs 统一接入;observer 补 aria-hidden 属性监听,运行时变隐藏的元素从世界移除(含子树)。修复后五类内容全被识别过滤,正常元素不误伤,动态"先可见后隐藏"的内容也会被及时移除。涉及 `engine/visibility.js`、`engine/scanner.js`、`content/observer.js`、`content/runtime.js`,改后重建 `all-in-one.js`。
 
 操作类工具(`world_click`/`world_fill`/`world_press`)执行后自动刷新状态卡(等待渲染),返回即见操作结果。
 
@@ -191,6 +192,7 @@ agent-world-mcp/
 ├── test_frames.py     # frame 感知 + anomaly + navigate + click_at
 ├── test_status.py     # 世界状态卡:auth/dialogs/page/forms/changed
 ├── test_eval.py       # world_eval:只读查询/函数表达式/截断/错误
+├── test_ipi_filter.py # IPI 伪隐藏过滤:VEC_4~VEC_8 阻断 + 对照不误伤 + 动态时序移除
 └── test_gf_final.py   # 正常站点(GF)上 frames/anomaly/navigate 冒烟
 
 (monorepo 根)
@@ -248,5 +250,6 @@ python test_compare.py        # profile vs 普通 launch:原生网页世界对�
 python test_frames.py         # frame 感知 + anomaly + navigate + click_at
 python test_status.py         # 世界状态卡:auth/dialogs/page/forms/changed(本地夹具)
 python test_eval.py           # world_eval:JS 查询/截断/错误处理
+python test_ipi_filter.py     # IPI 伪隐藏过滤:VEC_4~VEC_8 阻断 + 对照不误伤 + 动态时序(本地夹具)
 python test_gf_final.py       # Google Flights 冒烟:frames/anomaly/navigate 无异常
 ```

@@ -72,6 +72,10 @@ window.AgentRuntime = window.AgentRuntime || {};
     const style = getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0) return null;
     
+    // IPI 伪隐藏过滤:color:white 同色 / 移出视口 / font-size:0 / text-indent / aria-hidden
+    // (display/visibility/opacity 之外的五种"伪隐藏"泄露缺口,见 IPI 备忘录 VEC_4~VEC_8)
+    if (global.AgentRuntime.visibility.isPseudoHidden(el, style, rect)) return null;
+    
     // 过滤纯装饰/无意义元素
     const tag = el.tagName.toLowerCase();
     const skipTags = new Set(['br','hr','script','style','link','meta','noscript','svg','path','g','defs','use']);

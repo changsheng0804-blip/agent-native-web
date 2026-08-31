@@ -44,6 +44,7 @@ window.AgentRuntime = window.AgentRuntime || {};
         const rect = node.getBoundingClientRect();
         const st = getComputedStyle(node);
         if (rect.width < 3 || rect.height < 3 || st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') continue;
+        if (global.AgentRuntime.visibility.isPseudoHidden(node, st, rect)) continue;
         const el = byNode.get(node);
         dialogs.push({
           id: el ? el.id : 'dom:' + node.tagName.toLowerCase(),
@@ -198,11 +199,27 @@ window.AgentRuntime = window.AgentRuntime || {};
         
         // 处理属性变化
         if (m.type === 'attributes' && m.target.nodeType === Node.ELEMENT_NODE) {
-          const el = global.AgentRuntime.scanner.scanElement(m.target);
-          if (el) {
-            this.world.elements.set(el.id, el);
-            changedIds.add(el.id);
-            updatedIds.add(el.id);
+          // 重新评估 target 及其所有后代:祖先 aria-hidden/隐藏样式变化会影响整棵子树,
+          // 不遍历的话"先注册子元素、后给父容器加隐藏"的动态时序会泄露(IPI 防御闭环)
+          const nodes = [m.target];
+          if (m.target.querySelectorAll) {
+            nodes.push(...m.target.querySelectorAll('*'));
+          }
+          for (const n of nodes) {
+            const prevId = global.AgentRuntime.scanner.getStableId(n);
+            const wasRegistered = this.world.elements.has(prevId);
+            const el = global.AgentRuntime.scanner.scanElement(n);
+            if (el) {
+              this.world.elements.set(el.id, el);
+              changedIds.add(el.id);
+              updatedIds.add(el.id);
+            } else if (wasRegistered) {
+              // 元素被隐藏/变装饰(如动态加 aria-hidden/style/class),从世界移除
+              // 避免"先注册后伪隐藏"的动态时序泄露(IPI 防御闭环)
+              this.world.elements.delete(prevId);
+              changedIds.add(prevId);
+              removedIds.add(prevId);
+            }
           }
         }
         

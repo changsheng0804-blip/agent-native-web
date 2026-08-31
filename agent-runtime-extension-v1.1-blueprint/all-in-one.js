@@ -73,6 +73,10 @@ window.AgentRuntime = window.AgentRuntime || {};
     const style = getComputedStyle(el);
     if (style.display === 'none' || style.visibility === 'hidden' || parseFloat(style.opacity) === 0) return null;
     
+    // IPI 伪隐藏过滤:color:white 同色 / 移出视口 / font-size:0 / text-indent / aria-hidden
+    // (display/visibility/opacity 之外的五种"伪隐藏"泄露缺口,见 IPI 备忘录 VEC_4~VEC_8)
+    if (global.AgentRuntime.visibility.isPseudoHidden(el, style, rect)) return null;
+    
     // 过滤纯装饰/无意义元素
     const tag = el.tagName.toLowerCase();
     const skipTags = new Set(['br','hr','script','style','link','meta','noscript','svg','path','g','defs','use']);
@@ -522,7 +526,82 @@ window.AgentRuntime = window.AgentRuntime || {};
     });
   }
 
-  global.AgentRuntime.visibility = { computeVisibility, updateAllVisibility };
+  /**
+   * 解析 computed color 字符串 → {r,g,b,a}
+   * 兼容 rgb() / rgba() 两种格式
+   */
+  function parseColor(str) {
+    if (!str) return null;
+    const m = str.match(/rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)/);
+    if (!m) return null;
+    return {
+      r: Math.round(parseFloat(m[1])),
+      g: Math.round(parseFloat(m[2])),
+      b: Math.round(parseFloat(m[3])),
+      a: m[4] !== undefined ? parseFloat(m[4]) : 1
+    };
+  }
+
+  /**
+   * 向上追溯"有效纯色背景"：
+   * - 从元素自身开始，找到第一个非透明 backgroundColor
+   * - 若途中遇到 background-image（渐变/图片背景），返回 null（无法静态判定，不误伤白字+图背景的合法场景）
+   */
+  function effectiveBackgroundColor(el) {
+    let node = el;
+    while (node && node.nodeType === 1) {
+      const st = getComputedStyle(node);
+      if (st.backgroundImage && st.backgroundImage !== 'none') return null;
+      const bg = st.backgroundColor;
+      if (bg && bg !== 'transparent' && bg !== 'rgba(0, 0, 0, 0)') {
+        const c = parseColor(bg);
+        if (c && c.a > 0) return c;
+      }
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  /**
+   * 伪隐藏检测(IPI 攻防矩阵 VEC_4~VEC_8 的过滤缺口)
+   * 在 display/visibility/opacity 三种"结构性隐藏"之外,补五种"伪隐藏":
+   *   VEC_4 color:white(文字与有效背景同色)
+   *   VEC_5 移出视口(position:absolute/fixed 且完全脱离视口上方/左侧)
+   *   VEC_6 font-size:0
+   *   VEC_7 text-indent 大幅负缩进
+   *   VEC_8 aria-hidden="true"(含祖先链,遵循 ARIA 最近祖先覆盖语义)
+   * 返回 true 表示"用户不可见,不应进入原生网页世界"。
+   */
+  function isPseudoHidden(el, style, rect) {
+    if (!el || !el.closest || !style || !rect) return false;
+
+    // VEC_8: aria-hidden="true"(自身或最近带 aria-hidden 的祖先)
+    const ah = el.closest('[aria-hidden]');
+    if (ah && (ah.getAttribute('aria-hidden') || '').trim().toLowerCase() === 'true') return true;
+
+    // VEC_6: font-size:0 文字零号不可见
+    if (parseFloat(style.fontSize) === 0) return true;
+
+    // VEC_7: text-indent 大幅负缩进(文本被移出元素可视范围,经典 image-replacement 隐藏)
+    if (parseFloat(style.textIndent) <= -100) return true;
+
+    // VEC_5: 绝对/固定定位且完全脱离视口上方/左侧(不占文档流,滚动也不可达)
+    // 只查负方向:向下/向右的大偏移可能是正常页尾/横向内容,避免误伤
+    const pos = style.position;
+    if ((pos === 'absolute' || pos === 'fixed') && (rect.right < -50 || rect.bottom < -50)) return true;
+
+    // VEC_4: 文字与有效背景同色(或文字全透明)
+    // 性能:仅元素含文本才做颜色比对(无文本元素不泄露文本,跳过祖先链 getComputedStyle 遍历)
+    const color = parseColor(style.color);
+    if (color && color.a === 0) return true; // 全透明文字
+    if (color && color.a >= 0.99 && (el.textContent || '').trim().length > 0) {
+      const bg = effectiveBackgroundColor(el);
+      if (bg && bg.a >= 0.99 && bg.r === color.r && bg.g === color.g && bg.b === color.b) return true;
+    }
+    return false;
+  }
+
+  global.AgentRuntime.visibility = { computeVisibility, updateAllVisibility, isPseudoHidden };
 })(window);
 
 // ===== engine/query.js =====
@@ -869,7 +948,7 @@ window.AgentRuntime = window.AgentRuntime || {};
         if (m.type === 'childList') return true;
         if (m.type === 'attributes') {
           const attr = m.attributeName;
-          return ['style', 'class', 'id', 'role', 'aria-label', 'hidden', 'disabled'].includes(attr);
+          return ['style', 'class', 'id', 'role', 'aria-label', 'aria-hidden', 'hidden', 'disabled'].includes(attr);
         }
         return false;
       });
@@ -880,7 +959,7 @@ window.AgentRuntime = window.AgentRuntime || {};
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['style', 'class', 'id', 'role', 'aria-label', 'hidden', 'disabled']
+      attributeFilter: ['style', 'class', 'id', 'role', 'aria-label', 'aria-hidden', 'hidden', 'disabled']
     });
 
     // 监听滚动（更新可见性）
@@ -961,6 +1040,7 @@ window.AgentRuntime = window.AgentRuntime || {};
         const rect = node.getBoundingClientRect();
         const st = getComputedStyle(node);
         if (rect.width < 3 || rect.height < 3 || st.display === 'none' || st.visibility === 'hidden' || st.opacity === '0') continue;
+        if (global.AgentRuntime.visibility.isPseudoHidden(node, st, rect)) continue;
         const el = byNode.get(node);
         dialogs.push({
           id: el ? el.id : 'dom:' + node.tagName.toLowerCase(),
@@ -1115,11 +1195,27 @@ window.AgentRuntime = window.AgentRuntime || {};
         
         // 处理属性变化
         if (m.type === 'attributes' && m.target.nodeType === Node.ELEMENT_NODE) {
-          const el = global.AgentRuntime.scanner.scanElement(m.target);
-          if (el) {
-            this.world.elements.set(el.id, el);
-            changedIds.add(el.id);
-            updatedIds.add(el.id);
+          // 重新评估 target 及其所有后代:祖先 aria-hidden/隐藏样式变化会影响整棵子树,
+          // 不遍历的话"先注册子元素、后给父容器加隐藏"的动态时序会泄露(IPI 防御闭环)
+          const nodes = [m.target];
+          if (m.target.querySelectorAll) {
+            nodes.push(...m.target.querySelectorAll('*'));
+          }
+          for (const n of nodes) {
+            const prevId = global.AgentRuntime.scanner.getStableId(n);
+            const wasRegistered = this.world.elements.has(prevId);
+            const el = global.AgentRuntime.scanner.scanElement(n);
+            if (el) {
+              this.world.elements.set(el.id, el);
+              changedIds.add(el.id);
+              updatedIds.add(el.id);
+            } else if (wasRegistered) {
+              // 元素被隐藏/变装饰(如动态加 aria-hidden/style/class),从世界移除
+              // 避免"先注册后伪隐藏"的动态时序泄露(IPI 防御闭环)
+              this.world.elements.delete(prevId);
+              changedIds.add(prevId);
+              removedIds.add(prevId);
+            }
           }
         }
         

@@ -52,7 +52,7 @@ window.AgentRuntime = window.AgentRuntime || {};
         if (m.type === 'childList') return true;
         if (m.type === 'attributes') {
           const attr = m.attributeName;
-          return ['style', 'class', 'id', 'role', 'aria-label', 'hidden', 'disabled'].includes(attr);
+          return ['style', 'class', 'id', 'role', 'aria-label', 'aria-hidden', 'hidden', 'disabled'].includes(attr);
         }
         return false;
       });
@@ -63,7 +63,7 @@ window.AgentRuntime = window.AgentRuntime || {};
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['style', 'class', 'id', 'role', 'aria-label', 'hidden', 'disabled']
+      attributeFilter: ['style', 'class', 'id', 'role', 'aria-label', 'aria-hidden', 'hidden', 'disabled']
     });
 
     // 监听滚动（更新可见性）
