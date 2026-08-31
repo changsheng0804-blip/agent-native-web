@@ -322,6 +322,16 @@ def _t_world_open(args):
             headless=not headful,
             viewport={"width": 1440, "height": 900},
         )
+        # 恢复上次导出的会话状态(含 session cookie,跨世界保留登录态)
+        state_file = profile_dir / "storage_state.json"
+        if state_file.exists():
+            try:
+                state = json.loads(state_file.read_text(encoding="utf-8"))
+                if state.get("cookies"):
+                    context.clear_cookies()
+                    context.add_cookies(state["cookies"])
+            except Exception as e:
+                print(f"[world] storage state 恢复失败: {e}")
         handle = context
         page = context.pages[0] if context.pages else context.new_page()
     else:
@@ -339,7 +349,7 @@ def _t_world_open(args):
         raise ValueError(f"世界注入失败(页面可能拦截了脚本): {url}")
     wid = _next_world_id
     _next_world_id += 1
-    _worlds[wid] = {"handle": handle, "context": context, "page": page, "url": url, "opened_at": time.time()}
+    _worlds[wid] = {"handle": handle, "context": context, "page": page, "url": url, "opened_at": time.time(), "profile": profile}
     summary = _evaluate(wid, "agentWorld.query.getPageSummary()")
     return _ok({"world_id": wid, "url": url, "ready": True, "headful": headful, "profile": profile, "summary": summary})
 
@@ -601,6 +611,14 @@ def _t_world_close(args):
     wid = args["world_id"]
     w = _worlds.pop(int(wid), None)
     if w:
+        try:
+            # 导出会话状态(session cookie 也保留),供同 profile 重开时恢复登录态
+            if w.get("profile") and w.get("context"):
+                state_file = PROFILES_DIR / str(w["profile"]) / "storage_state.json"
+                state = w["context"].storage_state()
+                state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
+        except Exception as e:
+            print(f"[world] storage state 保存失败: {e}")
         try:
             w["handle"].close()
         except Exception:

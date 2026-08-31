@@ -36,6 +36,10 @@
 - **`profile: "名称"`**:使用持久化登录态(独立浏览器 profile 目录 `profiles/<名称>/`)。同一名称复用 cookie/会话——登录一次,长期有效。适合 OAuth、需要账号的任务。
 - **`headful: true`**:弹出可见浏览器窗口。配合 profile 使用:agent 打开页面 → 你在弹出的窗口里完成登录/验证码 → agent 的世界模型自动同步,继续操作。
 
+**会话保存机制(双保险)**:
+1. Chromium profile 目录持久化(持久 cookie)
+2. `world_close` 时自动导出完整会话状态到 `profiles/<名称>/storage_state.json`(**含 session cookie**),重开同 profile 时自动恢复——解决"扫码/快速登录只种 session cookie、关闭浏览器即失效"的问题
+
 典型登录流程:
 
 ```
@@ -43,10 +47,11 @@ world_open(url, profile="login-淘宝", headful=true)   # 弹窗
   → agent 检测到登录页,提示你完成登录
   → 你在窗口里登录
   → agent 世界模型同步到登录后状态,继续任务
-  → 以后同 profile 打开,免登录
+  → world_close 自动导出会话
+  → 以后同 profile 打开,免登录(无需再弹窗)
 ```
 
-注意:登录/验证码场景**必须弹窗**(headful),否则无人能替你完成人工环节。
+注意:登录/验证码场景**必须弹窗**(headful),否则无人能替你完成人工环节。部分网站(如闲鱼)会检测 headless 指纹并拒绝访问("非法访问"提示),headful 模式可规避。
 
 ## 行动层策略(locator 优先,双重降级)
 
