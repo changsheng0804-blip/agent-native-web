@@ -59,11 +59,33 @@ window.AgentRuntime = window.AgentRuntime || {};
   }
 
   /**
+   * 判定页面 id 是否"语义 id"(人为命名的稳定标识)而非"随机 id"(框架生成的易变标识)。
+   * 语义 id:username / search-box / twotabsearchtextbox / main__header —— 页面刻意命名,跨会话稳定,是"金钥匙"
+   * 随机 id:vfppkd(全辅音无分隔)/ __react-xxx(框架产物) / 纯数字 —— 每次渲染/会话可能变,进指纹反而害了稳定性
+   * 判定规则(启发式):
+   *   - 有 - _ . 分隔符 → 人为命名(kebab/snake/dot),语义
+   *   - 单字且含元音 → 像英文词(username/search),语义
+   *   - 纯数字 / 全辅音无元音 / __ 开头 / 超长 → 随机
+   */
+  function isSemanticId(id) {
+    if (!id || typeof id !== 'string') return false;
+    const s = id.trim();
+    if (!s) return false;
+    if (s.length < 2 || s.length > 48) return false;
+    if (/^[0-9]+$/.test(s)) return false;          // 纯数字
+    if (s.startsWith('__')) return false;          // 框架产物(__react__ 等)
+    if (/[-_.]/.test(s)) return true;               // 有分隔符 = 人为命名
+    return /[aeiouy]/i.test(s) && /^[a-zA-Z][a-zA-Z0-9]*$/.test(s);  // 单字含元音=英文词
+  }
+
+  /**
    * 计算稳定指纹(跨会话可重算的"第二 ID"——CAD 图纸上元素的身份编号)。
    * 用途:同一站点多次进出(world_open)时,不用重新认路——按指纹即可找到上次用过的元素。
    * 设计:
    *   - 只取"结构性稳定特征":semantic + tag + 稳定属性(id/aria-label/title/placeholder/alt/href) + 祖先 tag 路径
-   *   - 排除易变内容:正文文本(textContent)、class、坐标、可见性——这些会随会话/滚动/动态内容变化
+   *   - id 只取"语义 id"(isSemanticId 判定):username/search-box 这类页面刻意命名稳定可用,
+   *     随机 id(vfppkd/__react-xxx)每次渲染都变,进了指纹反而认不出
+   *   - 排除易变内容:正文文本(textContent)、class、坐标、可见性
    *   - 语义:按钮搜索框 = "button|input|aria-label=搜索",指纹稳定可重算
    */
   function computeFingerprint(el, tag, semantic) {
@@ -71,18 +93,21 @@ window.AgentRuntime = window.AgentRuntime || {};
     if (tag === 'body') return 'root.body';
     const parts = [semantic, tag];
     // 稳定属性(与 generateName 同源,页面未改版则跨会话稳定)
+    // id 仅语义 id 入指纹:随机 id 每次渲染会变,会污染指纹的跨会话稳定性
     const stableAttrs = [
-      ['id', el.id], ['aria-label', el.getAttribute('aria-label')],
+      ['id', isSemanticId(el.id) ? el.id : ''],
+      ['aria-label', el.getAttribute('aria-label')],
       ['title', el.getAttribute('title')], ['placeholder', el.getAttribute('placeholder')],
       ['alt', el.getAttribute('alt')], ['href', el.getAttribute('href')],
     ];
     for (const [k, v] of stableAttrs) {
       if (v && String(v).trim()) parts.push(`${k}=${String(v).trim().slice(0, 60)}`);
     }
-    // 祖先 tag 路径(最多 3 层,区分同语义同标签的不同实例,如两个 button)
+    // 祖先 tag 路径(最多 5 层,区分同语义同标签的不同实例,如列表里多个 button;
+    // 加深到 5 层减少"同结构卡片"撞车——真站实测 BBC/GF 同类结构多,3 层不够)
     const path = [];
     let cur = el.parentElement;
-    for (let i = 0; i < 3 && cur && cur.tagName; i++) {
+    for (let i = 0; i < 5 && cur && cur.tagName; i++) {
       const t = cur.tagName.toLowerCase();
       if (t === 'body' || t === 'html') break;
       path.unshift(t);
@@ -218,5 +243,5 @@ window.AgentRuntime = window.AgentRuntime || {};
     return elements;
   }
 
-  global.AgentRuntime.scanner = { scanElement, scanAll, getStableId, generateName, computeFingerprint, GRID_SIZE };
+  global.AgentRuntime.scanner = { scanElement, scanAll, getStableId, generateName, computeFingerprint, isSemanticId, GRID_SIZE };
 })(window);
