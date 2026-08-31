@@ -701,41 +701,29 @@ _ROLE_LABEL = {
 
 
 def _change_digest(events):
-    """把一批变更事件归纳成人话摘要。
-    返回 {summary, counts, highlights}——智能体读 summary 就能知道"发生了什么"。
+    """把一批变更事件归纳成结构化语义摘要(CAD 图纸风格)。
+    返回 {counts, key}——不写人话句子,只用强 ID 引用:
+      counts: 数量骨架(新增/移除/更新/可见性)
+      key:    高价值强 ID 引用列表(操作结果的直接证据),每条 {type,id,semantic,name}
+              agent 拿到 id(如 el_595)可用 world_entity 查详图(位置/属性/邻居/区域),
+              如 CAD 图纸上的 004# 圆孔——编号即一切属性的入口,无需猜。
+    强信号口径:_DIGEST_HIGH_ROLES(弹窗/菜单/选项/组合框/输入框等几乎必是操作结果的角色),
+    外壳(button/link/navigation)降权避免重型 SPA 重渲染"假新增"刷屏。
     """
     counts = {"add": 0, "remove": 0, "update": 0, "visibility": 0}
-    highlights = []  # high 优先级事件(通常是操作结果的直接证据)
+    key = []  # 高价值强 ID 引用(操作结果的直接证据)
     for evt in events:
         etype = evt.get("type")
         if etype in counts:
             counts[etype] += 1
         if _event_importance(evt) == "high" and etype in ("add", "remove"):
-            highlights.append({
+            key.append({
                 "type": etype,
                 "id": evt.get("id"),
-                "name": evt.get("name"),
                 "semantic": evt.get("semantic"),
+                "name": evt.get("name"),
             })
-    # summary 人话
-    parts = []
-    if counts["add"]:
-        parts.append(f"新增 {counts['add']} 个构件")
-    if counts["remove"]:
-        parts.append(f"移除 {counts['remove']} 个构件")
-    if counts["update"]:
-        parts.append(f"更新 {counts['update']} 个构件")
-    if counts["visibility"]:
-        parts.append(f"可见性变化 {counts['visibility']} 次")
-    summary = "、".join(parts) if parts else "无变化"
-    # 高价值构件一句话(前 6 个)
-    if highlights:
-        names = []
-        for h in highlights[:6]:
-            label = _ROLE_LABEL.get(h.get("semantic"), h.get("semantic") or "构件")
-            names.append(f"{label} {h.get('name') or h.get('id')}")
-        summary += f"; 关键: {'、'.join(names)}"
-    return {"summary": summary, "counts": counts, "highlights": highlights[:6]}
+    return {"counts": counts, "key": key[:10]}
 
 
 def _t_world_changes(args):

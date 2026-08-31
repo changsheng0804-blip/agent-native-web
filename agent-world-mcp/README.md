@@ -138,7 +138,17 @@ world_open(url, cdp_url="http://localhost:9222")
 
 传统浏览器操作靠"被动等":提交后只能轮询或延时截图猜结果。原生网页世界基于 runtime 实时性,把"操作→结果"的因果直接暴露给 agent:
 
-1. **`world_changes` 变更可读化**:内核变更事件补 `semantic` 字段(remove 事件也在删除前捕获 name/semantic);server 层对每条事件打 `importance` 分级(high/medium/low,依据事件类型 × 语义角色),并生成 `digest` 人话摘要(`{summary, counts, highlights}`)——agent 读一眼就知道"新增 43 个构件、关键: 弹窗 dialog.number-of-passengers",不必翻原始事件流。
+1. **`world_changes` 变更可读化(CAD 图纸风格结构化语义摘要)**:内核变更事件补 `semantic` 字段(remove 事件也在删除前捕获 name/semantic);server 层对每条事件打 `importance` 分级(high/medium/low,依据事件类型 × 语义角色),并生成**结构化 digest** `{counts, key}`——**不写人话句子**:
+   ```json
+   "digest": {
+     "counts": {"add": 108, "remove": 851, "update": 949},
+     "key": [
+       {"type":"add", "id":"el_595", "semantic":"dialog", "name":"dialog.number-of-passengers"},
+       {"type":"add", "id":"el_201", "semantic":"option", "name":"option.adult-1"}
+     ]
+   }
+   ```
+   `key` 是高价值**强 ID 引用**(操作结果的直接证据,仅 add/remove 且强信号语义)。**CAD 图纸原则**:agent 拿到 `el_595` 即可 `world_entity("el_595")` 查详图(位置/属性/邻居/区域)——编号即一切属性的入口,如图纸上"004# 圆孔",无需猜。
 2. **`world_click` 返回 `effect` 生效报告**(点击验证闭环):点击前冻结目标空间区域(目标 bounds ±200px)→ 点击后轮询区域 diff(有变化即停,最多 2.5s)→ 生成:
    ```json
    "effect": {

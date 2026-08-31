@@ -399,24 +399,26 @@ _CHROME_ROLES = {"button", "link", "navigation", "tab", "banner", "contentinfo",
 def _digest_assess(events, digest):
     """评估 digest/importance 价值:返回指标字典。
     - events_total: 变更事件总数(压缩前的量)
-    - summary_chars: digest.summary 字符数(压缩后的量)
-    - compression: events_total / summary_chars(每字压多少条)
-    - highlights: digest.highlights(高重要 add/remove)
-    - signal_hits: highlights 中强信号语义数(操作结果直接证据)
-    - chrome_hits: highlights 中弱信号/外壳语义数(重渲染噪声)
+    - key_count: digest.key 数量(强 ID 引用数,即给 agent 的关键线索数)
+    - json_len: digest 序列化体积(压缩后的量,不再用 summary 字符——已改结构化 key)
+    - compression: events_total / json_len(每字节压多少条事件)
+    - key: 强 ID 引用列表
+    - signal_hits: key 中强信号语义数(操作结果直接证据)
+    - chrome_hits: key 中弱信号/外壳语义数(重渲染噪声)
     """
     counts = digest.get("counts", {})
     events_total = len(events)
-    summary_chars = len(digest.get("summary", ""))
-    hl = digest.get("highlights") or []
-    signal_hits = [h for h in hl if h.get("semantic") in _SIGNAL_ROLES]
-    chrome_hits = [h for h in hl if h.get("semantic") in _CHROME_ROLES and h.get("semantic") not in _SIGNAL_ROLES]
+    key = digest.get("key") or []
+    import json as _json
+    json_len = len(_json.dumps(digest, ensure_ascii=False))
+    signal_hits = [k for k in key if k.get("semantic") in _SIGNAL_ROLES]
+    chrome_hits = [k for k in key if k.get("semantic") in _CHROME_ROLES and k.get("semantic") not in _SIGNAL_ROLES]
     return {
         "events_total": events_total,
-        "summary": digest.get("summary", ""),
-        "summary_chars": summary_chars,
-        "compression": round(events_total / max(1, summary_chars), 1),
-        "highlights": [f"{h.get('semantic')}.{h.get('name','')}" for h in hl[:6]],
+        "key_count": len(key),
+        "json_len": json_len,
+        "compression": round(events_total / max(1, json_len), 2),
+        "key": [f"{k.get('semantic')}.{k.get('name','')}@{k.get('id')}" for k in key[:6]],
         "signal_hits": len(signal_hits),
         "chrome_hits": len(chrome_hits),
         "counts": counts,
@@ -463,21 +465,35 @@ async def run_digest_cases(session):
             # 读变更流 digest
             r = await call(session, "world_changes", {"world_id": wid, "since": 0})
             m = _digest_assess(r.get("events", []), r.get("digest", {}))
+            # 管线闭环验证:key 里的强 ID 必须能用 world_entity 查详图(004# 圆孔→详图)
+            m["pipeline_ok"] = None
+            m["pipeline_first"] = None
+            key = r.get("digest", {}).get("key") or []
+            for k in key[:3]:
+                if k.get("id"):
+                    try:
+                        ent = await call(session, "world_entity", {"world_id": wid, "id": k["id"]})
+                        m["pipeline_ok"] = bool(ent and ent.get("bounds"))
+                        m["pipeline_first"] = f"{k['id']}→bounds={ent.get('bounds')} semantic={ent.get('semantic')}"
+                        break
+                    except Exception:
+                        m["pipeline_ok"] = False
             m["name"] = name
             results.append(m)
-            print(f"{name:<28s} {m['events_total']:>5d} {m['summary_chars']:>5d} {m['compression']:>5.1f} {m['signal_hits']:>4d} {m['chrome_hits']:>6d}")
-            print(f"    摘要: {m['summary'][:130]}")
-            print(f"    高亮: {m['highlights'][:5]}")
+            print(f"{name:<28s} {m['events_total']:>5d} {m['key_count']:>4d} {m['json_len']:>5d} {m['compression']:>6.2f} {m['signal_hits']:>4d} {m['chrome_hits']:>6d} 管线={m['pipeline_ok']}")
+            print(f"    key: {m['key'][:5]}")
         except Exception as e:
             print(f"[SKIP] {name}: {type(e).__name__}: {str(e)[:100]}")
         await call(session, "world_close", {"world_id": wid})
     # 汇总
     total_events = sum(r["events_total"] for r in results)
-    total_chars = sum(r["summary_chars"] for r in results)
+    total_json = sum(r["json_len"] for r in results)
     total_signal = sum(r["signal_hits"] for r in results)
     total_chrome = sum(r["chrome_hits"] for r in results)
-    print(f"\n汇总: 总事件 {total_events} → 总摘要 {total_chars} 字符, 全局压缩比 {round(total_events/max(1,total_chars),1)} 事件/字")
-    print(f"      highlights 中强信号(操作结果) {total_signal} 条 vs 外壳/弱信号(噪声) {total_chrome} 条")
+    pipeline_ok = sum(1 for r in results if r.get("pipeline_ok"))
+    print(f"\n汇总: 总事件 {total_events} → 结构化 digest {total_json} 字符, 全局压缩比 {round(total_events/max(1,total_json),2)} 事件/字符")
+    print(f"      key 中强信号(操作结果) {total_signal} 条 vs 外壳/弱信号(噪声) {total_chrome} 条")
+    print(f"      key 强 ID 可 world_entity 查详图: {pipeline_ok}/{len(results)}")
     if total_chrome > total_signal:
         print("⚠️ 外壳噪声 > 强信号:importance 对重型 SPA 的重渲染假新增降权不足(digest 价值受限)")
     else:
