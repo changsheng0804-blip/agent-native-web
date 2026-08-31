@@ -251,6 +251,18 @@ async def list_tools():
             },
         ),
         types.Tool(
+            name="world_eval",
+            description="在世界内执行 JS 表达式(调试/特殊查询用,建议只读;返回结果截断保护)。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "expression": {"type": "string", "description": "JS 表达式,如 document.title 或 (() => {...})()"},
+                },
+                "required": ["world_id", "expression"],
+            },
+        ),
+        types.Tool(
             name="world_screenshot",
             description="截图:整页或指定构件区域。保存到本地文件,返回文件路径。",
             inputSchema={
@@ -449,6 +461,8 @@ def _impl(name, args):
         return _t_world_wait(args)
     if name == "world_screenshot":
         return _t_world_screenshot(args)
+    if name == "world_eval":
+        return _t_world_eval(args)
     if name == "world_click_at":
         return _t_world_click_at(args)
     if name == "world_navigate":
@@ -798,6 +812,24 @@ def _t_world_screenshot(args):
         w["page"].screenshot(path=str(path), full_page=True)
         desc = "整页"
     return _ok({"world_id": wid, "target": desc, "path": str(path)})
+
+
+def _t_world_eval(args):
+    """世界内 JS 执行(调试/特殊查询,结果截断保护)"""
+    wid = args["world_id"]
+    expr = args["expression"]
+    w = _world(wid)
+    try:
+        result = w["page"].evaluate(expr)
+    except Exception as e:
+        raise ValueError(f"evaluate 失败: {type(e).__name__}: {str(e)[:200]}")
+    try:
+        text = json.dumps(result, ensure_ascii=False, default=str)
+    except Exception:
+        text = str(result)
+    if len(text) > 8000:
+        text = text[:8000] + f"...(截断,共 {len(text)} 字符)"
+    return _ok({"world_id": wid, "result": text})
 
 
 def _t_world_click_at(args):
