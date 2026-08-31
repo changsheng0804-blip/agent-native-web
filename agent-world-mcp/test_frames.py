@@ -1,3 +1,4 @@
+from pathlib import Path
 # -*- coding: utf-8 -*-
 """验证:frame 感知状态卡 + anomaly + world_navigate + world_click_at
 闲鱼搜索页(headful):frames 应包含登录框 iframe;headless 简化页应标 anomaly
@@ -15,7 +16,7 @@ from mcp.client.stdio import stdio_client
 async def main():
     params = StdioServerParameters(
         command=sys.executable,
-        args=[r"F:\成果库\Agent 友好插件\agent-world-mcp\server.py"],
+        args=[str(Path(__file__).parent / "server.py")],
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:

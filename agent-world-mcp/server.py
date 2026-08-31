@@ -94,15 +94,16 @@ async def list_tools():
     return [
         types.Tool(
             name="world_open",
-            description="打开一个网页并建立世界模型(注入 agent-runtime)。返回世界 ID 和页面摘要。可并行打开多个世界互不干扰。headful=true 时弹出可见窗口(人工介入点:登录/验证码/真人确认);profile=名称 时使用持久化登录态(同一名称复用)。",
+            description="打开一个网页并建立世界模型(注入 agent-runtime)。返回世界 ID 和页面摘要。可并行打开多个世界互不干扰。headful=true 时弹出可见窗口(人工介入点:登录/验证码/真人确认);profile=名称 时使用持久化登录态;cdp_url 可连接已有 Chrome 调试端口(如 http://localhost:9222)。",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "url": {"type": "string", "description": "要打开的网址"},
+                    "url": {"type": "string", "description": "要打开的网址(若使用 cdp_url 且已在目标页可留空或填目标页)"},
                     "wait_ms": {"type": "number", "description": "初始等待毫秒(动态页面建议 3000-6000)", "default": 3000},
                     "stabilize_ms": {"type": "number", "description": "等待世界稳定(状态卡 stable)的最大毫秒,渐进渲染页面自动等", "default": 10000},
                     "headful": {"type": "boolean", "description": "是否弹出可见窗口(登录/验证码/人工确认场景用)", "default": False},
                     "profile": {"type": "string", "description": "持久化登录态名称(如 login-taobao),同一名称复用 cookie/会话;留空则不持久化"},
+                    "cdp_url": {"type": "string", "description": "连接已有 Chrome 的 CDP 调试地址(如 http://localhost:9222),复用日常已登录浏览器"},
                 },
                 "required": ["url"],
             },
@@ -172,7 +173,7 @@ async def list_tools():
         ),
         types.Tool(
             name="world_click",
-            description="按编号点击元素(原生 click 事件)。",
+            description="按编号点击元素(原生 click 事件)。带遮挡检测与自动等待。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -184,15 +185,40 @@ async def list_tools():
         ),
         types.Tool(
             name="world_fill",
-            description="按编号填入文本(优先 Playwright 原生 fill:自动等待+React 兼容;失败自动降级 JS setter+覆盖层切换)。",
+            description="按编号填入文本(优先 Playwright 原生 fill/press_sequentially;支持打字间隔模拟与受控组件自动兼容)。",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "world_id": {"type": "integer"},
                     "id": {"type": "string", "description": "构件编号或名字"},
                     "text": {"type": "string", "description": "要填入的文本"},
+                    "type_delay_ms": {"type": "integer", "description": "逐字打字延迟毫秒(>0 时模拟真实键盘输入触发自动联想下拉)", "default": 0},
                 },
                 "required": ["world_id", "id", "text"],
+            },
+        ),
+        types.Tool(
+            name="world_batch_fill",
+            description="批量填入多个表单字段(单次往返完成多个输入框填写,减少 MCP 交互延迟与 Token 开销)。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "fields": {
+                        "type": "array",
+                        "description": "表单字段列表: [{ id, text }]",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string", "description": "构件编号或名字"},
+                                "text": {"type": "string", "description": "填入内容"},
+                                "type_delay_ms": {"type": "integer", "description": "逐字打字延迟毫秒", "default": 0},
+                            },
+                            "required": ["id", "text"],
+                        },
+                    },
+                },
+                "required": ["world_id", "fields"],
             },
         ),
         types.Tool(
@@ -455,6 +481,8 @@ def _impl(name, args):
         return _t_world_click(args)
     if name == "world_fill":
         return _t_world_fill(args)
+    if name == "world_batch_fill":
+        return _t_world_batch_fill(args)
     if name == "world_press":
         return _t_world_press(args)
     if name == "world_wait":
@@ -494,8 +522,22 @@ def _t_world_open(args):
     wait_ms = int(args.get("wait_ms", 3000))
     headful = bool(args.get("headful", False))
     profile = args.get("profile") or None
+    cdp_url = args.get("cdp_url") or None
     pw = _get_pw()
-    if profile:
+    if cdp_url:
+        browser = pw.chromium.connect_over_cdp(cdp_url)
+        context = browser.contexts[0] if browser.contexts else browser.new_context()
+        page = context.pages[0] if context.pages else context.new_page()
+        handle = browser
+        page.add_init_script(INJECT_JS)
+        if url and page.url != url:
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        else:
+            try:
+                page.evaluate(INJECT_JS)
+            except Exception:
+                pass
+    elif profile:
         profile_dir = PROFILES_DIR / str(profile)
         profile_dir.mkdir(parents=True, exist_ok=True)
         # 持久化上下文:cookie/会话按 profile 名复用
@@ -516,13 +558,16 @@ def _t_world_open(args):
                 print(f"[world] storage state 恢复失败: {e}")
         handle = context
         page = context.pages[0] if context.pages else context.new_page()
+        page.add_init_script(INJECT_JS)
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
     else:
         browser = pw.chromium.launch(headless=not headful)
         context = browser.new_context(viewport={"width": 1440, "height": 900})
         page = context.new_page()
         handle = browser
-    page.add_init_script(INJECT_JS)
-    page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        page.add_init_script(INJECT_JS)
+        page.goto(url, wait_until="domcontentloaded", timeout=60000)
+
     if wait_ms:
         page.wait_for_timeout(wait_ms)
     ready = _wait_world_ready(page)
@@ -531,7 +576,7 @@ def _t_world_open(args):
         raise ValueError(f"世界注入失败(页面可能拦截了脚本): {url}")
     wid = _next_world_id
     _next_world_id += 1
-    _worlds[wid] = {"handle": handle, "context": context, "page": page, "url": url, "opened_at": time.time(), "profile": profile}
+    _worlds[wid] = {"handle": handle, "context": context, "page": page, "url": page.url, "opened_at": time.time(), "profile": profile, "cdp_url": cdp_url}
     # 等待世界稳定(分层加载:渐进渲染/懒加载,固定秒数不可靠,以状态卡 stable 为准)
     stabilize_ms = int(args.get("stabilize_ms", 10000))
     deadline = time.time() + stabilize_ms / 1000
@@ -544,7 +589,7 @@ def _t_world_open(args):
             pass
         time.sleep(0.5)
     summary = _evaluate(wid, "agentWorld.query.getPageSummary()")
-    return _ok({"world_id": wid, "url": url, "ready": True, "headful": headful, "profile": profile, "summary": summary})
+    return _ok({"world_id": wid, "url": page.url, "ready": True, "headful": headful, "profile": profile, "cdp_url": cdp_url, "summary": summary})
 
 
 def _t_world_entities(args):
@@ -604,11 +649,21 @@ def _build_locator(w, ent):
         loc = page.locator(f'[id="{attrs["id"]}"]')
         if _count(loc) == 1:
             return loc
+        elif _count(loc) > 1:
+            loc_vis = page.locator(f'[id="{attrs["id"]}"]:visible')
+            if _count(loc_vis) == 1:
+                return loc_vis
+
     # 2. placeholder 属性(输入框常见)
     if attrs.get("placeholder"):
         loc = page.locator(f'[placeholder="{attrs["placeholder"]}"]')
         if _count(loc) == 1:
             return loc
+        elif _count(loc) > 1:
+            loc_vis = page.locator(f'[placeholder="{attrs["placeholder"]}"]:visible')
+            if _count(loc_vis) == 1:
+                return loc_vis
+
     # 3. ARIA role + 可访问名(Playwright 语义定位)
     pw_roles = {
         "button": "button", "link": "link", "input": "textbox",
@@ -620,6 +675,11 @@ def _build_locator(w, ent):
         loc = page.get_by_role(pw_roles[semantic], name=acc_name, exact=False)
         if _count(loc) == 1:
             return loc
+        elif _count(loc) > 1:
+            loc_vis = loc.locator("visible=true")
+            if _count(loc_vis) == 1:
+                return loc_vis
+
     # 4. 文本唯一匹配(短文本)
     if text and 1 <= len(text) <= 50:
         loc = page.get_by_text(text, exact=True)
@@ -628,6 +688,10 @@ def _build_locator(w, ent):
         loc = page.get_by_text(text, exact=False)
         if _count(loc) == 1:
             return loc
+        elif _count(loc) > 1:
+            loc_vis = loc.locator("visible=true")
+            if _count(loc_vis) == 1:
+                return loc_vis
     return None
 
 
@@ -648,13 +712,39 @@ def _t_world_click(args):
     ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target)
     if not ent:
         raise ValueError(f"构件不存在: {args['id']}")
+    
+    # 遮挡检测: 检查元素中心点是否被上层弹窗/遮罩层挡住
+    hit_info = _evaluate(
+        wid,
+        """(id) => {
+            const el = agentWorld._runtime.world.elements.get(id);
+            if (!el) return null;
+            el._el.scrollIntoView({ block: 'center', inline: 'center' });
+            const r = el._el.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) return { visible: false };
+            const cx = Math.round(r.x + r.width / 2), cy = Math.round(r.y + r.height / 2);
+            const top = document.elementFromPoint(cx, cy);
+            const obscured = (top && top !== el._el && !el._el.contains(top));
+            return {
+                visible: true,
+                obscured: Boolean(obscured),
+                topTag: top ? top.tagName.toLowerCase() : null,
+                topRole: top ? (top.getAttribute('role') || '') : null
+            };
+        }""",
+        target,
+    )
+    
     loc = _build_locator(w, ent)
     if loc:
         try:
             # Playwright locator:自动等待可见/稳定/可点击,错误信息清晰
             loc.click(timeout=10000)
             _refresh_core_status(wid)
-            return _ok({"world_id": wid, "clicked": target, "method": "locator"})
+            ret = {"world_id": wid, "clicked": target, "method": "locator"}
+            if hit_info and hit_info.get("obscured"):
+                ret["obscured_note"] = f"目标上方存在层级: <{hit_info.get('topTag')}>"
+            return _ok(ret)
         except Exception as e:
             loc_err = f"{type(e).__name__}: {str(e)[:200]}"
     else:
@@ -679,13 +769,17 @@ def _t_world_click(args):
     w["page"].mouse.down()
     w["page"].mouse.up()
     _refresh_core_status(wid)
-    return _ok({"world_id": wid, "clicked": target, "method": "mouse-gesture", "at": [cx, cy], "locator_note": loc_err})
+    ret = {"world_id": wid, "clicked": target, "method": "mouse-gesture", "at": [cx, cy], "locator_note": loc_err}
+    if hit_info and hit_info.get("obscured"):
+        ret["obscured_note"] = f"目标上方存在层级: <{hit_info.get('topTag')}>"
+    return _ok(ret)
 
 
 def _t_world_fill(args):
     wid = args["world_id"]
     target = _resolve_id(wid, args["id"])
     text = args["text"]
+    type_delay_ms = int(args.get("type_delay_ms", 0))
     w = _world(wid)
     ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target)
     if not ent:
@@ -693,10 +787,15 @@ def _t_world_fill(args):
     loc = _build_locator(w, ent)
     if loc:
         try:
-            # Playwright fill:自动等待 + React 兼容输入 + 清晰错误
-            loc.fill(text, timeout=10000)
-            _refresh_core_status(wid)
-            return _ok({"world_id": wid, "filled": target, "text": text, "method": "locator-fill"})
+            # Playwright fill / 逐字打字:自动等待 + React 兼容输入 + 清晰错误
+            if type_delay_ms > 0:
+                loc.press_sequentially(text, delay=type_delay_ms, timeout=10000)
+                _refresh_core_status(wid)
+                return _ok({"world_id": wid, "filled": target, "text": text, "method": "locator-sequential-type"})
+            else:
+                loc.fill(text, timeout=10000)
+                _refresh_core_status(wid)
+                return _ok({"world_id": wid, "filled": target, "text": text, "method": "locator-fill"})
         except Exception as e:
             fill_err = f"{type(e).__name__}: {str(e)[:200]}"
     else:
@@ -740,6 +839,31 @@ def _t_world_fill(args):
     return _ok({"world_id": wid, "filled": target, "text": text, "target_tag": r.get("tag"), "method": "js-setter", "locator_note": fill_err})
 
 
+def _t_world_batch_fill(args):
+    """批量填入表单字段:单次 MCP 调用完成多个输入框填写"""
+    wid = args["world_id"]
+    fields = args.get("fields") or []
+    if not fields:
+        raise ValueError("fields 列表不能为空")
+    results = []
+    for f in fields:
+        sub_args = {
+            "world_id": wid,
+            "id": f["id"],
+            "text": f["text"],
+            "type_delay_ms": int(f.get("type_delay_ms", 0)),
+        }
+        res = _t_world_fill(sub_args)
+        if res and res[0].type == "text":
+            try:
+                data = json.loads(res[0].text)
+                results.append({"id": f["id"], "target": data.get("filled"), "method": data.get("method"), "ok": True})
+            except Exception:
+                results.append({"id": f["id"], "raw": res[0].text, "ok": True})
+    _refresh_core_status(wid)
+    return _ok({"world_id": wid, "batch_count": len(results), "results": results})
+
+
 def _t_world_press(args):
     """按编号聚焦并按按键(如 Enter/Escape/Tab)"""
     wid = args["world_id"]
@@ -756,13 +880,17 @@ def _t_world_press(args):
             return _ok({"world_id": wid, "pressed": target, "key": key, "method": "locator-press"})
         except Exception as e:
             raise ValueError(f"按键失败: {type(e).__name__}: {str(e)[:200]}")
-    # 兜底:JS focus + dispatch keydown/keyup
+    # 兜底:JS focus + dispatch keydown/keyup + 原生键盘事件
     ok = _evaluate(
         wid,
         """(args) => {
             const el = agentWorld._runtime.world.elements.get(args.id);
             if (!el) return false;
-            const node = el._el.querySelector('input, textarea') || el._el;
+            let node = el._el;
+            if (node.tagName !== 'INPUT' && node.tagName !== 'TEXTAREA') {
+                const child = node.querySelector('input, textarea, [contenteditable="true"]');
+                if (child) node = child;
+            }
             node.focus();
             for (const t of ['keydown', 'keyup']) {
                 node.dispatchEvent(new KeyboardEvent(t, { key: args.key, bubbles: true }));
@@ -773,7 +901,12 @@ def _t_world_press(args):
     )
     if not ok:
         raise ValueError(f"构件不存在: {args['id']}")
-    return _ok({"world_id": wid, "pressed": target, "key": key, "method": "js-keydown"})
+    try:
+        w["page"].keyboard.press(key)
+    except Exception:
+        pass
+    _refresh_core_status(wid)
+    return _ok({"world_id": wid, "pressed": target, "key": key, "method": "native-keyboard"})
 
 
 def _t_world_wait(args):

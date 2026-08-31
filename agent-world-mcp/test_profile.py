@@ -1,3 +1,4 @@
+from pathlib import Path
 # -*- coding: utf-8 -*-
 """验证 headful + profile:
 1. profile 持久化:设置 cookie -> 关世界 -> 重开同 profile -> cookie 还在
@@ -18,7 +19,7 @@ LOCAL = "http://127.0.0.1:8001/dyn.html"
 async def main():
     params = StdioServerParameters(
         command=sys.executable,
-        args=[r"F:\成果库\Agent 友好插件\agent-world-mcp\server.py"],
+        args=[str(Path(__file__).parent / "server.py")],
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:

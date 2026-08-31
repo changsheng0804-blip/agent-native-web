@@ -18,13 +18,15 @@
 
 | 工具 | 作用 | 心智类比 |
 |---|---|---|
-| `world_open(url, headful?, profile?)` | 打开网页,返回世界 ID + 摘要(可开窗/持久化登录态) | 摊开图纸 |
+| `world_open(url, headful?, profile?, cdp_url?)` | 打开网页建立世界模型(支持弹窗/持久化登录态/CDP日常浏览器挂载) | 摊开图纸 |
 | `world_entities({role, text, name, ...})` | 过滤查构件清单 | 构件表(BOM) |
 | `world_entity(id)` | 单构件详情(坐标/邻居/区域) | 构件详图 |
 | `world_layers()` | 结构/语义/空间/交互统计 | 图纸图层 |
 | `world_resolve("combobox.round-trip")` | 名字 → 稳定编号 | 查门牌号 |
 | `world_changes(since)` | 增量变更流,游标续读 | 视频帧续读 |
-| `world_click(id)` / `world_fill(id, text)` / `world_press(id, key)` | 编号驱动操作 | 按编号施工 |
+| `world_click(id)` / `world_press(id, key)` | 编号驱动点击与键盘按键(带遮挡检测与自动等待) | 按编号施工 |
+| `world_fill(id, text, type_delay_ms?)` | 编号填表(支持打字间隔模拟触发联想推荐) | 填入内容 |
+| `world_batch_fill(fields)` | 批量填入多个字段(单次交互完成多项表单录入) | 批量填写 |
 | `world_wait(appear/disappear, ...)` | 等待构件状态 | 检查施工结果 |
 | `world_screenshot(id?)` | 整页/局部截图 | 拍照存档 |
 | `world_list` / `world_close` | 管理世界 | 图纸归档 |
@@ -159,10 +161,12 @@ agent-world-mcp/
 ## 测试脚本
 
 ```bash
-python test_official.py   # 官方客户端全链路:握手/工具列表/world_open
-python test_click.py      # 点击乘客按钮 -> 面板弹出 -> Adults 元素出现
-python test_fill.py       # 填出发地 Tokyo -> 建议列表(option.tokyo-japan)出现
-python test_action_layer.py  # 行动层:locator 优先策略 + world_press
-python test_value.py      # value 入图:fill 后世界模型可见输入框值
-python test_profile.py    # headful + profile:登录态持久化验证
+python test_official.py       # 官方客户端全链路:握手/工具列表/world_open
+python test_status.py         # 状态卡仪表盘:auth/dialogs/forms/anomaly
+python test_enhancements.py   # 进阶增强:逐字打字模拟/批量填表/遮挡诊断
+python test_click.py          # 点击乘客按钮 -> 面板弹出 -> Adults 元素出现
+python test_fill.py           # 填出发地 Tokyo -> 建议列表(option.tokyo-japan)出现
+python test_action_layer.py   # 行动层:locator 优先策略 + world_press
+python test_value.py          # value 入图:fill 后世界模型可见输入框值
+python test_profile.py        # headful + profile:登录态持久化验证
 ```

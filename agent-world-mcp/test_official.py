@@ -1,3 +1,4 @@
+from pathlib import Path
 # -*- coding: utf-8 -*-
 """官方 MCP 客户端测 server:initialize + tools/list + world_open"""
 import asyncio
@@ -13,7 +14,7 @@ from mcp.client.stdio import stdio_client
 async def main():
     params = StdioServerParameters(
         command=sys.executable,
-        args=[r"F:\成果库\Agent 友好插件\agent-world-mcp\server.py"],
+        args=[str(Path(__file__).parent / "server.py")],
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
