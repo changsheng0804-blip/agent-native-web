@@ -93,6 +93,33 @@ world_open(url, profile="login-淘宝", headful=true)   # 弹窗
 
 注意:登录/验证码场景**必须弹窗**(headful),否则无人能替你完成人工环节。部分网站(如闲鱼)会检测 headless 指纹并拒绝访问("非法访问"提示),headful 模式可规避。
 
+## CDP 挂载(实验性,⚠️ 安全须知)
+
+`world_open(cdp_url="http://localhost:9222")` 可连接一个**已启动调试端口**的 Chrome(复用其已登录会话/已打开页面)。**注意:只支持连接独立 profile 启动的 Chrome;连接日常使用的浏览器场景已降级为暂不推荐(见下),安全设计另行立项。**
+
+```
+# 先手动启动带调试端口的 Chrome(必须用独立 profile,不要用日常 profile):
+chrome.exe --remote-debugging-port=9222 --user-data-dir=/tmp/cdp-profile --no-first-run
+
+# 再让 agent 挂载:
+world_open(url, cdp_url="http://localhost:9222")
+```
+
+**行为约定(安全边界)**:
+- `world_close` 对 CDP 连接**只断开、不关闭浏览器进程**——你手动启动的 Chrome 不会被误关
+- CDP 世界**不导出** `storage_state`(会话属于你的浏览器,不落盘)
+- 注入失败时同样只断开,不触碰浏览器
+- **CDP 会话下 `world_eval` 已禁用**——IPI 攻防实测确认任意 JS 可绕过 visibility 过滤层直接读整页文本/凭据,故 CDP 场景强制走结构化查询(`world_entities`/`world_entity`)
+
+**⚠️ 安全须知(实验特性,默认不推荐)**:
+- **CDP 调试端口无鉴权**——只要端口开着,本机任何进程/恶意网页都能连上并取得**完整浏览器控制权**(cookie/凭据/下载/任意页面)。用完务必关闭端口。
+- **必须绑定 localhost**——禁止 `--remote-debugging-address=0.0.0.0`(会暴露到局域网)。
+- **必须用独立 profile**(`--user-data-dir` 指向新目录),**绝不连你日常使用的浏览器 profile**。
+- 连接期间,世界模型脚本运行在该 Chrome 的会话里,可读写当前页面——只对可信站点/可信任务使用。
+- 安全性验证:`python test_cdp.py`(启动临时独立 Chrome → 挂载 → 操作 → 关闭后断言浏览器进程仍存活)。
+
+**🚫 暂不推荐:连接日常使用的浏览器**。复用日常登录态的完整安全设计(CDP 端口鉴权、域白名单、操作审计、用户显式授权确认)体量已超出本仓库范围,作为独立方向评估。
+
 ## 行动层策略(locator 优先,双重降级)
 
 操作类工具(world_click/fill/press)采用三层策略,兼顾"原生能力"与"原生网页世界兜底":
@@ -157,6 +184,7 @@ agent-world-mcp/
 ├── test_fill.py       # 填出发地 Tokyo -> 建议列表出现
 ├── test_action_layer.py  # 行动层:locator 优先 + 覆盖层验证 + world_press
 ├── test_enhancements.py  # 进阶增强:逐字打字/批量填表/遮挡诊断(本地夹具)
+├── test_cdp.py       # CDP 挂载安全测试:独立 Chrome + 关闭后浏览器进程存活断言
 ├── test_value.py      # value 入图:fill 后原生网页世界可见输入框值
 ├── test_profile.py    # headful + profile:登录态持久化验证
 ├── test_compare.py    # profile vs 普通 launch 的原生网页世界对比
@@ -213,6 +241,7 @@ python test_click.py          # 点击乘客按钮 -> 面板弹出 -> Adults 元
 python test_fill.py           # 填出发地 Tokyo -> 建议列表(option.tokyo-japan)出现
 python test_action_layer.py   # 行动层:locator 优先 + 覆盖层验证降级 + world_press
 python test_enhancements.py   # 进阶增强:逐字打字/批量填表(容错)/遮挡诊断(本地夹具,不依赖外网)
+python test_cdp.py            # CDP 挂载安全:独立临时 Chrome + 关闭后浏览器存活断言(安全回归)
 python test_value.py          # value 入图:fill 后原生网页世界可见输入框值
 python test_profile.py        # headful + profile:登录态持久化验证
 python test_compare.py        # profile vs 普通 launch:原生网页世界对比

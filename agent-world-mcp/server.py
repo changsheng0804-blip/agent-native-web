@@ -1008,6 +1008,11 @@ def _t_world_eval(args):
     wid = args["world_id"]
     expr = args["expression"]
     w = _world(wid)
+    # CDP 会话安全闸门:world_eval 是任意 JS,可绕过 visibility 过滤层直接读整页文本,
+    # 在 CDP 连接的用户浏览器会话中可能触达登录态/凭据。IPI 攻防实测确认该后门存在,
+    # 故 CDP 会话下禁用 world_eval,强制走结构化查询(world_entities/world_entity)。
+    if w.get("cdp_url"):
+        raise ValueError("world_eval 在 CDP 会话中已禁用(安全边界:任意 JS 可绕过过滤层触达登录会话/隐藏内容);请改用 world_entities/world_entity 结构化查询")
     try:
         result = w["page"].evaluate(expr)
     except Exception as e:

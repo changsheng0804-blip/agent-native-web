@@ -63,4 +63,4 @@ description: Comprehensive Web Navigation, Scraping, Form Filling, and Multi-ste
 2. **多字段表单录入**:优先使用 `world_batch_fill` 一次性提交多个字段,减少通信往返(逐字段容错,失败会记录在 results)。
 3. **按键选择与提交**:使用 `world_press(id, "Enter")` 或 `world_press(id, "ArrowDown")` 操作建议项。
 4. **遮挡与层级提示**:若操作返回包含 `obscured_note`,说明目标上方有蒙层或对话框,优先处理上层元素。
-5. **CDP 日常浏览器挂载**:`world_open(cdp_url="http://localhost:9222")` 可连接已启动调试端口的 Chrome,复用日常登录态;`world_close` 只断开连接、不关闭用户浏览器。
+5. **CDP 挂载(实验性,独立 profile)**:`world_open(cdp_url="http://localhost:9222")` 可连接已启动调试端口的 Chrome,复用其会话;`world_close` 只断开连接、不关闭浏览器。**安全边界:必须用独立 profile 启动(`--user-data-dir` 指向新目录),暂不连接日常使用的浏览器;CDP 会话下 `world_eval` 已禁用,请走结构化查询。**
