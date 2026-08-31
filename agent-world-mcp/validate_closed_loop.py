@@ -193,6 +193,29 @@ CASES = [
         "expect": "effected",
         "note": "SO 填搜索框 → 值进入(联想下拉出现为加分信号)",
     },
+    {
+        "name": "amazon-search(填搜索框)",
+        "url": "https://www.amazon.com/",
+        "open_wait_ms": 4000,
+        "find": {"role": "searchbox"},
+        "action": "fill",
+        "action_text": "mechanical keyboard",
+        "truth_mode": "input_value",
+        "truth_text": "mechanical keyboard",
+        "expect": "effected",
+        "note": "亚马逊重型电商填搜索框 → 值进入(重渲染下 digest 表现)",
+    },
+    {
+        "name": "bbc-headline(点头条链接→URL)",
+        "url": "https://www.bbc.com/",
+        "open_wait_ms": 4000,
+        "find": {"role": "link"},
+        "action": "click",
+        "action_text": None,
+        "truth_mode": "url_change",
+        "expect": "effected",
+        "note": "BBC 重型新闻页点头条 → URL 变化(多 iframe 下 digest 表现)",
+    },
 ]
 
 # 持续变更 + waitFor 专项(独立段,不计入矩阵)
@@ -366,8 +389,105 @@ async def run_waitfor_cases(session):
         await call(session, "world_close", {"world_id": wid})
 
 
+# ── digest/importance 价值评估(语义摘要 + 重要性加权)────────────
+# 强信号语义:出现/消失几乎必是操作结果(弹窗/菜单/选项)
+_SIGNAL_ROLES = {"dialog", "alertdialog", "menu", "option", "listbox", "combobox"}
+# 弱信号语义:常被重型 SPA 整体重渲染"假新增"刷屏(页面外壳)
+_CHROME_ROLES = {"button", "link", "navigation", "tab", "banner", "contentinfo", "content", "img", "nav"}
+
+
+def _digest_assess(events, digest):
+    """评估 digest/importance 价值:返回指标字典。
+    - events_total: 变更事件总数(压缩前的量)
+    - summary_chars: digest.summary 字符数(压缩后的量)
+    - compression: events_total / summary_chars(每字压多少条)
+    - highlights: digest.highlights(高重要 add/remove)
+    - signal_hits: highlights 中强信号语义数(操作结果直接证据)
+    - chrome_hits: highlights 中弱信号/外壳语义数(重渲染噪声)
+    """
+    counts = digest.get("counts", {})
+    events_total = len(events)
+    summary_chars = len(digest.get("summary", ""))
+    hl = digest.get("highlights") or []
+    signal_hits = [h for h in hl if h.get("semantic") in _SIGNAL_ROLES]
+    chrome_hits = [h for h in hl if h.get("semantic") in _CHROME_ROLES and h.get("semantic") not in _SIGNAL_ROLES]
+    return {
+        "events_total": events_total,
+        "summary": digest.get("summary", ""),
+        "summary_chars": summary_chars,
+        "compression": round(events_total / max(1, summary_chars), 1),
+        "highlights": [f"{h.get('semantic')}.{h.get('name','')}" for h in hl[:6]],
+        "signal_hits": len(signal_hits),
+        "chrome_hits": len(chrome_hits),
+        "counts": counts,
+    }
+
+
+async def run_digest_cases(session):
+    """多真站 digest 体检:每个场景执行动作后,读变更流 digest 评估价值"""
+    print("\n=== digest/importance 价值评估(语义摘要+重要性加权) ===")
+    print(f"{'场景':<28s} 事件数 摘要字符 压缩比 强信号 外壳噪声")
+    results = []
+    for case in CASES:
+        if not case["url"].startswith("http"):
+            continue  # digest 价值评估只看真站
+        name = case["name"]
+        try:
+            r = await call(session, "world_open", {"url": case["url"], "wait_ms": case["open_wait_ms"]})
+            wid = r["world_id"]
+        except Exception as e:
+            print(f"[SKIP] {name}: {type(e).__name__}: {str(e)[:100]}")
+            continue
+        try:
+            # 前置步骤(如先点开弹窗)
+            setup = case.get("setup")
+            if setup:
+                sid, _ = await pick_target(session, wid, setup["find"])
+                if sid:
+                    await call(session, "world_click", {"world_id": wid, "id": sid})
+                    await asyncio.sleep(1.0)
+            # 定位并执行动作
+            tid, _ = await pick_target(session, wid, case["find"])
+            if not tid:
+                raise ValueError("找不到目标构件")
+            if case["action"] == "click":
+                await call(session, "world_click", {"world_id": wid, "id": tid})
+            elif case["action"] == "fill":
+                await call(session, "world_fill", {"world_id": wid, "id": tid, "text": case["action_text"]})
+            elif case["action"] == "fill_submit":
+                await call(session, "world_fill", {"world_id": wid, "id": tid, "text": case["action_text"]})
+                await call(session, "world_press", {"world_id": wid, "id": tid, "key": "Enter"})
+            elif case["action"] == "press":
+                await call(session, "world_press", {"world_id": wid, "id": tid, "key": case["action_key"]})
+            await asyncio.sleep(1.2)
+            # 读变更流 digest
+            r = await call(session, "world_changes", {"world_id": wid, "since": 0})
+            m = _digest_assess(r.get("events", []), r.get("digest", {}))
+            m["name"] = name
+            results.append(m)
+            print(f"{name:<28s} {m['events_total']:>5d} {m['summary_chars']:>5d} {m['compression']:>5.1f} {m['signal_hits']:>4d} {m['chrome_hits']:>6d}")
+            print(f"    摘要: {m['summary'][:130]}")
+            print(f"    高亮: {m['highlights'][:5]}")
+        except Exception as e:
+            print(f"[SKIP] {name}: {type(e).__name__}: {str(e)[:100]}")
+        await call(session, "world_close", {"world_id": wid})
+    # 汇总
+    total_events = sum(r["events_total"] for r in results)
+    total_chars = sum(r["summary_chars"] for r in results)
+    total_signal = sum(r["signal_hits"] for r in results)
+    total_chrome = sum(r["chrome_hits"] for r in results)
+    print(f"\n汇总: 总事件 {total_events} → 总摘要 {total_chars} 字符, 全局压缩比 {round(total_events/max(1,total_chars),1)} 事件/字")
+    print(f"      highlights 中强信号(操作结果) {total_signal} 条 vs 外壳/弱信号(噪声) {total_chrome} 条")
+    if total_chrome > total_signal:
+        print("⚠️ 外壳噪声 > 强信号:importance 对重型 SPA 的重渲染假新增降权不足(digest 价值受限)")
+    else:
+        print("✅ 强信号 ≥ 噪声:importance 加权有效(digest 有真实价值)")
+    return results
+
+
 async def main():
-    # 分阶段:先 --local(只跑本地夹具,验证脚本/oracle 正确性),再全量(含真实站点)
+    # 分阶段:先 --local(只跑本地夹具),再全量(含真实站点),--digest 只做 digest 价值评估
+    digest_only = "--digest" in sys.argv
     local_only = "--local" in sys.argv
     selected = [c for c in CASES if local_only and c["url"].startswith("file://")] if local_only else CASES
 
@@ -375,6 +495,10 @@ async def main():
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             await asyncio.wait_for(session.initialize(), timeout=30)
+
+            if digest_only:
+                await run_digest_cases(session)
+                return
 
             results = []
             print("=== effect 判定一致性矩阵 ===")

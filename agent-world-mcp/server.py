@@ -638,21 +638,33 @@ def _t_world_resolve(args):
 # 这是实时闭环反馈的基础设施:让智能体每轮少读、快速判断"页面发生了什么、值不值得看"。
 
 # 交互/结构性语义角色 → 高重要性(出现/消失通常是操作结果)
+# 供 effect 判定使用(宽口径:按钮/链接出现也可能是操作结果的间接证据)
 _IMPORTANT_ROLES = {
     "dialog", "alertdialog", "menu", "form", "button", "input", "combobox",
     "listbox", "option", "link", "navigation", "tab", "tablist", "searchbox",
     "textbox", "select", "details", "summary", "tooltip",
 }
+# digest 强信号角色(窄口径):只认"几乎必是操作结果"的语义。
+# 重型 SPA 整体重渲染时,页面外壳(button/link/navigation)会大量"假新增"刷屏,
+# 若把它们标高,真信号(弹窗)会被挤出 highlights(digest 价值评估实测:噪声 29 vs 强信号 5)。
+_DIGEST_HIGH_ROLES = {
+    "dialog", "alertdialog", "menu", "option", "listbox", "combobox",
+    "input", "select", "searchbox", "textbox",
+}
 # 内容性角色 → 中重要性
 _MEDIUM_ROLES = {
     "heading", "list", "listitem", "article", "section", "region",
     "card", "banner", "contentinfo", "main", "complementary",
+    # 外壳/重渲染常见角色:digest 出现不一定是操作结果,降为中(仅影响 digest,不影响 effect)
+    "button", "link", "navigation", "tab", "tablist", "form", "details", "summary",
 }
 
 
 def _event_importance(evt):
-    """单条变更事件的重要性分级(high/medium/low)。
+    """单条变更事件的重要性分级(high/medium/low)——供 digest/变更流使用。
     依据:事件类型(结构性 add/remove > update > visibility) × 语义角色。
+    注意:high 只给"强信号"角色(_DIGEST_HIGH_ROLES)——重型 SPA 重渲染时
+    外壳(button/link/navigation)大量假新增,若标高会把真弹窗挤出 highlights。
     旧事件(内核补 semantic 前记录)缺 semantic 时从 name 前缀推断。
     """
     etype = evt.get("type")
@@ -663,14 +675,14 @@ def _event_importance(evt):
     if etype == "visibility":
         return "low"
     if etype in ("add", "remove"):
-        if semantic in _IMPORTANT_ROLES:
+        if semantic in _DIGEST_HIGH_ROLES:
             return "high"
-        if semantic in _MEDIUM_ROLES:
+        if semantic in _IMPORTANT_ROLES or semantic in _MEDIUM_ROLES:
             return "medium"
         return "medium"  # 新增/移除默认中(结构变化),具体由 digest 归纳
     # update
-    if semantic in _IMPORTANT_ROLES:
-        return "medium"  # 交互构件更新值得看
+    if semantic in _DIGEST_HIGH_ROLES:
+        return "medium"  # 强信号构件更新值得看
     return "low"
 
 

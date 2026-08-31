@@ -158,7 +158,9 @@ world_open(url, cdp_url="http://localhost:9222")
 
 3. **`world_fill` / `world_press` 也返回 `effect`(2026-08-31)**:填表以"值已进入可见输入框"(`_fill_visible` 验证)为强证据 → `effected/high`;按键按类型判定——Escape/关闭类看"全页 dialog 消失"(disappear 信号),Enter/提交类看 URL 变化,方向键看目标状态翻转。
 
-4. **`world_wait` 事件驱动(替代轮询)**:内核 `AgentRuntime.waitFor()` 注册 waiter,MutationObserver 每次 flush(`handleMutation`)后检查条件、命中即 resolve;server 端用 `page.evaluate` 的 Promise await 机制等待,彻底去掉旧的 `time.sleep(0.3)` 轮询循环。实测:条件已满足 0.04s 返回、动态出现 0.03s 命中、消失 0.16s、超时精确(2s 超时 2.04s 返回)。返回带 `driven: event|timeout` 标明路径。
+4. **digest 重要性降权:外壳假新增不刷屏(2026-08-31)**:digest 价值评估(多真站)发现原 importance 把 `button`/`link`/`navigation` 标 high,重型 SPA 整体重渲染时外壳大量"假新增"刷屏,把真信号(弹窗)挤出 highlights(实测噪声 29 vs 强信号 5)。修复:digest 口径改用**窄口径 `_DIGEST_HIGH_ROLES`**(只认 dialog/menu/option/combobox/input 等"几乎必是操作结果"的角色),外壳角色降 medium。**与 effect 判定分离**(effect 仍用宽口径 `_IMPORTANT_ROLES`,避免"展开子菜单"类操作被降权)。降权后:真信号 14 vs 噪声 0,摘要压缩比 7.3→14.1 事件/字,GF digest 第一行即"弹窗 dialog.number-of-passengers"。
+
+5. **`world_wait` 事件驱动(替代轮询)**:内核 `AgentRuntime.waitFor()` 注册 waiter,MutationObserver 每次 flush(`handleMutation`)后检查条件、命中即 resolve;server 端用 `page.evaluate` 的 Promise await 机制等待,彻底去掉旧的 `time.sleep(0.3)` 轮询循环。实测:条件已满足 0.04s 返回、动态出现 0.03s 命中、消失 0.16s、超时精确(2s 超时 2.04s 返回)。返回带 `driven: event|timeout` 标明路径。
 
 **语义摘要 + 重要性加权是闭环的基础设施**:闭环反馈不能把原始 diff 全塞给 agent(信息洪水、上下文爆炸),"快"靠"给得更少但更准"。实测路线:全页 digest(变更可读化)+ 空间作用域 effect(操作生效报告),两级配合。
 
