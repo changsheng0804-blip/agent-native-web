@@ -49,6 +49,10 @@
         const modal = document.getElementById('far-modal');
         btn.addEventListener('click', () => modal.setAttribute('open', ''));
         document.getElementById('close-modal').addEventListener('click', () => modal.removeAttribute('open'));
+        // 支持 Escape 关闭(供按键生效报告体检)
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') modal.removeAttribute('open');
+        });
     </script>
 </body>
 </html>

@@ -964,17 +964,21 @@ def _target_state_flip(before_state, after_state):
 
 
 def _build_click_effect(before_rows, after_rows, url_changed=False, before_dialogs=None,
-                        after_dialogs=None, before_target_state=None, after_target_state=None):
+                        after_dialogs=None, before_target_state=None, after_target_state=None,
+                        disappear_ok=False, fill_verified=False):
     """空间区域 diff → 操作生效报告。
     判定优先级(从强到弱):
-      1. URL 变化 → effected/high(导航/提交类)
-      2. 全页出现"新的可见 dialog/menu"(点击前没有、点击后有)→ effected/high
+      1. fill_verified: 填表值已进入可见输入框 → effected/high(填表专属强证据)
+      2. URL 变化 → effected/high(导航/提交类)
+      3. 全页出现"新的可见 dialog/menu"(点击前没有、点击后有)→ effected/high
          —— 远距弹窗兜底:弹窗出现在 ±200px 区域外时,靠全页 dialog 扫描识别(F1 修复)
-      3. 目标自身状态翻转(aria-selected/aria-expanded/checked/class)→ effected/high
+      4. disappear_ok 且"点击前有可见 dialog、点击后没了" → effected/high
+         —— 按键关闭弹窗兜底:按 Escape 关弹窗 = 弹窗消失 = 生效
+      5. 目标自身状态翻转(aria-selected/aria-expanded/checked/class)→ effected/high
          —— 状态切换类交互兜底:tab/折叠/勾选无新构件,只有目标状态变
-      4. 目标区域新增关键构件(dialog/button/menu/option 等)→ effected/high
-      5. 区域有变化但无关键构件 → changed/medium
-      6. 区域无变化+URL 未变 → no-change
+      6. 目标区域新增关键构件(dialog/button/menu/option 等)→ effected/high
+      7. 区域有变化但无关键构件 → changed/medium
+      8. 区域无变化+URL 未变 → no-change
     """
     before_ids = {r[0] for r in before_rows}
     after_ids = {r[0] for r in after_rows}
@@ -989,7 +993,18 @@ def _build_click_effect(before_rows, after_rows, url_changed=False, before_dialo
     # 全页新出现 dialog/menu 兜底(远距弹窗 F1 修复)
     before_d = set((d[0] for d in before_dialogs or []))
     new_dialogs = [d for d in (after_dialogs or []) if d[0] not in before_d]
+    # 全页消失的 dialog(按键关闭弹窗兜底)
+    after_d = set((d[0] for d in after_dialogs or []))
+    gone_dialogs = [d for d in (before_dialogs or []) if d[0] not in after_d]
 
+    if fill_verified:
+        return {
+            "verdict": "effected",
+            "confidence": "high",
+            "why": "填表值已进入可见输入框",
+            "observed": observed,
+            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
+        }
     if url_changed:
         return {
             "verdict": "effected",
@@ -1007,6 +1022,17 @@ def _build_click_effect(before_rows, after_rows, url_changed=False, before_dialo
             "verdict": "effected",
             "confidence": "high",
             "why": f"页面出现新的弹窗/菜单(可能远离目标): {names}",
+            "observed": observed,
+            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
+        }
+    if disappear_ok and gone_dialogs:
+        names = "、".join(f"{_ROLE_LABEL.get(d[1], d[1])} {d[2]}" for d in gone_dialogs[:5])
+        for d in gone_dialogs[:8]:
+            observed.append({"type": "remove", "id": d[0], "semantic": d[1], "name": d[2]})
+        return {
+            "verdict": "effected",
+            "confidence": "high",
+            "why": f"弹窗/菜单已关闭: {names}",
             "observed": observed,
             "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
         }
@@ -1047,9 +1073,9 @@ def _build_click_effect(before_rows, after_rows, url_changed=False, before_dialo
     }
 
 
-def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500):
+def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500, disappear_ok=False, fill_verified=False):
     """点击后轮询目标区域:有变化即停(不等满),最多 max_wait_ms。
-    同时采集全页可见 dialog 集合(远距弹窗兜底)与目标自身状态(状态切换兜底)。
+    同时采集全页可见 dialog 集合(远距弹窗/关弹窗兜底)与目标自身状态(状态切换兜底)。
     返回 effect 报告;捕获失败时返回 None(调用方省略字段)。
     """
     if not snap_before:
@@ -1086,7 +1112,8 @@ def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500):
             last_rows, last_dialogs, last_target_state = [], [], None
     return _build_click_effect(before_rows, last_rows or [], url_changed,
                                before_dialogs, last_dialogs or [],
-                               before_target_state, last_target_state)
+                               before_target_state, last_target_state,
+                               disappear_ok, fill_verified)
 
 
 def _t_world_click(args):
@@ -1181,6 +1208,9 @@ def _t_world_fill(args):
     ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target)
     if not ent:
         raise ValueError(f"构件不存在: {args['id']}")
+    # 填表前:冻结目标空间区域(生效报告的证据基线)
+    snap_before = _click_region_snapshot(wid, target)
+    url_before = w["page"].url
     loc = _build_locator(w, ent)
     if loc:
         try:
@@ -1192,10 +1222,15 @@ def _t_world_fill(args):
                 loc.fill(text, timeout=10000)
             # 关键验证:locator 不检测遮挡,SPA 会把值填进被覆盖的旧输入框而"静默成功"。
             # 未在可见输入框验证到文本 → 判定失败,降级到 js-setter(自带覆盖层切换)。
-            if _fill_visible(wid, text):
+            filled_ok = _fill_visible(wid, text)
+            if filled_ok:
                 _refresh_core_status(wid)
                 method = "locator-sequential-type" if type_delay_ms > 0 else "locator-fill"
-                return _ok({"world_id": wid, "filled": target, "text": text, "method": method})
+                ret = {"world_id": wid, "filled": target, "text": text, "method": method}
+                effect = _wait_click_effect(wid, snap_before, url_before, max_wait_ms=1500, fill_verified=True)
+                if effect:
+                    ret["effect"] = effect
+                return _ok(ret)
             fill_err = "fill 后未在可见输入框验证到文本(可能被 SPA 覆盖层拦截)"
         except Exception as e:
             fill_err = f"{type(e).__name__}: {str(e)[:200]}"
@@ -1237,7 +1272,13 @@ def _t_world_fill(args):
     if not r.get("ok"):
         raise ValueError(f"fill 失败: {r} (locator: {fill_err})")
     _refresh_core_status(wid)
-    return _ok({"world_id": wid, "filled": target, "text": text, "target_tag": r.get("tag"), "method": "js-setter", "locator_note": fill_err})
+    ret = {"world_id": wid, "filled": target, "text": text, "target_tag": r.get("tag"), "method": "js-setter", "locator_note": fill_err}
+    # js-setter 兜底路径同样验证"值是否进入可见输入框"作为生效证据
+    filled_ok = _fill_visible(wid, text)
+    effect = _wait_click_effect(wid, snap_before, url_before, max_wait_ms=1500, fill_verified=filled_ok)
+    if effect:
+        ret["effect"] = effect
+    return _ok(ret)
 
 
 def _t_world_batch_fill(args):
@@ -1273,7 +1314,7 @@ def _t_world_batch_fill(args):
 
 
 def _t_world_press(args):
-    """按编号聚焦并按按键(如 Enter/Escape/Tab)"""
+    """按编号聚焦并按按键(如 Enter/Escape/Tab)。返回 effect 生效报告。"""
     wid = args["world_id"]
     target = _resolve_id(wid, args["id"])
     key = args["key"]
@@ -1281,11 +1322,21 @@ def _t_world_press(args):
     ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target)
     if not ent:
         raise ValueError(f"构件不存在: {args['id']}")
+    # 按键前:冻结目标空间区域 + URL(生效报告的证据基线)
+    snap_before = _click_region_snapshot(wid, target)
+    url_before = w["page"].url
+    # 按 key 决定是否开启"弹窗消失"证据(Escape 关弹窗/菜单 = 生效)
+    disappear_ok = key.lower() in ("escape", "esc")
     loc = _build_locator(w, ent)
     if loc:
         try:
             loc.press(key, timeout=10000)
-            return _ok({"world_id": wid, "pressed": target, "key": key, "method": "locator-press"})
+            _refresh_core_status(wid)
+            ret = {"world_id": wid, "pressed": target, "key": key, "method": "locator-press"}
+            effect = _wait_click_effect(wid, snap_before, url_before, disappear_ok=disappear_ok)
+            if effect:
+                ret["effect"] = effect
+            return _ok(ret)
         except Exception as e:
             raise ValueError(f"按键失败: {type(e).__name__}: {str(e)[:200]}")
     # 兜底:JS focus + dispatch keydown/keyup + 真实键盘事件(比纯 JS dispatch 更可靠)
@@ -1314,7 +1365,11 @@ def _t_world_press(args):
     except Exception:
         pass
     _refresh_core_status(wid)
-    return _ok({"world_id": wid, "pressed": target, "key": key, "method": "native-keyboard"})
+    ret = {"world_id": wid, "pressed": target, "key": key, "method": "native-keyboard"}
+    effect = _wait_click_effect(wid, snap_before, url_before, disappear_ok=disappear_ok)
+    if effect:
+        ret["effect"] = effect
+    return _ok(ret)
 
 
 def _t_world_wait(args):

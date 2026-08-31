@@ -152,9 +152,12 @@ world_open(url, cdp_url="http://localhost:9222")
    **设计依据(实测)**:重型 SPA(Google Flights)一次点击会整体重渲染 DOM(新增 108/移除 851/更新 946),全页 diff 全是噪声;且元素 ID 随重渲染失效(WeakMap 重建),不能靠 ID/邻居。改为"目标空间区域 ±200px 点击前后 diff",真信号(乘客面板 `dialog.number-of-passengers` 及 49 个面板构件)从噪声中干净分离。**负例不误报**:点击无副作用元素判 `no-change`。
    - 证据窗口:轮询"区域有变化即停"(不傻等满),最多 2.5s
    - 判定:区域新增关键交互构件(dialog/button/menu/option 等)→ `effected/high`;仅 URL 变化 → `effected/high`(导航类);区域有变化无关键构件 → `changed/medium`;无变化 → `no-change`
+   - **三层证据兜底(2026-08-31 实战验证后)**:① 全页可见 dialog/menu 扫描——远距弹窗(离目标 ±200px 外)也能识别;② 目标自身状态翻转(aria-selected/aria-expanded/checked/class)——tab/折叠/勾选类"无新构件"交互;③ URL 变化——导航/提交类
    - 世界出证据 + 分级置信度,**最终判断权留给 agent**(避免把页面自身波动误判为操作失败)
 
-3. **`world_wait` 事件驱动(替代轮询)**:内核 `AgentRuntime.waitFor()` 注册 waiter,MutationObserver 每次 flush(`handleMutation`)后检查条件、命中即 resolve;server 端用 `page.evaluate` 的 Promise await 机制等待,彻底去掉旧的 `time.sleep(0.3)` 轮询循环。实测:条件已满足 0.04s 返回、动态出现 0.03s 命中、消失 0.16s、超时精确(2s 超时 2.04s 返回)。返回带 `driven: event|timeout` 标明路径。
+3. **`world_fill` / `world_press` 也返回 `effect`(2026-08-31)**:填表以"值已进入可见输入框"(`_fill_visible` 验证)为强证据 → `effected/high`;按键按类型判定——Escape/关闭类看"全页 dialog 消失"(disappear 信号),Enter/提交类看 URL 变化,方向键看目标状态翻转。
+
+4. **`world_wait` 事件驱动(替代轮询)**:内核 `AgentRuntime.waitFor()` 注册 waiter,MutationObserver 每次 flush(`handleMutation`)后检查条件、命中即 resolve;server 端用 `page.evaluate` 的 Promise await 机制等待,彻底去掉旧的 `time.sleep(0.3)` 轮询循环。实测:条件已满足 0.04s 返回、动态出现 0.03s 命中、消失 0.16s、超时精确(2s 超时 2.04s 返回)。返回带 `driven: event|timeout` 标明路径。
 
 **语义摘要 + 重要性加权是闭环的基础设施**:闭环反馈不能把原始 diff 全塞给 agent(信息洪水、上下文爆炸),"快"靠"给得更少但更准"。实测路线:全页 digest(变更可读化)+ 空间作用域 effect(操作生效报告),两级配合。
 

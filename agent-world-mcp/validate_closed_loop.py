@@ -38,10 +38,33 @@ TRUTH_DIALOG_VISIBLE = """() => {
     return false;
 }"""
 
+TRUTH_DIALOG_GONE = """() => {
+    const nodes = document.querySelectorAll('[role="dialog"], [aria-modal="true"]');
+    for (const n of nodes) {
+        const r = n.getBoundingClientRect();
+        const s = getComputedStyle(n);
+        if (r.width > 3 && r.height > 3 && s.display !== 'none' && s.visibility !== 'hidden') return false;
+    }
+    return true;
+}"""
+
 TRUTH_TAB_B_SELECTED = """() => {
     const t = document.getElementById('tab-b');
     return !!t && t.getAttribute('aria-selected') === 'true';
 }"""
+
+
+def truth_input_has_text(text):
+    """填表 truth:任意可见输入框的值包含目标文本"""
+    return f"""() => {{
+        const t = {json.dumps(text, ensure_ascii=False)};
+        const ns = [...document.querySelectorAll('input, textarea, [contenteditable="true"]')].filter(n => {{
+            const r = n.getBoundingClientRect();
+            const s = getComputedStyle(n);
+            return r.width > 3 && r.height > 3 && s.display !== 'none' && s.visibility !== 'hidden';
+        }});
+        return ns.some(n => (n.value || '').includes(t));
+    }}"""
 
 # ── 场景配置 ─────────────────────────────────────────────────
 CASES = [
@@ -111,6 +134,30 @@ CASES = [
         "expect": "effected",
         "note": "点正文链接 → URL 变化(导航类)",
     },
+    {
+        "name": "fill-dyn(填表值进入输入框)",
+        "url": (FIXTURES / "dyn.html").as_uri(),
+        "open_wait_ms": 1200,
+        "find": {"name": "搜索"},
+        "action": "fill",
+        "action_text": "hello-agent",
+        "truth_mode": "input_value",
+        "truth_text": "hello-agent",
+        "expect": "effected",
+        "note": "填表后值应进入可见输入框(fill_verified 强证据)",
+    },
+    {
+        "name": "press-escape(按键关闭弹窗)",
+        "url": (FIXTURES / "far_modal.html").as_uri(),
+        "open_wait_ms": 1200,
+        "setup": {"find": {"text": "打开居中弹窗"}, "action": "click"},
+        "find": {"text": "FAR_MODAL_TITLE"},
+        "action": "press",
+        "action_key": "Escape",
+        "truth_mode": "dialog_gone",
+        "expect": "effected",
+        "note": "先点开弹窗再按 Escape → 弹窗应消失(disappear 信号)",
+    },
 ]
 
 # 持续变更 + waitFor 专项(独立段,不计入矩阵)
@@ -145,8 +192,8 @@ def classify(truth, verdict):
         return "AMs"
 
 
-async def truth_check(session, wid, mode):
-    """Truth oracle:返回 (truth, detail)。mode: dialog / tab-b-selected / url_change / none"""
+async def truth_check(session, wid, mode, text=None):
+    """Truth oracle:返回 (truth, detail)。mode: dialog / dialog_gone / tab-b-selected / url_change / input_value / none"""
     if mode == "none":
         return False, "无变化"
     if mode == "url_change":
@@ -155,9 +202,15 @@ async def truth_check(session, wid, mode):
     if mode == "dialog":
         r = await call(session, "world_eval", {"world_id": wid, "expression": TRUTH_DIALOG_VISIBLE})
         return bool(json.loads(r.get("result", "false"))), "dialog可见" if json.loads(r.get("result", "false")) else "无可见dialog"
+    if mode == "dialog_gone":
+        r = await call(session, "world_eval", {"world_id": wid, "expression": TRUTH_DIALOG_GONE})
+        return bool(json.loads(r.get("result", "false"))), "无可见dialog" if json.loads(r.get("result", "false")) else "dialog仍可见"
     if mode == "tab-b-selected":
         r = await call(session, "world_eval", {"world_id": wid, "expression": TRUTH_TAB_B_SELECTED})
         return bool(json.loads(r.get("result", "false"))), "tab-b选中" if json.loads(r.get("result", "false")) else "tab-b未选中"
+    if mode == "input_value":
+        r = await call(session, "world_eval", {"world_id": wid, "expression": truth_input_has_text(text or "")})
+        return bool(json.loads(r.get("result", "false"))), f"输入框含值: {text}" if json.loads(r.get("result", "false")) else f"输入框未含值: {text}"
     return False, "?"
 
 
@@ -192,6 +245,15 @@ async def run_case(session, case):
         except Exception:
             url_before = None
 
+    # 前置步骤(如先点开弹窗,再测按键关弹窗)
+    setup = case.get("setup")
+    if setup:
+        setup_id, setup_name = await pick_target(session, wid, setup["find"])
+        if setup_id:
+            if setup["action"] == "click":
+                await call(session, "world_click", {"world_id": wid, "id": setup_id})
+            await asyncio.sleep(1.0)
+
     target_id, target_name = await pick_target(session, wid, case["find"])
     if not target_id:
         await call(session, "world_close", {"world_id": wid})
@@ -204,11 +266,19 @@ async def run_case(session, case):
         if case["action"] == "click":
             r = await call(session, "world_click", {"world_id": wid, "id": target_id})
             effect = r.get("effect")
+        elif case["action"] == "fill":
+            r = await call(session, "world_fill", {"world_id": wid, "id": target_id, "text": case["action_text"]})
+            effect = r.get("effect")
+            action_note = f"fill method={r.get('method')}"
         elif case["action"] == "fill_submit":
             r = await call(session, "world_fill", {"world_id": wid, "id": target_id, "text": case["action_text"]})
+            effect = r.get("effect")
             action_note = f"fill method={r.get('method')}"
             await call(session, "world_press", {"world_id": wid, "id": target_id, "key": "Enter"})
-            # fill 无 effect,提交后从变更/URL 看
+        elif case["action"] == "press":
+            r = await call(session, "world_press", {"world_id": wid, "id": target_id, "key": case["action_key"]})
+            effect = r.get("effect")
+            action_note = f"press {case['action_key']}"
     except Exception as e:
         await call(session, "world_close", {"world_id": wid})
         return {"name": name, "class": "SKIP", "verdict": None, "confidence": None, "truth": None, "why": f"动作失败: {type(e).__name__}: {str(e)[:120]}", "action_note": "", "truth_detail": "", "note": case.get("note", "")}
@@ -217,7 +287,7 @@ async def run_case(session, case):
     await asyncio.sleep(1.5)
 
     # Truth 判定
-    truth, truth_detail = await truth_check(session, wid, case["truth_mode"])
+    truth, truth_detail = await truth_check(session, wid, case["truth_mode"], case.get("truth_text"))
     if case["truth_mode"] == "url_change":
         r = await call(session, "world_eval", {"world_id": wid, "expression": "() => location.href"})
         url_after = r.get("result")
@@ -227,7 +297,7 @@ async def run_case(session, case):
     verdict = effect.get("verdict") if effect else None
     confidence = effect.get("confidence") if effect else None
     cls = classify(truth, verdict)
-    why = effect.get("why", "") if effect else "(fill 无 effect,看 URL)"
+    why = effect.get("why", "") if effect else "(无 effect,看 URL/truth)"
 
     await call(session, "world_close", {"world_id": wid})
     return {
