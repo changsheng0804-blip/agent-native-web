@@ -1162,6 +1162,9 @@ window.AgentRuntime = window.AgentRuntime || {};
       const addedIds = new Set();
       const removedIds = new Set();
       const updatedIds = new Set();
+      // 删除前捕获元数据:元素删除后 world.elements 查不到,remove 事件需要 name/semantic
+      // 才能被 server 层翻译成人话摘要(变更可读化)
+      const removedMeta = new Map();
       
       mutations.forEach(m => {
         if (m.type === 'scroll' || m.type === 'resize') {
@@ -1212,6 +1215,8 @@ window.AgentRuntime = window.AgentRuntime || {};
             } else if (wasRegistered) {
               // 元素被隐藏/变装饰(如动态加 aria-hidden/style/class),从世界移除
               // 避免"先注册后伪隐藏"的动态时序泄露(IPI 防御闭环)
+              const prev = this.world.elements.get(prevId);
+              if (prev) removedMeta.set(prevId, { name: prev.name, semantic: prev.semantic });
               this.world.elements.delete(prevId);
               changedIds.add(prevId);
               removedIds.add(prevId);
@@ -1224,12 +1229,16 @@ window.AgentRuntime = window.AgentRuntime || {};
           m.removedNodes.forEach(node => {
             if (node.nodeType !== Node.ELEMENT_NODE) return;
             const id = global.AgentRuntime.scanner.getStableId(node);
+            const prev = this.world.elements.get(id);
+            if (prev) removedMeta.set(id, { name: prev.name, semantic: prev.semantic });
             this.world.elements.delete(id);
             changedIds.add(id);
             removedIds.add(id);
             if (node.querySelectorAll) {
               node.querySelectorAll('*').forEach(child => {
                 const cid = global.AgentRuntime.scanner.getStableId(child);
+                const cprev = this.world.elements.get(cid);
+                if (cprev) removedMeta.set(cid, { name: cprev.name, semantic: cprev.semantic });
                 this.world.elements.delete(cid);
                 changedIds.add(cid);
                 removedIds.add(cid);
@@ -1242,12 +1251,15 @@ window.AgentRuntime = window.AgentRuntime || {};
       // 记录变更日志（同一批次按 add > remove > update 优先级合并）
       addedIds.forEach(id => {
         const el = this.world.elements.get(id);
-        this.logEvent('add', id, { name: el ? el.name : undefined });
+        this.logEvent('add', id, { name: el ? el.name : undefined, semantic: el ? el.semantic : undefined });
       });
-      removedIds.forEach(id => this.logEvent('remove', id));
+      removedIds.forEach(id => {
+        const meta = removedMeta.get(id);
+        this.logEvent('remove', id, { name: meta ? meta.name : undefined, semantic: meta ? meta.semantic : undefined });
+      });
       updatedIds.forEach(id => {
         const el = this.world.elements.get(id);
-        this.logEvent('update', id, { name: el ? el.name : undefined });
+        this.logEvent('update', id, { name: el ? el.name : undefined, semantic: el ? el.semantic : undefined });
       });
       if (mutations.some(m => m.type === 'scroll' || m.type === 'resize')) {
         this.logEvent('visibility', null, { viewportY: Math.round(window.scrollY) });

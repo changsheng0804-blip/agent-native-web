@@ -133,6 +133,28 @@ world_open(url, cdp_url="http://localhost:9222")
 
 **实战修复:fill 覆盖层验证(2026-08-31)**。Playwright 的 `locator.fill()` 只要求元素"可见可编辑",**不检测遮挡**。SPA 对话框(如 Google Flights 点出发地后弹出"输入您的出发地")会新建一个可见输入框副本、覆盖原输入框——此时 `world_fill` 会"静默成功"地把值填进被覆盖的旧框,可见输入框实际为空。修复:locator fill 成功后用 `elementFromPoint` 验证文本是否落在"可见且未被覆盖"的输入框,未验证到则判定失败、降级到 js-setter(自带覆盖层切换,自动改填顶层可见输入框)。
 
+## 实时闭环反馈(操作→结果,2026-08-31)
+
+传统浏览器操作靠"被动等":提交后只能轮询或延时截图猜结果。原生网页世界基于 runtime 实时性,把"操作→结果"的因果直接暴露给 agent:
+
+1. **`world_changes` 变更可读化**:内核变更事件补 `semantic` 字段(remove 事件也在删除前捕获 name/semantic);server 层对每条事件打 `importance` 分级(high/medium/low,依据事件类型 × 语义角色),并生成 `digest` 人话摘要(`{summary, counts, highlights}`)——agent 读一眼就知道"新增 43 个构件、关键: 弹窗 dialog.number-of-passengers",不必翻原始事件流。
+2. **`world_click` 返回 `effect` 生效报告**(点击验证闭环):点击前冻结目标空间区域(目标 bounds ±200px)→ 点击后轮询区域 diff(有变化即停,最多 2.5s)→ 生成:
+   ```json
+   "effect": {
+     "verdict": "effected",            // effected / changed / no-change
+     "confidence": "high",             // high / medium / high(no-change 也是 high 相对可靠)
+     "why": "目标区域出现关键构件: 弹窗 dialog.number-of-passengers、按钮 button.add-adult",
+     "observed": [{"type":"add","id":"el_595","semantic":"dialog","name":"dialog.number-of-passengers"}],
+     "region_changed": {"new": 64, "gone": 57}
+   }
+   ```
+   **设计依据(实测)**:重型 SPA(Google Flights)一次点击会整体重渲染 DOM(新增 108/移除 851/更新 946),全页 diff 全是噪声;且元素 ID 随重渲染失效(WeakMap 重建),不能靠 ID/邻居。改为"目标空间区域 ±200px 点击前后 diff",真信号(乘客面板 `dialog.number-of-passengers` 及 49 个面板构件)从噪声中干净分离。**负例不误报**:点击无副作用元素判 `no-change`。
+   - 证据窗口:轮询"区域有变化即停"(不傻等满),最多 2.5s
+   - 判定:区域新增关键交互构件(dialog/button/menu/option 等)→ `effected/high`;仅 URL 变化 → `effected/high`(导航类);区域有变化无关键构件 → `changed/medium`;无变化 → `no-change`
+   - 世界出证据 + 分级置信度,**最终判断权留给 agent**(避免把页面自身波动误判为操作失败)
+
+**语义摘要 + 重要性加权是闭环的基础设施**:闭环反馈不能把原始 diff 全塞给 agent(信息洪水、上下文爆炸),"快"靠"给得更少但更准"。实测路线:全页 digest(变更可读化)+ 空间作用域 effect(操作生效报告),两级配合。
+
 ## 安装与配置
 
 ### 前置
@@ -193,6 +215,8 @@ agent-world-mcp/
 ├── test_status.py     # 世界状态卡:auth/dialogs/page/forms/changed
 ├── test_eval.py       # world_eval:只读查询/函数表达式/截断/错误
 ├── test_ipi_filter.py # IPI 伪隐藏过滤:VEC_4~VEC_8 阻断 + 对照不误伤 + 动态时序移除
+├── test_change_digest.py  # 变更可读化:world_changes digest+importance(本地动态页+GF)
+├── test_click_effect.py   # 点击生效报告:正例 GF 面板 effected/high + 负例 no-change
 └── test_gf_final.py   # 正常站点(GF)上 frames/anomaly/navigate 冒烟
 
 (monorepo 根)
@@ -251,5 +275,7 @@ python test_frames.py         # frame 感知 + anomaly + navigate + click_at
 python test_status.py         # 世界状态卡:auth/dialogs/page/forms/changed(本地夹具)
 python test_eval.py           # world_eval:JS 查询/截断/错误处理
 python test_ipi_filter.py     # IPI 伪隐藏过滤:VEC_4~VEC_8 阻断 + 对照不误伤 + 动态时序(本地夹具)
+python test_change_digest.py  # 变更可读化:world_changes digest + importance(本地动态页 + GF)
+python test_click_effect.py   # 点击生效报告:正例 GF 面板 effected/high + 负例 no-change 不误报
 python test_gf_final.py       # Google Flights 冒烟:frames/anomaly/navigate 无异常
 ```

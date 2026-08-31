@@ -633,10 +633,109 @@ def _t_world_resolve(args):
     return _ok(_evaluate(wid, "(q) => agentWorld.query.resolve(q)", args["query"]))
 
 
+# ── 变更可读化(语义摘要 + 重要性加权)──────────────────────────
+# 目标:world_changes 返回的不再是"裸事件流",而是带重要性标注 + 人话摘要的结构。
+# 这是实时闭环反馈的基础设施:让智能体每轮少读、快速判断"页面发生了什么、值不值得看"。
+
+# 交互/结构性语义角色 → 高重要性(出现/消失通常是操作结果)
+_IMPORTANT_ROLES = {
+    "dialog", "alertdialog", "menu", "form", "button", "input", "combobox",
+    "listbox", "option", "link", "navigation", "tab", "tablist", "searchbox",
+    "textbox", "select", "details", "summary", "tooltip",
+}
+# 内容性角色 → 中重要性
+_MEDIUM_ROLES = {
+    "heading", "list", "listitem", "article", "section", "region",
+    "card", "banner", "contentinfo", "main", "complementary",
+}
+
+
+def _event_importance(evt):
+    """单条变更事件的重要性分级(high/medium/low)。
+    依据:事件类型(结构性 add/remove > update > visibility) × 语义角色。
+    旧事件(内核补 semantic 前记录)缺 semantic 时从 name 前缀推断。
+    """
+    etype = evt.get("type")
+    semantic = evt.get("semantic") or ""
+    if not semantic:
+        name = evt.get("name") or ""
+        semantic = name.split(".")[0] if name else ""
+    if etype == "visibility":
+        return "low"
+    if etype in ("add", "remove"):
+        if semantic in _IMPORTANT_ROLES:
+            return "high"
+        if semantic in _MEDIUM_ROLES:
+            return "medium"
+        return "medium"  # 新增/移除默认中(结构变化),具体由 digest 归纳
+    # update
+    if semantic in _IMPORTANT_ROLES:
+        return "medium"  # 交互构件更新值得看
+    return "low"
+
+
+_ROLE_LABEL = {
+    "dialog": "弹窗", "alertdialog": "警告弹窗", "menu": "菜单", "button": "按钮",
+    "input": "输入框", "combobox": "组合框", "listbox": "列表", "option": "选项",
+    "link": "链接", "navigation": "导航", "tab": "标签页", "tablist": "标签栏",
+    "searchbox": "搜索框", "textbox": "文本框", "select": "选择器",
+    "details": "折叠区", "summary": "折叠标题", "tooltip": "提示",
+    "heading": "标题", "list": "列表", "listitem": "列表项", "article": "文章",
+    "section": "区块", "region": "区域", "card": "卡片", "banner": "页头",
+    "contentinfo": "页脚", "main": "主体", "complementary": "侧栏",
+    "form": "表单", "content": "内容", "img": "图片", "video": "视频",
+    "table": "表格", "navigation2": "导航",
+}
+
+
+def _change_digest(events):
+    """把一批变更事件归纳成人话摘要。
+    返回 {summary, counts, highlights}——智能体读 summary 就能知道"发生了什么"。
+    """
+    counts = {"add": 0, "remove": 0, "update": 0, "visibility": 0}
+    highlights = []  # high 优先级事件(通常是操作结果的直接证据)
+    for evt in events:
+        etype = evt.get("type")
+        if etype in counts:
+            counts[etype] += 1
+        if _event_importance(evt) == "high" and etype in ("add", "remove"):
+            highlights.append({
+                "type": etype,
+                "id": evt.get("id"),
+                "name": evt.get("name"),
+                "semantic": evt.get("semantic"),
+            })
+    # summary 人话
+    parts = []
+    if counts["add"]:
+        parts.append(f"新增 {counts['add']} 个构件")
+    if counts["remove"]:
+        parts.append(f"移除 {counts['remove']} 个构件")
+    if counts["update"]:
+        parts.append(f"更新 {counts['update']} 个构件")
+    if counts["visibility"]:
+        parts.append(f"可见性变化 {counts['visibility']} 次")
+    summary = "、".join(parts) if parts else "无变化"
+    # 高价值构件一句话(前 6 个)
+    if highlights:
+        names = []
+        for h in highlights[:6]:
+            label = _ROLE_LABEL.get(h.get("semantic"), h.get("semantic") or "构件")
+            names.append(f"{label} {h.get('name') or h.get('id')}")
+        summary += f"; 关键: {'、'.join(names)}"
+    return {"summary": summary, "counts": counts, "highlights": highlights[:6]}
+
+
 def _t_world_changes(args):
     wid = args["world_id"]
     since = int(args.get("since", 0))
-    return _ok(_evaluate(wid, "(s) => agentWorld.changes(s)", since))
+    data = _evaluate(wid, "(s) => agentWorld.changes(s)", since)
+    events = data.get("events", [])
+    # 逐条附重要性(不新增往返:内核事件已带 name/semantic)
+    for evt in events:
+        evt["importance"] = _event_importance(evt)
+    data["digest"] = _change_digest(events)
+    return _ok(data)
 
 
 def _build_locator(w, ent):
@@ -747,6 +846,136 @@ def _fill_visible(wid, text):
         return False
 
 
+def _click_region_snapshot(wid, target_id):
+    """点击前冻结目标空间区域:以目标 bounds 中心 ±CLICK_REGION_PAD 为矩形。
+    返回 (region, rows)——region 是固定坐标,点击后 target 可能消失也用它做 diff。
+    rows: 区域内构件 [id, semantic, name]
+    """
+    raw = _evaluate(
+        wid,
+        """(id) => {
+            const el = agentWorld._runtime.world.elements.get(id);
+            if (!el) return null;
+            const b = el.bounds;
+            const pad = 200;
+            const reg = { x0: b.x - pad, y0: b.y - pad, x1: b.x + b.w + pad, y1: b.y + b.h + pad };
+            const rows = [];
+            for (const e of agentWorld._runtime.world.elements.values()) {
+                const x = e.bounds.x, y = e.bounds.y;
+                if (x + e.bounds.w > reg.x0 && x < reg.x1 && y + e.bounds.h > reg.y0 && y < reg.y1) {
+                    rows.push([e.id, e.semantic, (e.name || '').slice(0, 60)]);
+                }
+            }
+            return JSON.stringify({ region: reg, rows });
+        }""",
+        target_id,
+    )
+    if not raw:
+        return None
+    return json.loads(raw)
+
+
+def _click_region_after(wid, region):
+    """点击后用冻结区域取当前构件(不依赖目标是否仍存在)"""
+    raw = _evaluate(
+        wid,
+        """(reg) => {
+            const rows = [];
+            for (const e of agentWorld._runtime.world.elements.values()) {
+                const x = e.bounds.x, y = e.bounds.y;
+                if (x + e.bounds.w > reg.x0 && x < reg.x1 && y + e.bounds.h > reg.y0 && y < reg.y1) {
+                    rows.push([e.id, e.semantic, (e.name || '').slice(0, 60)]);
+                }
+            }
+            return JSON.stringify(rows);
+        }""",
+        region,
+    )
+    return json.loads(raw) if raw else []
+
+
+def _build_click_effect(before_rows, after_rows, url_changed=False):
+    """空间区域 diff → 操作生效报告。
+    区域新增高价值构件(dialog/button/menu/option 等)= 强证据;仅 URL 变= 导航类强证据;
+    区域有变化但无关键构件= changed(中等);区域无变化+URL 未变= no-change。
+    """
+    before_ids = {r[0] for r in before_rows}
+    after_ids = {r[0] for r in after_rows}
+    new_rows = [r for r in after_rows if r[0] not in before_ids]
+    gone_rows = [r for r in before_rows if r[0] not in after_ids]
+    key_rows = [r for r in new_rows if r[1] in _IMPORTANT_ROLES]
+
+    observed = []
+    for r in key_rows[:8]:
+        observed.append({"type": "add", "id": r[0], "semantic": r[1], "name": r[2]})
+
+    if url_changed:
+        return {
+            "verdict": "effected",
+            "confidence": "high",
+            "why": "URL 变化(导航/提交类)",
+            "observed": observed,
+            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
+        }
+    if key_rows:
+        names = "、".join(f"{_ROLE_LABEL.get(r[1], r[1])} {r[2]}" for r in key_rows[:5])
+        return {
+            "verdict": "effected",
+            "confidence": "high",
+            "why": f"目标区域出现关键构件: {names}",
+            "observed": observed,
+            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
+        }
+    if new_rows or gone_rows:
+        return {
+            "verdict": "changed",
+            "confidence": "medium",
+            "why": "目标区域有变化但无关键交互构件",
+            "observed": observed,
+            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
+        }
+    return {
+        "verdict": "no-change",
+        "confidence": "high",
+        "why": "目标区域无变化(点击可能未生效,或效果发生在远处)",
+        "observed": [],
+        "region_changed": {"new": 0, "gone": 0},
+    }
+
+
+def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500):
+    """点击后轮询目标区域:有变化即停(不等满),最多 max_wait_ms。
+    返回 effect 报告;捕获失败时返回 None(调用方省略字段)。
+    """
+    if not snap_before:
+        return None
+    region = snap_before["region"]
+    before_rows = snap_before["rows"]
+    w = _world(wid)
+    deadline = time.time() + max_wait_ms / 1000
+    last_rows = None
+    last_seen = 0
+    while time.time() < deadline:
+        time.sleep(0.2)
+        try:
+            rows = _click_region_after(wid, region)
+        except Exception:
+            rows = []
+        if rows != last_rows:
+            last_rows = rows
+            last_seen = time.time()
+        # 区域稳定(0.4s 无变化)且距首次观察足够(让重渲染完成)即停
+        if rows and (time.time() - last_seen > 0.4) and (time.time() - last_seen < 5):
+            break
+    url_changed = w["page"].url != url_before
+    if last_rows is None:
+        try:
+            last_rows = _click_region_after(wid, region)
+        except Exception:
+            last_rows = []
+    return _build_click_effect(before_rows, last_rows or [], url_changed)
+
+
 def _t_world_click(args):
     wid = args["world_id"]
     target = _resolve_id(wid, args["id"])
@@ -754,6 +983,10 @@ def _t_world_click(args):
     ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target)
     if not ent:
         raise ValueError(f"构件不存在: {args['id']}")
+
+    # 点击前:冻结目标空间区域(生效报告的证据基线)
+    snap_before = _click_region_snapshot(wid, target)
+    url_before = w["page"].url
 
     # 遮挡检测:检查元素中心点是否被上层弹窗/遮罩层挡住(信息提示,不改变点击行为)
     hit_info = _evaluate(
@@ -789,6 +1022,9 @@ def _t_world_click(args):
             ret = {"world_id": wid, "clicked": target, "method": "locator"}
             if obscured_note:
                 ret["obscured_note"] = obscured_note
+            effect = _wait_click_effect(wid, snap_before, url_before)
+            if effect:
+                ret["effect"] = effect
             return _ok(ret)
         except Exception as e:
             loc_err = f"{type(e).__name__}: {str(e)[:200]}"
@@ -817,6 +1053,9 @@ def _t_world_click(args):
     ret = {"world_id": wid, "clicked": target, "method": "mouse-gesture", "at": [cx, cy], "locator_note": loc_err}
     if obscured_note:
         ret["obscured_note"] = obscured_note
+    effect = _wait_click_effect(wid, snap_before, url_before)
+    if effect:
+        ret["effect"] = effect
     return _ok(ret)
 
 
