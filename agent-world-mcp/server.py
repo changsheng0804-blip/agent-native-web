@@ -99,7 +99,8 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "要打开的网址"},
-                    "wait_ms": {"type": "number", "description": "额外等待毫秒(动态页面建议 3000-6000)", "default": 3000},
+                    "wait_ms": {"type": "number", "description": "初始等待毫秒(动态页面建议 3000-6000)", "default": 3000},
+                    "stabilize_ms": {"type": "number", "description": "等待世界稳定(状态卡 stable)的最大毫秒,渐进渲染页面自动等", "default": 10000},
                     "headful": {"type": "boolean", "description": "是否弹出可见窗口(登录/验证码/人工确认场景用)", "default": False},
                     "profile": {"type": "string", "description": "持久化登录态名称(如 login-taobao),同一名称复用 cookie/会话;留空则不持久化"},
                 },
@@ -224,6 +225,32 @@ async def list_tools():
             },
         ),
         types.Tool(
+            name="world_click_at",
+            description="按视口坐标点击(世界模型外的元素/iframe 区域兜底,坐标来自截图或视觉)。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "x": {"type": "integer", "description": "视口横坐标"},
+                    "y": {"type": "integer", "description": "视口纵坐标"},
+                },
+                "required": ["world_id", "x", "y"],
+            },
+        ),
+        types.Tool(
+            name="world_navigate",
+            description="在当前世界内导航到新 URL(SPA 跳转/换页,无需关闭重开)。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "url": {"type": "string", "description": "要导航的网址"},
+                    "wait_ms": {"type": "number", "description": "导航后额外等待毫秒", "default": 2000},
+                },
+                "required": ["world_id", "url"],
+            },
+        ),
+        types.Tool(
             name="world_screenshot",
             description="截图:整页或指定构件区域。保存到本地文件,返回文件路径。",
             inputSchema={
@@ -301,16 +328,48 @@ def _auth_status(wid):
 
 
 def _status(wid):
-    """聚合世界状态卡(内核状态 + 登录态),附带变化高亮"""
+    """聚合世界状态卡(内核状态 + 登录态 + frame 感知 + 环境异常),附带变化高亮"""
     w = _world(wid)
     try:
         core = _evaluate(wid, "() => agentWorld.query.getStatus()")
     except Exception:
         core = {"dialogs": [], "page": {}, "forms": [], "world": {}}
+    page = w["page"]
+    # frame 感知:逐层报告(每 frame 独立世界)
+    frames = []
+    for f in page.frames:
+        try:
+            if not f.url or f.url.startswith("about:"):
+                continue
+            fcnt = f.evaluate("document.querySelectorAll('*').length")
+            fvisible = f.evaluate(
+                "[...document.querySelectorAll('*')].filter(e => { const s = getComputedStyle(e); const r = e.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) !== 0 && r.width > 3 && r.height > 3; }).length"
+            )
+            fready = f.evaluate("typeof window.agentWorld !== 'undefined'")
+            frames.append({"url": f.url[:100], "elements": fcnt, "visible": fvisible, "ready": bool(fready)})
+        except Exception:
+            pass
+    # 环境异常检测:稳定后,世界模型 vs 可见 DOM(阈值 35%,排除隐藏/装饰元素)
+    visible_dom = frames[0].get("visible", 0) if frames else 0
+    world_count = core.get("world", {}).get("elements", 0)
+    anomaly = False
+    if visible_dom > 50 and world_count < visible_dom * 0.35:
+        anomaly = True
+    try:
+        page_state = core.get("page", {}).get("state", "unknown")
+    except Exception:
+        page_state = "unknown"
     cur = {
         "auth": _auth_status(wid),
         "dialogs": core.get("dialogs", []),
-        "page": core.get("page", {}),
+        "page": {
+            "url": page.url[:120],
+            "state": "anomaly" if anomaly else page_state,
+            "scrollY": core.get("page", {}).get("scrollY", 0),
+            "totalHeight": core.get("page", {}).get("totalHeight", 0),
+            "domTotal": visible_dom,
+        },
+        "frames": frames,
         "forms": core.get("forms", []),
         "world": core.get("world", {}),
     }
@@ -324,6 +383,10 @@ def _status(wid):
             changed["dialogs"] = True
         if last["page"].get("state") != cur["page"].get("state"):
             changed["page"] = True
+        if last["page"].get("url") != cur["page"].get("url"):
+            changed["page"] = True
+        if len(last["frames"]) != len(cur["frames"]):
+            changed["frames"] = True
         if len(last["forms"]) != len(cur["forms"]):
             changed["forms"] = True
     cur["changed"] = changed
@@ -386,6 +449,10 @@ def _impl(name, args):
         return _t_world_wait(args)
     if name == "world_screenshot":
         return _t_world_screenshot(args)
+    if name == "world_click_at":
+        return _t_world_click_at(args)
+    if name == "world_navigate":
+        return _t_world_navigate(args)
     if name == "world_close":
         return _t_world_close(args)
     if name == "world_list":
@@ -451,6 +518,17 @@ def _t_world_open(args):
     wid = _next_world_id
     _next_world_id += 1
     _worlds[wid] = {"handle": handle, "context": context, "page": page, "url": url, "opened_at": time.time(), "profile": profile}
+    # 等待世界稳定(分层加载:渐进渲染/懒加载,固定秒数不可靠,以状态卡 stable 为准)
+    stabilize_ms = int(args.get("stabilize_ms", 10000))
+    deadline = time.time() + stabilize_ms / 1000
+    while time.time() < deadline:
+        try:
+            st = _evaluate(wid, "() => agentWorld.query.getStatus()")
+            if st.get("page", {}).get("state") == "stable":
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
     summary = _evaluate(wid, "agentWorld.query.getPageSummary()")
     return _ok({"world_id": wid, "url": url, "ready": True, "headful": headful, "profile": profile, "summary": summary})
 
@@ -720,6 +798,31 @@ def _t_world_screenshot(args):
         w["page"].screenshot(path=str(path), full_page=True)
         desc = "整页"
     return _ok({"world_id": wid, "target": desc, "path": str(path)})
+
+
+def _t_world_click_at(args):
+    """视口坐标点击(世界模型外元素兜底,坐标来自截图/视觉)"""
+    wid = args["world_id"]
+    x = int(args["x"])
+    y = int(args["y"])
+    w = _world(wid)
+    w["page"].mouse.click(x, y)
+    _refresh_core_status(wid)
+    return _ok({"world_id": wid, "clicked_at": [x, y], "method": "mouse-coords"})
+
+
+def _t_world_navigate(args):
+    """世界内导航(无需关闭重开)"""
+    wid = args["world_id"]
+    url = args["url"]
+    wait_ms = int(args.get("wait_ms", 2000))
+    w = _world(wid)
+    w["page"].goto(url, wait_until="domcontentloaded", timeout=60000)
+    _wait_world_ready(w["page"])
+    if wait_ms:
+        w["page"].wait_for_timeout(wait_ms)
+    summary = _evaluate(wid, "agentWorld.query.getPageSummary()")
+    return _ok({"world_id": wid, "url": url, "summary": summary})
 
 
 def _t_world_close(args):

@@ -62,8 +62,14 @@ window.AgentRuntime = window.AgentRuntime || {};
       }
       this.world.status.dialogs = dialogs;
       this.world.status.forms = forms;
+      // 稳定性:元素数连续两次刷新一致才算 stable(渐进渲染/分层加载下避免误报就绪)
+      const curCount = elements.length;
+      const prevCount = this._statusCount || 0;
+      this._statusCount = curCount;
+      const ready = document.readyState === 'complete';
+      const stable = ready && (curCount === prevCount || Date.now() - (this.world.meta.initializedAt || 0) > 15000);
       this.world.status.page = {
-        state: document.readyState === 'complete' ? 'stable' : 'loading',
+        state: stable ? 'stable' : 'loading',
         scrollY: Math.round(window.scrollY),
         totalHeight: document.body.scrollHeight
       };

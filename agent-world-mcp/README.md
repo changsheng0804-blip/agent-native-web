@@ -48,9 +48,16 @@
 |---|---|---|
 | `auth` | 登录态 | 双信号:cookie(server 层,HttpOnly 可读)+ DOM 登录入口 |
 | `dialogs` | 打开的弹窗 | 直接 DOM 查询 `role=dialog`/`aria-modal`,可见性过滤(预渲染隐藏弹窗不误报) |
-| `page` | 加载/稳定、滚动 | readyState + 滚动/尺寸 |
+| `page` | 加载/稳定/异常、URL、滚动 | 稳定性=元素数连续两次一致;`anomaly`=世界模型 vs 可见 DOM 严重缩水(反爬/异常页信号) |
+| `frames` | iframe 感知:逐层 URL/元素数/就绪 | server 层遍历 page.frames(跨域可访问) |
 | `forms` | 有值的输入框 | 内核增量维护(受控组件重置值属站点特性,不稳定的场景用视觉兜底) |
 | `changed` | 本轮变化高亮 | 对比上次状态 |
+
+**感知盲区修复记录**(实战驱动):
+- `world_navigate(url)`:世界内导航(SPA 换页无需关闭重开)
+- `world_click_at(x,y)`:视口坐标点击(世界模型外元素兜底)
+- `world_open` 增加 `stabilize_ms`:等待世界稳定(状态卡 stable)才返回,解决渐进渲染/分层加载的"读太早"问题
+- `page.state: anomaly`:反爬/异常页检测(如闲鱼对自动化会话返回简化页或增删循环页时,世界模型严重缩水 → 标记)
 
 操作类工具(`world_click`/`world_fill`/`world_press`)执行后自动刷新状态卡(等待渲染),返回即见操作结果。
 
