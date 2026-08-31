@@ -46,8 +46,9 @@ async def main():
             assert "counts" in digest, "digest 应为 counts+key 结构化(非 summary 人话)"
             assert "key" in digest, "digest 应含 key(强 ID 引用)"
             assert "summary" not in digest, "结构化语义摘要不应再有人话 summary"
-            assert r.get("digest", {}).get("counts", {}).get("add", 0) >= 1 or len(events) > 0, "应有新增事件"
             assert all("importance" in e for e in events), "事件应带 importance"
+            assert all("world_id" in e for e in events), "事件应带 world_id(标签页 ID,多世界不混淆)"
+            assert r.get("digest", {}).get("counts", {}).get("add", 0) >= 1 or len(events) > 0, "应有新增事件"
             # 带语义标签的事件应可归类
             tagged = [e for e in events if e.get("semantic")]
             print(f"   带 semantic 标签的事件: {len(tagged)}/{len(events)}")

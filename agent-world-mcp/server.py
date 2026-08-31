@@ -110,7 +110,7 @@ async def list_tools():
         ),
         types.Tool(
             name="world_entities",
-            description="构件清单(图纸构件表):按角色/标签/文本/名字/可交互/视口过滤查询元素,返回编号、名字、坐标。",
+            description="构件清单(图纸构件表):按角色/标签/文本/名字/稳定指纹/可交互/视口过滤查询元素,返回编号、名字、坐标、指纹。指纹=跨会话稳定的第二 ID(同站多次进出可快速认路)。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -119,6 +119,7 @@ async def list_tools():
                     "tag": {"type": "string", "description": "HTML 标签,如 a/button/input/div"},
                     "text": {"type": "string", "description": "文本包含(子串匹配)"},
                     "name": {"type": "string", "description": "名字包含(如 round-trip 匹配 combobox.round-trip)"},
+                    "fingerprint": {"type": "string", "description": "稳定指纹精确匹配(同站多次进出的认路记忆,从上次 world_entity 详图里取)"},
                     "interactive": {"type": "boolean", "description": "是否可交互"},
                     "in_viewport": {"type": "boolean", "description": "是否在当前视口内"},
                     "max_results": {"type": "integer", "description": "最多返回条数", "default": 100},
@@ -128,7 +129,7 @@ async def list_tools():
         ),
         types.Tool(
             name="world_entity",
-            description="单个构件详情:编号、名字、坐标、语义、文本、可交互、邻居(上下左右)、所在区域。",
+            description="单个构件详情:编号、名字、稳定指纹、坐标、语义、文本、可交互、邻居(上下左右)、所在区域。指纹是跨会话稳定的第二 ID,用于同站多次进出时快速认路。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -731,8 +732,11 @@ def _t_world_changes(args):
     since = int(args.get("since", 0))
     data = _evaluate(wid, "(s) => agentWorld.changes(s)", since)
     events = data.get("events", [])
-    # 逐条附重要性(不新增往返:内核事件已带 name/semantic)
+    # 逐条附世界号 + 重要性(不新增往返:内核事件已带 name/semantic)
+    # world_id 即标签页 ID:AI 同时管理多个世界时,光看事件就知道属于哪一页,
+    # 避免跨世界 el_595 混淆(不同世界的 el_N 各自独立编号)
     for evt in events:
+        evt["world_id"] = wid
         evt["importance"] = _event_importance(evt)
     data["digest"] = _change_digest(events)
     return _ok(data)

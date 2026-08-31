@@ -172,6 +172,10 @@ world_open(url, cdp_url="http://localhost:9222")
 
 5. **`world_wait` 事件驱动(替代轮询)**:内核 `AgentRuntime.waitFor()` 注册 waiter,MutationObserver 每次 flush(`handleMutation`)后检查条件、命中即 resolve;server 端用 `page.evaluate` 的 Promise await 机制等待,彻底去掉旧的 `time.sleep(0.3)` 轮询循环。实测:条件已满足 0.04s 返回、动态出现 0.03s 命中、消失 0.16s、超时精确(2s 超时 2.04s 返回)。返回带 `driven: event|timeout` 标明路径。
 
+6. **世界号 + 稳定指纹(2026-08-31)**:两个跨世界正确性/认路设计——
+   - **事件带 `world_id`(标签页 ID)**:`world_changes` 每条事件附所属世界号,AI 同时管理多个世界时不会把不同页的 `el_595` 读混(各世界编号独立,世界号是全局唯一前缀)。
+   - **稳定指纹(第二 ID,同站认路)**:scanner 为每个元素算 `fingerprint`(semantic+tag+稳定属性 id/aria-label/placeholder/title/alt/href+祖先路径,**不含易变文本/class/坐标**)。同一站点多次 `world_open` 时指纹**可重算、一致、不落盘**——第二次进站直接 `world_entities(fingerprint=...)` 一步定位上次用过的元素,不用重新认路。`world_entities` 结果与 `world_entity` 详图均带 `fingerprint`。实测 tabs 页 8 元素 8 唯一指纹零撞车,两次进站指纹一致且命中后可正常操作。
+
 **语义摘要 + 重要性加权是闭环的基础设施**:闭环反馈不能把原始 diff 全塞给 agent(信息洪水、上下文爆炸),"快"靠"给得更少但更准"。实测路线:全页 digest(变更可读化)+ 空间作用域 effect(操作生效报告),两级配合。
 
 ## 安装与配置

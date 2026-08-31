@@ -60,6 +60,40 @@ window.AgentRuntime = window.AgentRuntime || {};
   }
 
   /**
+   * 计算稳定指纹(跨会话可重算的"第二 ID"——CAD 图纸上元素的身份编号)。
+   * 用途:同一站点多次进出(world_open)时,不用重新认路——按指纹即可找到上次用过的元素。
+   * 设计:
+   *   - 只取"结构性稳定特征":semantic + tag + 稳定属性(id/aria-label/title/placeholder/alt/href) + 祖先 tag 路径
+   *   - 排除易变内容:正文文本(textContent)、class、坐标、可见性——这些会随会话/滚动/动态内容变化
+   *   - 语义:按钮搜索框 = "button|input|aria-label=搜索",指纹稳定可重算
+   */
+  function computeFingerprint(el, tag, semantic) {
+    if (tag === 'html') return 'root.html';
+    if (tag === 'body') return 'root.body';
+    const parts = [semantic, tag];
+    // 稳定属性(与 generateName 同源,页面未改版则跨会话稳定)
+    const stableAttrs = [
+      ['id', el.id], ['aria-label', el.getAttribute('aria-label')],
+      ['title', el.getAttribute('title')], ['placeholder', el.getAttribute('placeholder')],
+      ['alt', el.getAttribute('alt')], ['href', el.getAttribute('href')],
+    ];
+    for (const [k, v] of stableAttrs) {
+      if (v && String(v).trim()) parts.push(`${k}=${String(v).trim().slice(0, 60)}`);
+    }
+    // 祖先 tag 路径(最多 3 层,区分同语义同标签的不同实例,如两个 button)
+    const path = [];
+    let cur = el.parentElement;
+    for (let i = 0; i < 3 && cur && cur.tagName; i++) {
+      const t = cur.tagName.toLowerCase();
+      if (t === 'body' || t === 'html') break;
+      path.unshift(t);
+      cur = cur.parentElement;
+    }
+    if (path.length) parts.push(`path=${path.join('>')}`);
+    return parts.join('|');
+  }
+
+  /**
    * 扫描单个元素（不是整个页面）
    */
   function scanElement(el) {
@@ -88,6 +122,7 @@ window.AgentRuntime = window.AgentRuntime || {};
     return {
       id,
       name: generateName(el, tag, semantic),
+      fingerprint: computeFingerprint(el, tag, semantic),
       tag,
       text: (el.textContent || '').trim().substring(0, 100),
       bounds: {
@@ -184,7 +219,7 @@ window.AgentRuntime = window.AgentRuntime || {};
     return elements;
   }
 
-  global.AgentRuntime.scanner = { scanElement, scanAll, getStableId, generateName, GRID_SIZE };
+  global.AgentRuntime.scanner = { scanElement, scanAll, getStableId, generateName, computeFingerprint, GRID_SIZE };
 })(window);
 
 // ===== engine/occupancy.js =====
@@ -752,11 +787,11 @@ window.AgentRuntime = window.AgentRuntime || {};
 
     /**
      * 构件清单（统一过滤式查询，CAD 构件表）
-     * filter: { role, tag, text, name, interactive, inViewport, maxResults }
+     * filter: { role, tag, text, name, fingerprint, interactive, inViewport, maxResults }
      */
     findEntities(filter = {}) {
       const {
-        role, tag, text, name, interactive, inViewport, maxResults = 200
+        role, tag, text, name, fingerprint, interactive, inViewport, maxResults = 200
       } = filter;
       const result = [];
       for (const el of this.world.elements.values()) {
@@ -764,11 +799,13 @@ window.AgentRuntime = window.AgentRuntime || {};
         if (tag && el.tag !== String(tag).toLowerCase()) continue;
         if (text && !(el.text || '').toLowerCase().includes(String(text).toLowerCase())) continue;
         if (name && !(el.name || '').toLowerCase().includes(String(name).toLowerCase())) continue;
+        if (fingerprint && el.fingerprint !== fingerprint) continue;
         if (interactive !== undefined && el.interactive !== !!interactive) continue;
         if (inViewport !== undefined && el.inViewport !== !!inViewport) continue;
         result.push({
           id: el.id,
           name: el.name,
+          fingerprint: el.fingerprint,
           tag: el.tag,
           semantic: el.semantic,
           text: el.text,

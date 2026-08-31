@@ -145,11 +145,11 @@ window.AgentRuntime = window.AgentRuntime || {};
 
     /**
      * 构件清单（统一过滤式查询，CAD 构件表）
-     * filter: { role, tag, text, name, interactive, inViewport, maxResults }
+     * filter: { role, tag, text, name, fingerprint, interactive, inViewport, maxResults }
      */
     findEntities(filter = {}) {
       const {
-        role, tag, text, name, interactive, inViewport, maxResults = 200
+        role, tag, text, name, fingerprint, interactive, inViewport, maxResults = 200
       } = filter;
       const result = [];
       for (const el of this.world.elements.values()) {
@@ -157,11 +157,13 @@ window.AgentRuntime = window.AgentRuntime || {};
         if (tag && el.tag !== String(tag).toLowerCase()) continue;
         if (text && !(el.text || '').toLowerCase().includes(String(text).toLowerCase())) continue;
         if (name && !(el.name || '').toLowerCase().includes(String(name).toLowerCase())) continue;
+        if (fingerprint && el.fingerprint !== fingerprint) continue;
         if (interactive !== undefined && el.interactive !== !!interactive) continue;
         if (inViewport !== undefined && el.inViewport !== !!inViewport) continue;
         result.push({
           id: el.id,
           name: el.name,
+          fingerprint: el.fingerprint,
           tag: el.tag,
           semantic: el.semantic,
           text: el.text,
