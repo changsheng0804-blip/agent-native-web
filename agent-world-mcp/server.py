@@ -784,6 +784,35 @@ def _t_world_fill(args):
     ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target)
     if not ent:
         raise ValueError(f"构件不存在: {args['id']}")
+    
+    # 优先检查: 当前是否已有聚焦的活动输入框(处理 SPA 点击后弹出的激活态输入副本)
+    is_focused = _evaluate(
+        wid,
+        """(id) => {
+            const act = document.activeElement;
+            const el = agentWorld._runtime.world.elements.get(id);
+            if (!act || !el) return false;
+            if (act === el._el || el._el.contains(act)) return true;
+            if (act.tagName === 'INPUT' || act.tagName === 'TEXTAREA' || act.getAttribute('contenteditable') === 'true') {
+                const dialog = act.closest('[role="dialog"], dialog, .modal, [aria-modal="true"]');
+                if (dialog && dialog.contains(act) && !dialog.contains(el._el)) return true;
+            }
+            return false;
+        }""",
+        target,
+    )
+    
+    if is_focused:
+        try:
+            if type_delay_ms > 0:
+                w["page"].keyboard.type(text, delay=type_delay_ms)
+            else:
+                w["page"].keyboard.insert_text(text)
+            _refresh_core_status(wid)
+            return _ok({"world_id": wid, "filled": target, "text": text, "method": "active-keyboard-type"})
+        except Exception:
+            pass
+
     loc = _build_locator(w, ent)
     if loc:
         try:
