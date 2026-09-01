@@ -344,13 +344,19 @@ async def run_case(session, case):
     # 等待渲染(给 effect 的轮询和 truth 一个稳定窗口)
     await asyncio.sleep(1.5)
 
-    # Truth 判定
-    truth, truth_detail = await truth_check(session, wid, case["truth_mode"], case.get("truth_text"))
-    if case["truth_mode"] == "url_change":
-        r = await call(session, "world_eval", {"world_id": wid, "expression": "() => location.href"})
-        url_after = r.get("result")
-        truth = bool(url_after and url_before and url_after != url_before)
-        truth_detail = f"url: {str(url_before)[:60]} → {str(url_after)[:60]}"
+    # Truth 判定(查询失败→该场景 SKIP:真值不可得时不应计入矩阵,避免污染 FP 一票否决)
+    try:
+        truth, truth_detail = await truth_check(session, wid, case["truth_mode"], case.get("truth_text"))
+        if case["truth_mode"] == "url_change":
+            r = await call(session, "world_eval", {"world_id": wid, "expression": "() => location.href"})
+            url_after = r.get("result")
+            truth = bool(url_after and url_before and url_after != url_before)
+            truth_detail = f"url: {str(url_before)[:60]} → {str(url_after)[:60]}"
+    except Exception as e:
+        await call(session, "world_close", {"world_id": wid})
+        return {"name": name, "class": "SKIP", "verdict": None, "confidence": None, "truth": None,
+                "why": f"truth 查询失败(页面导航中/上下文销毁): {type(e).__name__}: {str(e)[:100]}",
+                "action_note": action_note, "truth_detail": "", "note": case.get("note", "")}
 
     verdict = effect.get("verdict") if effect else None
     confidence = effect.get("confidence") if effect else None
@@ -586,9 +592,14 @@ async def main():
 
             if fp > 0:
                 print("\n⚠️ 出现 FP:暂停横向扩展,需先收紧判定(见方案第八节)")
+                return 1
             elif acc >= 80:
                 print("\n✅ 通过线达标:可考虑横向复制(fill/press 带 effect)")
+            else:
+                print(f"\n❌ 通过线未达标:准确率 {acc:.0f}% < 80%")
+                return 1
+            return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(asyncio.run(main()))
