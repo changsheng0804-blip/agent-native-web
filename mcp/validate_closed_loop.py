@@ -11,6 +11,7 @@ Truth Oracle 是上帝视角:直接查 DOM/URL,与 effect 的空间区域推断�
   FN   Truth 生效   ∧ verdict=no-change (agent 误以为失败)
   AM   Truth 生效   ∧ verdict=changed    (低置信,可接受但应改进)
   AMs  Truth 未生效 ∧ verdict=changed    (区域有变化但页面没生效,值得记录)
+  visual-effected 语义等同 effected(视觉 diff 兜底,PR #2):TP 或 FP,受 FP=0 铁律约束
 通过线:TP+TN ≥ 80% 且 FP=0
 """
 import asyncio
@@ -159,6 +160,30 @@ CASES = [
         "note": "先点开弹窗再按 Escape → 弹窗应消失(disappear 信号)",
     },
     {
+        "name": "visual-css(纯 CSS 视觉生效·PR2 视觉兜底)",
+        "url": (FIXTURES / "visual.html").as_uri(),
+        "open_wait_ms": 1200,
+        "find": {"text": "视觉动画"},
+        "action": "click",
+        "action_text": None,
+        "visual_evidence": True,
+        "truth_mode": "visual-flip",
+        "expect": "effected",
+        "note": "DOM 无增删、纯背景色翻转 → 应触发视觉 diff 兜底 visual-effected,TP",
+    },
+    {
+        "name": "visual-negative(视觉兜底负例·不误报)",
+        "url": (FIXTURES / "visual.html").as_uri(),
+        "open_wait_ms": 1200,
+        "find": {"text": "无副作用标题"},
+        "action": "click",
+        "action_text": None,
+        "visual_evidence": True,
+        "truth_mode": "visual-none",
+        "expect": "no-change",
+        "note": "点击无副作用元素 → 不应被视觉兜底误判为 visual-effected(若是→FP 一票否决)",
+    },
+    {
         "name": "wiki-search(填搜索框触发联想)",
         "url": "https://en.wikipedia.org/wiki/Main_Page",
         "open_wait_ms": 3000,
@@ -236,6 +261,10 @@ async def call(session, name, args, timeout=90):
 
 
 def classify(truth, verdict):
+    # visual-effected 是"纯视觉变化"的判定(PR #2 视觉 diff 兜底):
+    # 语义等同 effected——truth 也生效 → TP;truth 未生效 → FP(一票否决,防止视觉兜底误报)
+    if verdict == "visual-effected":
+        verdict = "effected"
     if truth:
         if verdict == "effected":
             return "TP"
@@ -265,6 +294,14 @@ async def truth_check(session, wid, mode, text=None):
         return bool(json.loads(r.get("result", "false"))), "无可见dialog" if json.loads(r.get("result", "false")) else "dialog仍可见"
     if mode == "tab-b-selected":
         r = await call(session, "world_eval", {"world_id": wid, "expression": TRUTH_TAB_B_SELECTED})
+        return bool(json.loads(r.get("result", "false"))), "tab-b选中" if json.loads(r.get("result", "false")) else "tab-b未选中"
+    if mode == "visual-flip":
+        # 视觉夹具页专用:目标 div 的 classList 是否包含 active(纯 CSS 状态翻转,无 DOM 增删)
+        r = await call(session, "world_eval", {"world_id": wid, "expression": "() => document.getElementById('anim').classList.contains('active')"})
+        return bool(json.loads(r.get("result", "false"))), "动画目标已变 active" if json.loads(r.get("result", "false")) else "动画目标未变"
+    if mode == "visual-none":
+        # 视觉负例:检查 DOM 中是否有任何结构性变化(标题类元素不应产生)
+        return False, "无变化"
         return bool(json.loads(r.get("result", "false"))), "tab-b选中" if json.loads(r.get("result", "false")) else "tab-b未选中"
     if mode == "input_value":
         r = await call(session, "world_eval", {"world_id": wid, "expression": truth_input_has_text(text or "")})
@@ -320,21 +357,23 @@ async def run_case(session, case):
     # 执行动作
     effect = None
     action_note = ""
+    # 视觉证据:场景声明 visual_evidence=True 时,动作携带 visual_evidence(触发视觉 diff 兜底)
+    ve = {"visual_evidence": True} if case.get("visual_evidence") else {}
     try:
         if case["action"] == "click":
-            r = await call(session, "world_click", {"world_id": wid, "id": target_id})
+            r = await call(session, "world_click", {"world_id": wid, "id": target_id, **ve})
             effect = r.get("effect")
         elif case["action"] == "fill":
-            r = await call(session, "world_fill", {"world_id": wid, "id": target_id, "text": case["action_text"]})
+            r = await call(session, "world_fill", {"world_id": wid, "id": target_id, "text": case["action_text"], **ve})
             effect = r.get("effect")
             action_note = f"fill method={r.get('method')}"
         elif case["action"] == "fill_submit":
-            r = await call(session, "world_fill", {"world_id": wid, "id": target_id, "text": case["action_text"]})
+            r = await call(session, "world_fill", {"world_id": wid, "id": target_id, "text": case["action_text"], **ve})
             effect = r.get("effect")
             action_note = f"fill method={r.get('method')}"
             await call(session, "world_press", {"world_id": wid, "id": target_id, "key": "Enter"})
         elif case["action"] == "press":
-            r = await call(session, "world_press", {"world_id": wid, "id": target_id, "key": case["action_key"]})
+            r = await call(session, "world_press", {"world_id": wid, "id": target_id, "key": case["action_key"], **ve})
             effect = r.get("effect")
             action_note = f"press {case['action_key']}"
     except Exception as e:

@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>视觉动画测试页</title>
+<style>
+  #anim { width: 200px; height: 80px; background: #3498db; color: #fff;
+          line-height: 80px; text-align: center; cursor: pointer; transition: background 0.3s; user-select: none; }
+  #anim.active { background: #e74c3c; }
+  #static { margin-top: 30px; width: 240px; height: 40px; background: #ccc; text-align: center; line-height: 40px; }
+</style>
+</head>
+<body>
+  <h1>视觉动画测试页</h1>
+  <div id="anim" onclick="this.classList.toggle('active')">视觉动画 点击变色</div>
+  <div id="static">无副作用标题</div>
+</body>
+</html>

@@ -5,22 +5,20 @@
 ## 运行
 
 ```bash
-pip install mcp playwright
+pip install mcp playwright pillow
 playwright install chromium
 python server.py
 ```
+
+> ⚠️ `pillow` 是必须依赖(PR #2 起用于视觉 diff 与 Set-of-Mark 标注绘图);缺失会导致 server.py 启动即崩溃。
 
 服务器使用标准输入输出模式，由 MCP 客户端启动。服务器会读取 `../extension/all-in-one.js` 作为网页注入内核。
 
 ## 本地验证
 
 ```bash
-python test_enhancements.py
-python test_status.py
-python test_ipi_filter.py
-python test_wait_event.py
-python test_map.py
-python test_map_drill.py
+python run_quality.py           # 质检流水线(推荐入口,自动跑前置检查+离线组)
+python run_quality.py --real    # 离线 + 真实网站全量
 ```
 
 真实网站探针包括 `probe_site.py`、`probe_fill.py` 和 `validate_closed_loop.py`。测试结果记录在 `validate_report.md`。

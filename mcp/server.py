@@ -259,6 +259,7 @@ async def list_tools():
                 "properties": {
                     "world_id": {"type": "integer"},
                     "id": {"type": "string", "description": "构件编号或名字"},
+                    "visual_evidence": {"type": "boolean", "description": "是否启用视觉 diff 兜底(截取目标区域前后帧做像素比对,捕获纯 CSS 动效/浮层变化)。默认 False 以保持快速;需要视觉证据时开启", "default": False},
                 },
                 "required": ["world_id", "id"],
             },
@@ -273,6 +274,7 @@ async def list_tools():
                     "id": {"type": "string", "description": "构件编号或名字"},
                     "text": {"type": "string", "description": "要填入的文本"},
                     "type_delay_ms": {"type": "integer", "description": "逐字打字延迟毫秒(>0 时模拟真实键盘输入,触发自动联想下拉)", "default": 0},
+                    "visual_evidence": {"type": "boolean", "description": "是否启用视觉 diff 兜底(默认 False 保持快速)", "default": False},
                 },
                 "required": ["world_id", "id", "text"],
             },
@@ -310,6 +312,7 @@ async def list_tools():
                     "world_id": {"type": "integer"},
                     "id": {"type": "string", "description": "构件编号或名字"},
                     "key": {"type": "string", "description": "按键名,如 Enter、Escape、Tab、ArrowDown"},
+                    "visual_evidence": {"type": "boolean", "description": "是否启用视觉 diff 兜底(默认 False 保持快速)", "default": False},
                 },
                 "required": ["world_id", "id", "key"],
             },
@@ -1489,13 +1492,14 @@ def _finalize_click_result(wid, ret, before_signal):
     return ret
 
 
-def _click_region_snapshot(wid, target_id):
+def _click_region_snapshot(wid, target_id, capture_frame=False):
     """点击前冻结目标空间区域:以目标 bounds 中心 ±CLICK_REGION_PAD 为矩形。
     返回 (region, rows)——region 是固定坐标,点击后 target 可能消失也用它做 diff。
     附带全页可见 dialog/menu 集合(远距弹窗兜底)与目标自身状态(状态切换兜底,如 tab/折叠/勾选)。
     rows: 区域内构件 [id, semantic, name]
     dialogs: 全页可见 dialog/alertdialog/menu 构件 [id, semantic, name]
     target: {page_id, state} —— state={ariaSelected, ariaExpanded, checked, className}
+    capture_frame: 是否额外截取区域截图(供视觉 diff 兜底;默认不截,避免每次操作的开销)
     """
     raw = _evaluate(
         wid,
@@ -1541,17 +1545,18 @@ def _click_region_snapshot(wid, target_id):
     if not raw:
         return None
     data = json.loads(raw)
-    try:
-        w = _world(wid)
-        reg = data["region"]
-        frame_path = SCREENSHOT_DIR / f"frame_before_{wid}_{int(time.time()*1000)}.png"
-        w["page"].screenshot(
-            path=str(frame_path),
-            clip={"x": max(0, reg["x0"]), "y": max(0, reg["y0"]), "width": max(10, reg["x1"] - reg["x0"]), "height": max(10, reg["y1"] - reg["y0"])}
-        )
-        data["frame_path"] = frame_path
-    except Exception:
-        pass
+    if capture_frame:
+        try:
+            w = _world(wid)
+            reg = data["region"]
+            frame_path = SCREENSHOT_DIR / f"frame_before_{wid}_{int(time.time()*1000)}.png"
+            w["page"].screenshot(
+                path=str(frame_path),
+                clip={"x": max(0, reg["x0"]), "y": max(0, reg["y0"]), "width": max(10, reg["x1"] - reg["x0"]), "height": max(10, reg["y1"] - reg["y0"])}
+            )
+            data["frame_path"] = frame_path
+        except Exception:
+            pass
     return data
 
 
@@ -1835,8 +1840,11 @@ def _t_world_click(args):
     if not ent:
         raise ValueError(f"构件不存在: {args['id']}")
 
+    # 视觉证据开关:显式要求时才截前后帧(视觉 diff 兜底),避免每次操作的开销
+    visual_evidence = bool(args.get("visual_evidence", False))
+
     # 点击前:冻结目标空间区域(生效报告的证据基线)
-    snap_before = _click_region_snapshot(wid, target)
+    snap_before = _click_region_snapshot(wid, target, capture_frame=visual_evidence)
     before_signal = _page_signal_snapshot(wid)
     url_before = before_signal["url"]
 
@@ -1920,8 +1928,9 @@ def _t_world_fill(args):
     ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target)
     if not ent:
         raise ValueError(f"构件不存在: {args['id']}")
+    visual_evidence = bool(args.get("visual_evidence", False))
     # 填表前:冻结目标空间区域(生效报告的证据基线)
-    snap_before = _click_region_snapshot(wid, target)
+    snap_before = _click_region_snapshot(wid, target, capture_frame=visual_evidence)
     url_before = w["page"].url
     loc = _build_locator(w, ent)
     if loc:
@@ -2034,8 +2043,9 @@ def _t_world_press(args):
     ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target)
     if not ent:
         raise ValueError(f"构件不存在: {args['id']}")
+    visual_evidence = bool(args.get("visual_evidence", False))
     # 按键前:冻结目标空间区域 + URL(生效报告的证据基线)
-    snap_before = _click_region_snapshot(wid, target)
+    snap_before = _click_region_snapshot(wid, target, capture_frame=visual_evidence)
     url_before = w["page"].url
     # 按 key 决定是否开启"弹窗消失"证据(Escape 关弹窗/菜单 = 生效)
     disappear_ok = key.lower() in ("escape", "esc")
