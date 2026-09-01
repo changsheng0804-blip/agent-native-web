@@ -2,7 +2,7 @@
 
 > **用途**:本文件作为独立研究方向的入口备忘录,供未来独立对话深入分析。
 > **核心主题**:以"原生网页世界(结构化感知层)作为 Web Agent 的感知层"为视角,探讨其具备的对抗 Indirect Prompt Injection(IPI)的防御机制——**注意:这是纵深防御的第一层,不是"天然免疫"**。
-> **关联项目**:https://github.com/changsheng0804-blip/agent-web-suite
+> **关联项目**:https://github.com/changsheng0804-blip/agent-native-web
 > **术语**:本项目已弃用"世界模型"一词(与 AI 领域 World Model 冲突),统一使用"原生网页世界"。
 
 ---
