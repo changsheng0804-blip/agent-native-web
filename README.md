@@ -16,6 +16,7 @@ Agent-Native Web（智能体原生网页）让智能体可以在网页世界中�
 - [智能体技能包](skills/agent-world/SKILL.md)
 - [测试夹具](tests/fixtures/)
 - [安全边界说明](docs/安全边界-IPI防御.md)
+- [真实网站操作对比记录](docs/真实网站操作对比记录.md)
 
 ## 快速运行
 
