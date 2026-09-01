@@ -33,6 +33,7 @@ python test_map_drill.py
 world_state          当前最新页面状态
 world_change_digest  压缩后的页面变化摘要
 world_evidence       动作前后的操作证据
+world_guide          根据当前任务生成短导览
 ```
 
 `world_click` 除了返回点击目标附近的局部效果，还会附带 `feedback` 页面整体反馈：
@@ -48,4 +49,5 @@ feedback.changes_seq 页面变化序号前后值
 ```bash
 python test_global_feedback.py
 python test_channels.py
+python test_guide.py
 ```

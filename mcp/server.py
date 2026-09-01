@@ -16,6 +16,7 @@ Agent World MCP Server
   world_state    页面状态信道(读取最新整体状态)
   world_change_digest 变化摘要信道(读取压缩后的变化)
   world_evidence 操作证据信道(读取动作前后证据)
+  world_guide   结合三条信道生成任务导览
   world_click    编号驱动点击 + 页面整体反馈
   world_fill     编号驱动填表
   world_wait     等待构件出现/消失
@@ -27,6 +28,7 @@ Agent World MCP Server
 """
 import asyncio
 import json
+import re
 import sys
 import time
 import traceback
@@ -231,6 +233,21 @@ async def list_tools():
             },
         ),
         types.Tool(
+            name="world_guide",
+            description="实时任务导览:把页面状态、变化摘要和最近操作证据组合成一份面向当前任务的短导览;只返回相关区域、少量候选入口和下一步,不返回整页地图。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "task": {"type": "string", "description": "当前要完成的任务,尽量用一句话描述"},
+                    "change_since": {"type": "integer", "description": "变化摘要上次读取到的序号", "default": 0},
+                    "evidence_since": {"type": "integer", "description": "操作证据上次读取到的序号", "default": 0},
+                    "max_candidates": {"type": "integer", "description": "最多返回候选入口数", "default": 6},
+                },
+                "required": ["world_id", "task"],
+            },
+        ),
+        types.Tool(
             name="world_click",
             description="按编号点击元素(原生 click 事件)。带遮挡检测与自动等待，并返回页面整体反馈(URL、页面状态、弹窗/菜单和变化序号);如果页面已跳转或出现覆盖层,优先按整体事实修正局部效果判断。",
             inputSchema={
@@ -403,7 +420,7 @@ def _impl_with_status(name, args):
         except Exception:
             # 证据记录不能阻断原有动作返回。
             pass
-    if name in {"world_state", "world_change_digest", "world_evidence"}:
+    if name in {"world_state", "world_change_digest", "world_evidence", "world_guide"}:
         return result
     return _inject_status(result, wid)
 
@@ -562,6 +579,8 @@ def _impl(name, args):
         return _t_world_change_digest(args)
     if name == "world_evidence":
         return _t_world_evidence(args)
+    if name == "world_guide":
+        return _t_world_guide(args)
     if name == "world_click":
         return _t_world_click(args)
     if name == "world_fill":
@@ -877,6 +896,7 @@ def _t_world_change_digest(args):
         "channel": "change-digest",
         "from": since,
         "to": data.get("to", since),
+        "cursor_reset": data.get("to", since) < since,
         "changed": bool(events),
         "events_seen": len(events),
         "counts": digest.get("counts", {}),
@@ -925,6 +945,7 @@ def _record_action_evidence(wid, action, args, before, result):
         "title_changed": title_changed,
         "new_overlays": new_overlays[:8],
         "gone_overlays": gone_overlays[:8],
+        "changes_seq_changed": after.get("changes_seq", 0) != before.get("changes_seq", 0),
         "changes_seq_advanced": after.get("changes_seq", 0) > before.get("changes_seq", 0),
     }
     verdict = effect.get("verdict")
@@ -974,6 +995,248 @@ def _t_world_evidence(args):
         "latest": int(w.get("evidence_seq", 0)),
         "has_more": len(all_items) > len(items),
         "evidence": items,
+    })
+
+
+def _guide_terms(task):
+    """从一句任务描述提取少量搜索锚点,不让导览层读取完整页面文本。"""
+    stopwords = {
+        "请帮我", "帮我", "帮助", "找到", "查找", "查看", "打开", "进入", "点击", "确认",
+        "页面", "网页", "网站", "当前", "任务", "并", "和", "的", "一个", "一下", "区域",
+        "操作", "完成", "是否", "然后", "之后", "上方", "里面", "这个", "那个",
+        "find", "open", "go", "to", "the", "a", "an", "and", "on", "in", "page", "confirm",
+    }
+    raw = re.findall(r"[a-z0-9][a-z0-9_-]*|[\u4e00-\u9fff]{2,}", str(task).lower())
+    terms = []
+    aliases = {
+        "拉取请求": "pull requests",
+        "合并请求": "pull requests",
+        "问题": "issues",
+        "筛选": "filter",
+        "搜索": "search",
+        "发布": "release",
+        "标签": "tag",
+        "模型": "model",
+        "弹窗": "dialog",
+    }
+    for item in raw:
+        for source, alias in aliases.items():
+            if source in item and alias not in terms:
+                terms.append(alias)
+        cleaned = item
+        for stop in stopwords:
+            cleaned = cleaned.replace(stop, " ")
+        parts = re.findall(r"[a-z0-9][a-z0-9_-]*|[\u4e00-\u9fff]{2,}", cleaned)
+        for term in parts:
+            if term not in stopwords and len(term) >= 2 and term not in terms:
+                terms.append(term)
+    expanded = list(terms)
+    for term in terms:
+        alias = aliases.get(term)
+        if alias and alias not in expanded:
+            expanded.append(alias)
+    # 网页上“筛选”经常由搜索输入框承载,两者应作为同一任务焦点。
+    if "filter" in expanded and "search" not in expanded:
+        expanded.append("search")
+    if "search" in expanded and "filter" not in expanded:
+        expanded.append("filter")
+    return expanded[:16]
+
+
+def _t_world_guide(args):
+    """把三个页面信道和当前实时结构组合成一份短的任务导览。"""
+    wid = args["world_id"]
+    task = str(args["task"]).strip()
+    if not task:
+        raise ValueError("task 不能为空,请用一句话描述当前任务")
+    max_candidates = max(1, min(int(args.get("max_candidates", 6)), 12))
+    change_since = int(args.get("change_since", 0))
+    evidence_since = int(args.get("evidence_since", 0))
+    try:
+        _evaluate(wid, "() => { agentWorld._runtime.refreshStatus(); return true; }")
+    except Exception:
+        pass
+
+    state = _page_signal_snapshot(wid)
+    change_digest = _result_payload(_t_world_change_digest({
+        "world_id": wid,
+        "since": change_since,
+    }))
+    w = _world(wid)
+    recent_evidence_raw = [
+        x for x in w.get("evidence_log", [])
+        if x.get("evidence_seq", 0) > evidence_since
+    ][-5:]
+    # 导览只带最近证据的短摘要;需要动作前后完整状态时再读 world_evidence。
+    recent_evidence = []
+    for item in recent_evidence_raw:
+        after = item.get("after") or {}
+        transition = item.get("transition") or {}
+        recent_evidence.append({
+            "evidence_seq": item.get("evidence_seq"),
+            "action": item.get("action"),
+            "target": item.get("target"),
+            "verdict": item.get("verdict"),
+            "confidence": item.get("confidence"),
+            "why": item.get("why"),
+            "after": {
+                "url": after.get("url"),
+                "title": after.get("title"),
+                "state": after.get("state"),
+            },
+            "transition": {
+                "url_changed": transition.get("url_changed"),
+                "new_overlays": transition.get("new_overlays", [])[:8],
+                "gone_overlays": transition.get("gone_overlays", [])[:8],
+                "changes_seq_changed": transition.get("changes_seq_changed"),
+            },
+        })
+    terms = _guide_terms(task)
+    raw_candidates = _evaluate(
+        wid,
+        """(arg) => {
+            const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '');
+            const terms = (arg.terms || []).map(norm).filter(Boolean);
+            const map = agentWorld.query.map(8);
+            const rows = [];
+            const seen = new Set();
+            const push = (e, rg) => {
+                if (!e || seen.has(e.id)) return;
+                const href = e.attributes && e.attributes.href;
+                const hay = norm([
+                    rg.name, rg.semantic, e.name, e.text, e.semantic, href
+                ].join(' '));
+                const matched = [];
+                let score = 0;
+                    for (const term of terms) {
+                        if (term && hay.includes(term)) {
+                            matched.push(term);
+                            score += Math.min(10, term.length) + (href ? 2 : 0);
+                            // 任务明确寻找筛选/搜索时,优先实际控件和搜索区域,
+                            // 避免页面标题或列表内容淹没任务入口。
+                            if (term === 'filter' || term === 'search') {
+                                if (rg.semantic === 'search') score += 12;
+                                if (['input', 'searchbox', 'textbox', 'select'].includes(e.semantic)) score += 10;
+                                if (e.semantic === 'navigation' && /filter/i.test(String(e.text || ''))) score += 5;
+                            }
+                        }
+                    }
+                if (!score) return;
+                seen.add(e.id);
+                rows.push({
+                    id: e.id,
+                    name: e.name,
+                    text: e.text,
+                    semantic: e.semantic,
+                    interactive: !!e.interactive,
+                    inViewport: !!e.inViewport,
+                    bounds: e.bounds,
+                    fingerprint: e.fingerprint,
+                    href: href || null,
+                    region: { semantic: rg.semantic, name: rg.name, bounds: rg.bounds },
+                    matched,
+                    match_score: score
+                });
+            };
+            for (const block of (map.regions || [])) {
+                const rg = block.region || {};
+                for (const entry of (block.entries || [])) {
+                    const e = agentWorld.query.getEntity(entry.id);
+                    push(e, rg);
+                }
+            }
+            // 地图只列每区的少量入口;任务目标可能在未列出的入口中,这里仅作页面内语义兜底。
+            for (const brief of agentWorld.query.findEntities({ interactive: true, maxResults: 1000 })) {
+                if (seen.has(brief.id)) continue;
+                const e = agentWorld.query.getEntity(brief.id) || brief;
+                push(e, { semantic: e.region || 'unknown', name: 'live-entity', bounds: null });
+            }
+            rows.sort((a, b) => {
+                return b.match_score - a.match_score || Number(b.interactive) - Number(a.interactive);
+            });
+            return rows.slice(0, arg.max);
+        }""",
+        {"terms": terms, "max": max_candidates},
+    ) or []
+
+    candidates = []
+    for item in raw_candidates:
+        candidate = {
+            "id": item.get("id"),
+            "name": item.get("name"),
+            "text": item.get("text"),
+            "semantic": item.get("semantic"),
+            "interactive": item.get("interactive"),
+            "in_viewport": item.get("inViewport"),
+            "bounds": item.get("bounds"),
+            "fingerprint": item.get("fingerprint"),
+            "matched_terms": item.get("matched", []),
+            "match_score": item.get("match_score", 0),
+            "region": item.get("region"),
+            "evidence": "live-structure",
+        }
+        if item.get("href"):
+            candidate["href"] = item["href"]
+            candidate["relation"] = "direct-link-confirmed"
+        else:
+            candidate["relation"] = "target-found-destination-unconfirmed"
+        candidates.append(candidate)
+
+    regions = []
+    seen_regions = set()
+    for candidate in candidates:
+        rg = candidate.get("region") or {}
+        key = (rg.get("semantic"), rg.get("name"))
+        if key in seen_regions:
+            continue
+        seen_regions.add(key)
+        regions.append({
+            "semantic": rg.get("semantic"),
+            "name": rg.get("name"),
+            "bounds": rg.get("bounds"),
+            "reason": "包含与当前任务匹配的实时入口",
+        })
+
+    direct_routes = [
+        {
+            "from": state.get("url"),
+            "to": c.get("href"),
+            "via": c.get("id"),
+            "status": "confirmed",
+        }
+        for c in candidates if c.get("href")
+    ]
+    if candidates:
+        next_action = f"优先检查候选 {candidates[0].get('id')} 的详图,再决定是否执行动作"
+    else:
+        next_action = "当前页面没有找到直接匹配入口;不要猜测,先扩大到导航/菜单区域或提供更具体目标词"
+
+    return _ok({
+        "world_id": wid,
+        "channel": "task-guide",
+        "task": task,
+        "terms": terms,
+        "state": {
+            "url": state.get("url"),
+            "title": state.get("title"),
+            "status": state.get("state"),
+            "dialogs": state.get("dialogs", []),
+            "menus": state.get("menus", []),
+        },
+        "change_digest": change_digest,
+        "recent_evidence": recent_evidence,
+        "relevant_regions": regions[:6],
+        "candidates": candidates,
+        "routes": direct_routes[:max_candidates],
+        "next_action": next_action,
+        "unknown": [
+            "点击后的新页面结构尚未确认",
+            "没有公开链接的按钮去向需要执行后用证据确认",
+        ],
+        "next_cursors": {
+            "change_since": change_digest.get("to", change_since),
+            "evidence_since": int(w.get("evidence_seq", evidence_since)),
+        },
     })
 
 
