@@ -77,6 +77,7 @@ GROUPS = {
             "test_action_layer.py",   # 行动层降级链路(GF)
             "test_fingerprint_real.py",  # 指纹真站六站体检
             "test_map_real.py",       # 地图真站六站体检
+            "test_channels_real.py",  # 四条页面信道真站体检(GF弹窗/GitHub导览)
             "validate_closed_loop.py",  # 闭环判定一致性全量(真站 8 场景 + waitFor 专项)
         ],
     },
