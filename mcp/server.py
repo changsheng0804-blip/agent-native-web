@@ -13,7 +13,7 @@ Agent World MCP Server
   world_map      页面结构导览(地图):语义容器分区 + 各区可交互入口
   world_resolve  弱 ID 解析(名字/强 ID/页面原生 id)
   world_changes  变更流(增量续读,游标)
-  world_click    编号驱动点击
+  world_click    编号驱动点击 + 页面整体反馈
   world_fill     编号驱动填表
   world_wait     等待构件出现/消失
   world_screenshot 局部/整页截图(视觉兜底)
@@ -195,7 +195,7 @@ async def list_tools():
         ),
         types.Tool(
             name="world_click",
-            description="按编号点击元素(原生 click 事件)。带遮挡检测与自动等待。",
+            description="按编号点击元素(原生 click 事件)。带遮挡检测与自动等待，并返回页面整体反馈(URL、页面状态、弹窗/菜单和变化序号);如果页面已跳转或出现覆盖层,优先按整体事实修正局部效果判断。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -879,6 +879,141 @@ def _fill_visible(wid, text):
         return False
 
 
+def _page_signal_snapshot(wid):
+    """读取一份很小的页面整体状态,作为动作反馈的全局基线。
+
+    这里不读取整页结构,只关注导航和覆盖层这类会改变任务路径的信号。
+    """
+    w = _world(wid)
+    try:
+        core = _evaluate(wid, "() => agentWorld.query.getStatus()") or {}
+    except Exception:
+        core = {}
+    try:
+        overlays = _evaluate(
+            wid,
+            """() => {
+                const pick = (role) => agentWorld.query.findEntities({
+                    role, inViewport: true, maxResults: 8
+                }).map(e => ({ id: e.id, name: e.name, text: e.text }));
+                return {
+                    dialogs: pick('dialog').concat(pick('alertdialog')),
+                    menus: pick('menu')
+                };
+            }""",
+        ) or {}
+    except Exception:
+        overlays = {}
+    try:
+        title = w["page"].title()[:200]
+    except Exception:
+        title = ""
+    page_state = core.get("page", {}) or {}
+    world_state = core.get("world", {}) or {}
+    return {
+        "url": w["page"].url[:300],
+        "title": title,
+        "state": page_state.get("state", "unknown"),
+        "changes_seq": world_state.get("changesSeq", 0),
+        "dialogs": overlays.get("dialogs", []) or core.get("dialogs", []) or [],
+        "menus": overlays.get("menus", []) or [],
+    }
+
+
+def _signal_items(signal, key):
+    return signal.get(key, []) if isinstance(signal, dict) else []
+
+
+def _signal_delta(before, after, key):
+    """返回信道中新增和消失的覆盖层,只保留小量可读证据。"""
+    def item_key(item):
+        if not isinstance(item, dict):
+            return str(item)
+        return (item.get("id"), item.get("name"), item.get("text"))
+
+    before_map = {item_key(x): x for x in _signal_items(before, key)}
+    after_map = {item_key(x): x for x in _signal_items(after, key)}
+    new_keys = after_map.keys() - before_map.keys()
+    gone_keys = before_map.keys() - after_map.keys()
+    return {
+        "new": [after_map[k] for k in new_keys][:8],
+        "gone": [before_map[k] for k in gone_keys][:8],
+    }
+
+
+def _finalize_click_result(wid, ret, before_signal):
+    """把局部点击结果和页面整体信号合并成最小闭环反馈。
+
+    URL 变化和新弹窗是强证据,即使点击目标附近没有变化,也不能报告 no-change。
+    """
+    after_signal = _page_signal_snapshot(wid)
+    url_changed = before_signal.get("url") != after_signal.get("url")
+    title_changed = before_signal.get("title") != after_signal.get("title")
+    dialog_delta = _signal_delta(before_signal, after_signal, "dialogs")
+    menu_delta = _signal_delta(before_signal, after_signal, "menus")
+    new_overlays = dialog_delta["new"] + menu_delta["new"]
+    gone_overlays = dialog_delta["gone"] + menu_delta["gone"]
+    feedback = {
+        "source": "global-page-state",
+        "page": {
+            "before_url": before_signal.get("url"),
+            "after_url": after_signal.get("url"),
+            "url_changed": url_changed,
+            "before_title": before_signal.get("title"),
+            "after_title": after_signal.get("title"),
+            "title_changed": title_changed,
+            "before_state": before_signal.get("state"),
+            "after_state": after_signal.get("state"),
+        },
+        "overlays": {
+            "new": new_overlays[:8],
+            "gone": gone_overlays[:8],
+            "changed": bool(new_overlays or gone_overlays),
+        },
+        "changes_seq": {
+            "before": before_signal.get("changes_seq", 0),
+            "after": after_signal.get("changes_seq", 0),
+        },
+    }
+    ret["feedback"] = feedback
+
+    effect = ret.get("effect")
+    if effect:
+        effect["global"] = {
+            "url_changed": url_changed,
+            "new_overlays": new_overlays[:8],
+            "title_changed": title_changed,
+        }
+
+    # 全局页面事实优先于目标局部区域判断,纠正导航/弹窗的误报。
+    if url_changed:
+        if effect and effect.get("verdict") != "effected":
+            effect["local_verdict"] = effect.get("verdict")
+            effect["local_why"] = effect.get("why")
+        if not effect:
+            effect = {"observed": [], "region_changed": {"new": 0, "gone": 0}}
+            ret["effect"] = effect
+        effect.update({
+            "verdict": "effected",
+            "confidence": "high",
+            "why": f"页面整体发生导航: URL 从 {before_signal.get('url')} 变为 {after_signal.get('url')}",
+        })
+    elif new_overlays and (not effect or effect.get("verdict") != "effected"):
+        if effect:
+            effect["local_verdict"] = effect.get("verdict")
+            effect["local_why"] = effect.get("why")
+        else:
+            effect = {"observed": [], "region_changed": {"new": 0, "gone": 0}}
+            ret["effect"] = effect
+        names = "、".join((x.get("name") or x.get("text") or x.get("id", "")) for x in new_overlays[:4])
+        effect.update({
+            "verdict": "effected",
+            "confidence": "high",
+            "why": f"页面整体出现新的弹窗/菜单: {names}",
+        })
+    return ret
+
+
 def _click_region_snapshot(wid, target_id):
     """点击前冻结目标空间区域:以目标 bounds 中心 ±CLICK_REGION_PAD 为矩形。
     返回 (region, rows)——region 是固定坐标,点击后 target 可能消失也用它做 diff。
@@ -1191,7 +1326,8 @@ def _t_world_click(args):
 
     # 点击前:冻结目标空间区域(生效报告的证据基线)
     snap_before = _click_region_snapshot(wid, target)
-    url_before = w["page"].url
+    before_signal = _page_signal_snapshot(wid)
+    url_before = before_signal["url"]
 
     # 遮挡检测:检查元素中心点是否被上层弹窗/遮罩层挡住(信息提示,不改变点击行为)
     hit_info = _evaluate(
@@ -1230,7 +1366,7 @@ def _t_world_click(args):
             effect = _wait_click_effect(wid, snap_before, url_before)
             if effect:
                 ret["effect"] = effect
-            return _ok(ret)
+            return _ok(_finalize_click_result(wid, ret, before_signal))
         except Exception as e:
             loc_err = f"{type(e).__name__}: {str(e)[:200]}"
     else:
@@ -1261,7 +1397,7 @@ def _t_world_click(args):
     effect = _wait_click_effect(wid, snap_before, url_before)
     if effect:
         ret["effect"] = effect
-    return _ok(ret)
+    return _ok(_finalize_click_result(wid, ret, before_signal))
 
 
 def _t_world_fill(args):
