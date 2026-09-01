@@ -52,6 +52,9 @@ GROUPS = {
             "test_wait_event.py",     # 事件驱动等待(命中/超时)
             "test_fingerprint.py",    # 稳定指纹跨会话认路
             "validate_closed_loop.py --local",  # 闭环判定一致性(本地 5 场景,fp=0 一票否决)
+            "test_global_feedback.py",   # 页面整体反馈优先于局部(URL/弹窗/no-change)
+            "test_channels.py",          # 三条独立信道(状态/变化摘要/操作证据)
+            "test_guide.py",             # 实时任务导览接入信道
         ],
     },
     "real": {
