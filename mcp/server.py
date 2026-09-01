@@ -13,6 +13,9 @@ Agent World MCP Server
   world_map      页面结构导览(地图):语义容器分区 + 各区可交互入口
   world_resolve  弱 ID 解析(名字/强 ID/页面原生 id)
   world_changes  变更流(增量续读,游标)
+  world_state    页面状态信道(读取最新整体状态)
+  world_change_digest 变化摘要信道(读取压缩后的变化)
+  world_evidence 操作证据信道(读取动作前后证据)
   world_click    编号驱动点击 + 页面整体反馈
   world_fill     编号驱动填表
   world_wait     等待构件出现/消失
@@ -194,6 +197,40 @@ async def list_tools():
             },
         ),
         types.Tool(
+            name="world_state",
+            description="页面状态信道:只读取当前最新的整体页面状态,包括网址、标题、稳定状态、弹窗/菜单和变化序号;不返回完整页面结构。",
+            inputSchema={
+                "type": "object",
+                "properties": {"world_id": {"type": "integer"}},
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_change_digest",
+            description="变化摘要信道:读取自 since 序号以来的压缩变化摘要,只返回数量、重要构件和变化游标,不返回原始事件列表。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "since": {"type": "integer", "description": "上次读到的变化序号", "default": 0},
+                },
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_evidence",
+            description="操作证据信道:读取动作前后页面状态、网址、弹窗/菜单变化和结果判断;不保存填入的具体文本内容。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "since": {"type": "integer", "description": "上次读到的证据序号", "default": 0},
+                    "limit": {"type": "integer", "description": "最多返回条数", "default": 20},
+                },
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
             name="world_click",
             description="按编号点击元素(原生 click 事件)。带遮挡检测与自动等待，并返回页面整体反馈(URL、页面状态、弹窗/菜单和变化序号);如果页面已跳转或出现覆盖层,优先按整体事实修正局部效果判断。",
             inputSchema={
@@ -351,8 +388,24 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 
 
 def _impl_with_status(name, args):
+    action_names = {"world_click", "world_click_at", "world_fill", "world_batch_fill", "world_press", "world_navigate"}
+    wid = args.get("world_id")
+    before_signal = None
+    if name in action_names and wid is not None:
+        try:
+            before_signal = _page_signal_snapshot(int(wid))
+        except Exception:
+            before_signal = None
     result = _impl(name, args)
-    return _inject_status(result, args.get("world_id"))
+    if name in action_names and wid is not None and before_signal is not None:
+        try:
+            _record_action_evidence(int(wid), name, args, before_signal, result)
+        except Exception:
+            # 证据记录不能阻断原有动作返回。
+            pass
+    if name in {"world_state", "world_change_digest", "world_evidence"}:
+        return result
+    return _inject_status(result, wid)
 
 
 # ── 网页状态卡(仪表盘)────────────────────────────────────────
@@ -503,6 +556,12 @@ def _impl(name, args):
         return _t_world_resolve(args)
     if name == "world_changes":
         return _t_world_changes(args)
+    if name == "world_state":
+        return _t_world_state(args)
+    if name == "world_change_digest":
+        return _t_world_change_digest(args)
+    if name == "world_evidence":
+        return _t_world_evidence(args)
     if name == "world_click":
         return _t_world_click(args)
     if name == "world_fill":
@@ -611,7 +670,18 @@ def _t_world_open(args):
         raise ValueError(f"世界注入失败(页面可能拦截了脚本): {url or '(CDP 当前页)'}")
     wid = _next_world_id
     _next_world_id += 1
-    _worlds[wid] = {"handle": handle, "context": context, "page": page, "url": page.url, "opened_at": time.time(), "profile": profile, "cdp_url": cdp_url}
+    _worlds[wid] = {
+        "handle": handle,
+        "context": context,
+        "page": page,
+        "url": page.url,
+        "opened_at": time.time(),
+        "profile": profile,
+        "cdp_url": cdp_url,
+        # 操作证据信道只在当前网页世界内短暂保存,不落盘。
+        "evidence_seq": 0,
+        "evidence_log": [],
+    }
     # 等待世界稳定(分层加载:渐进渲染/懒加载,固定秒数不可靠,以状态卡 stable 为准)
     stabilize_ms = int(args.get("stabilize_ms", 10000))
     deadline = time.time() + stabilize_ms / 1000
@@ -769,6 +839,142 @@ def _t_world_changes(args):
         evt["importance"] = _event_importance(evt)
     data["digest"] = _change_digest(events)
     return _ok(data)
+
+
+def _t_world_state(args):
+    """页面状态信道:只返回当前最新状态,不附加全量工具 status。"""
+    wid = args["world_id"]
+    try:
+        _evaluate(wid, "() => { agentWorld._runtime.refreshStatus(); return true; }")
+    except Exception:
+        pass
+    return _ok({
+        "world_id": wid,
+        "channel": "page-state",
+        "state": _page_signal_snapshot(wid),
+    })
+
+
+def _t_world_change_digest(args):
+    """变化摘要信道:读取变化但不把原始事件列表发给智能体。"""
+    wid = args["world_id"]
+    since = int(args.get("since", 0))
+    data = _evaluate(wid, "(s) => agentWorld.changes(s)", since)
+    events = data.get("events", [])
+    for evt in events:
+        evt["world_id"] = wid
+        evt["importance"] = _event_importance(evt)
+    digest = _change_digest(events)
+    importance_counts = {}
+    semantic_counts = {}
+    for evt in events:
+        importance = evt.get("importance", "medium")
+        importance_counts[importance] = importance_counts.get(importance, 0) + 1
+        semantic = evt.get("semantic") or "unknown"
+        semantic_counts[semantic] = semantic_counts.get(semantic, 0) + 1
+    return _ok({
+        "world_id": wid,
+        "channel": "change-digest",
+        "from": since,
+        "to": data.get("to", since),
+        "changed": bool(events),
+        "events_seen": len(events),
+        "counts": digest.get("counts", {}),
+        "importance_counts": importance_counts,
+        "semantic_counts": semantic_counts,
+        "key": digest.get("key", []),
+        "raw_events_available_via": "world_changes",
+    })
+
+
+def _result_payload(result):
+    for item in result or []:
+        if getattr(item, "type", None) != "text":
+            continue
+        try:
+            data = json.loads(item.text)
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            continue
+    return {}
+
+
+def _record_action_evidence(wid, action, args, before, result):
+    """把动作前后的小状态摘要写入当前 world 的证据信道。
+
+    不保存 world_fill/world_batch_fill 的具体文本,只保存目标和页面结果。
+    """
+    w = _world(wid)
+    after = _page_signal_snapshot(wid)
+    payload = _result_payload(result)
+    effect = payload.get("effect") or {}
+    url_changed = before.get("url") != after.get("url")
+    title_changed = before.get("title") != after.get("title")
+    dialog_delta = _signal_delta(before, after, "dialogs")
+    menu_delta = _signal_delta(before, after, "menus")
+    new_overlays = dialog_delta["new"] + menu_delta["new"]
+    gone_overlays = dialog_delta["gone"] + menu_delta["gone"]
+    target = args.get("id")
+    if action == "world_batch_fill":
+        target = [field.get("id") for field in args.get("fields", [])]
+    elif action == "world_navigate":
+        target = str(args.get("url", ""))[:300]
+    transition = {
+        "url_changed": url_changed,
+        "title_changed": title_changed,
+        "new_overlays": new_overlays[:8],
+        "gone_overlays": gone_overlays[:8],
+        "changes_seq_advanced": after.get("changes_seq", 0) > before.get("changes_seq", 0),
+    }
+    verdict = effect.get("verdict")
+    confidence = effect.get("confidence")
+    why = effect.get("why")
+    if not verdict:
+        if url_changed or new_overlays:
+            verdict, confidence = "effected", "high"
+            why = "页面整体出现导航或新的弹窗/菜单"
+        else:
+            verdict, confidence = "no-change", "high"
+            why = "未观察到页面整体导航或新的弹窗/菜单"
+    w["evidence_seq"] = int(w.get("evidence_seq", 0)) + 1
+    entry = {
+        "evidence_seq": w["evidence_seq"],
+        "channel": "operation-evidence",
+        "action": action,
+        "target": target,
+        "recorded_at": int(time.time() * 1000),
+        "before": before,
+        "after": after,
+        "transition": transition,
+        "verdict": verdict,
+        "confidence": confidence,
+        "why": why,
+    }
+    log = w.setdefault("evidence_log", [])
+    log.append(entry)
+    if len(log) > 100:
+        del log[:-100]
+
+
+def _t_world_evidence(args):
+    """操作证据信道:按独立证据序号增量读取动作结果。"""
+    wid = args["world_id"]
+    since = int(args.get("since", 0))
+    limit = max(1, min(int(args.get("limit", 20)), 100))
+    w = _world(wid)
+    all_items = [x for x in w.get("evidence_log", []) if x.get("evidence_seq", 0) > since]
+    items = all_items[:limit]
+    next_since = items[-1].get("evidence_seq", since) if items else since
+    return _ok({
+        "world_id": wid,
+        "channel": "operation-evidence",
+        "from": since,
+        "to": next_since,
+        "latest": int(w.get("evidence_seq", 0)),
+        "has_more": len(all_items) > len(items),
+        "evidence": items,
+    })
 
 
 def _build_locator(w, ent):

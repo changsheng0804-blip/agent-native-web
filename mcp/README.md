@@ -27,6 +27,14 @@ python test_map_drill.py
 
 ## 最小实时反馈闭环
 
+当前已经拆出三条可独立读取的页面信道：
+
+```text
+world_state          当前最新页面状态
+world_change_digest  压缩后的页面变化摘要
+world_evidence       动作前后的操作证据
+```
+
 `world_click` 除了返回点击目标附近的局部效果，还会附带 `feedback` 页面整体反馈：
 
 ```text
@@ -39,4 +47,5 @@ feedback.changes_seq 页面变化序号前后值
 
 ```bash
 python test_global_feedback.py
+python test_channels.py
 ```
