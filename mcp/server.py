@@ -27,17 +27,21 @@ Agent World MCP Server
 运行:python server.py  (stdio 模式,由 MCP 客户端拉起)
 """
 import asyncio
+import base64
 import json
+import math
 import re
 import sys
 import time
 import traceback
 from pathlib import Path
+from PIL import Image, ImageChops, ImageDraw, ImageStat
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 import mcp.types as types
 from playwright.sync_api import sync_playwright
+
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -366,12 +370,14 @@ async def list_tools():
         ),
         types.Tool(
             name="world_screenshot",
-            description="截图:整页或指定构件区域。保存到本地文件,返回文件路径。",
+            description="截图:整页、指定构件区域或带编号标注图(Set-of-Mark)。支持直接返回图片数据(ImageContent)或文件路径,原生多模态模型友好。",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "world_id": {"type": "integer"},
-                    "id": {"type": "string", "description": "构件编号(可选,不填截整页)"},
+                    "id": {"type": "string", "description": "构件编号(可选,不填截整页或视口)"},
+                    "annotated": {"type": "boolean", "description": "是否绘制带 [el_X] 编号与名称的半透明标注框(Set-of-Mark 模式)", "default": False},
+                    "return_base64": {"type": "boolean", "description": "是否直接返回 MCP ImageContent 原生图片数据", "default": True},
                 },
                 "required": ["world_id"],
             },
@@ -1534,7 +1540,19 @@ def _click_region_snapshot(wid, target_id):
     )
     if not raw:
         return None
-    return json.loads(raw)
+    data = json.loads(raw)
+    try:
+        w = _world(wid)
+        reg = data["region"]
+        frame_path = SCREENSHOT_DIR / f"frame_before_{wid}_{int(time.time()*1000)}.png"
+        w["page"].screenshot(
+            path=str(frame_path),
+            clip={"x": max(0, reg["x0"]), "y": max(0, reg["y0"]), "width": max(10, reg["x1"] - reg["x0"]), "height": max(10, reg["y1"] - reg["y0"])}
+        )
+        data["frame_path"] = frame_path
+    except Exception:
+        pass
+    return data
 
 
 def _click_region_after(wid, region, page_id=None):
@@ -1776,6 +1794,30 @@ def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500, disappear
                                  before_dialogs, last_dialogs or [],
                                  before_target_state, last_target_state,
                                  disappear_ok, fill_verified)
+    
+    # 视觉双轨兜底: 若 DOM 结构无变化(no-change), 取前后局部帧计算 RMS 像素差异, 捕捉纯 CSS 动效/浮层/颜色切换
+    if effect.get("verdict") == "no-change" and snap_before.get("frame_path"):
+        try:
+            b_path = snap_before["frame_path"]
+            a_path = SCREENSHOT_DIR / f"frame_after_{wid}_{int(time.time()*1000)}.png"
+            reg = snap_before["region"]
+            w["page"].screenshot(
+                path=str(a_path),
+                clip={"x": max(0, reg["x0"]), "y": max(0, reg["y0"]), "width": max(10, reg["x1"] - reg["x0"]), "height": max(10, reg["y1"] - reg["y0"])}
+            )
+            i1 = Image.open(b_path).convert("RGB")
+            i2 = Image.open(a_path).convert("RGB")
+            diff = ImageChops.difference(i1, i2)
+            stat = ImageStat.Stat(diff)
+            diff_rms = math.sqrt(sum(stat.sum2) / (i1.size[0] * i1.size[1] * 3))
+            if diff_rms > 1.5:
+                effect["verdict"] = "visual-effected"
+                effect["confidence"] = "high"
+                effect["why"] = f"检测到目标区域发生显著视觉状态或浮层变化 (RMS={round(diff_rms, 2)})"
+                effect["visual_diff_score"] = round(diff_rms, 2)
+        except Exception:
+            pass
+
     effect["evidence"] = {
         "polls": poll_count,
         "total_ms": total_ms,
@@ -2083,17 +2125,55 @@ def _t_world_wait(args):
 def _t_world_screenshot(args):
     wid = args["world_id"]
     w = _world(wid)
+    annotated = bool(args.get("annotated", False))
+    return_base64 = bool(args.get("return_base64", True))
     path = SCREENSHOT_DIR / f"world{wid}_{int(time.time())}.png"
+    
     if args.get("id"):
         target = _resolve_id(wid, args["id"])
         ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target)
         box = ent["bounds"]
         w["page"].screenshot(path=str(path), clip={"x": box["x"], "y": box["y"], "width": box["w"], "height": box["h"]})
         desc = f"构件 {target} ({ent['name']})"
+    elif annotated:
+        # Set-of-Mark 模式: 截取视口并在可交互构件上绘制半透明编号标注框
+        raw_path = SCREENSHOT_DIR / f"raw_world{wid}_{int(time.time())}.png"
+        w["page"].screenshot(path=str(raw_path), full_page=False)
+        ents = _evaluate(wid, "(f) => agentWorld.query.findEntities(f)", {"interactive": True, "inViewport": True}) or []
+        
+        img = Image.open(raw_path).convert("RGBA")
+        overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
+        draw = ImageDraw.Draw(overlay)
+        
+        marked = 0
+        for ent in ents:
+            box = ent.get("bounds", {})
+            x, y, bw, bh = box.get("x", 0), box.get("y", 0), box.get("w", 0), box.get("h", 0)
+            if bw <= 4 or bh <= 4:
+                continue
+            eid = ent.get("id", "")
+            ename = ent.get("name", "")[:14]
+            draw.rectangle([x, y, x + bw, y + bh], outline=(255, 20, 100, 240), width=2)
+            label = f"[{eid}] {ename}"
+            tag_w = max(36, len(label) * 7 + 6)
+            draw.rectangle([x, max(0, y - 16), x + tag_w, max(16, y)], fill=(255, 20, 100, 210))
+            draw.text((x + 3, max(0, y - 15)), label, fill=(255, 255, 255, 255))
+            marked += 1
+            
+        combined = Image.alpha_composite(img, overlay).convert("RGB")
+        combined.save(path, "PNG")
+        desc = f"Set-of-Mark 视口标注图 (标记 {marked} 个可交互构件)"
     else:
         w["page"].screenshot(path=str(path), full_page=True)
         desc = "整页"
-    return _ok({"world_id": wid, "target": desc, "path": str(path)})
+
+    ret_dict = {"world_id": wid, "target": desc, "path": str(path)}
+    contents = [types.TextContent(type="text", text=json.dumps(ret_dict, ensure_ascii=False, indent=2))]
+    if return_base64 and path.exists():
+        with open(path, "rb") as f:
+            b64_str = base64.b64encode(f.read()).decode("utf-8")
+        contents.append(types.ImageContent(type="image", data=b64_str, mimeType="image/png"))
+    return contents
 
 
 def _t_world_eval(args):

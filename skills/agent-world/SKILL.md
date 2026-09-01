@@ -31,12 +31,15 @@ description: Comprehensive Web Navigation, Scraping, Form Filling, and Multi-ste
 
 3. 执行操作    world_click(id) / world_fill(id, text, type_delay_ms?) / world_batch_fill(...) / world_press(id, key)
                └─→ 行动层自动走 Locator -> 坐标手势 -> JS Setter 降级
+               └─→ 自带 DOM Diff 与视觉帧差双轨生效报告(visual-effected 捕捉纯 CSS 动效/浮层)
 
-4. 验证变化    查看操作返回值自带的 status 卡(dialogs/forms/page/auth)
+4. 验证变化    查看操作返回值自带的 status 卡与 effect 证据
                └─→ 必要时调用 world_changes(since) 游标续读增量事件流
                └─→ 或调用 world_wait(mode="appear", name="...") 等待预期构件渲染
 
-5. 疑难兜底    若状态卡或构件查询无响应,调用 world_screenshot 结合视觉模型诊断
+5. 疑难兜底    若状态卡或构件查询无响应,或面对高密度排版/Canvas/图表黑盒:
+               └─→ 调用 world_screenshot(annotated=True) 获得带 [el_X] 编号标注的 Set-of-Mark 图像与原生 Base64 数据
+               └─→ 原生多模态模型可直接图文对照精准定位或结合 world_click_at 进行坐标操作
 
 6. 任务收尾    world_close(world_id) 释放浏览器资源并自动持久化 storage_state
 ```
@@ -57,10 +60,12 @@ description: Comprehensive Web Navigation, Scraping, Form Filling, and Multi-ste
 
 ---
 
-## 四、行动层最佳实践
+## 四、行动层与多模态最佳实践
 
 1. **输入联想搜索**:对于输入后需要触发下拉推荐的搜索框,设置 `type_delay_ms: 30` 模拟真实键盘打字。
 2. **多字段表单录入**:优先使用 `world_batch_fill` 一次性提交多个字段,减少通信往返(逐字段容错,失败会记录在 results)。
 3. **按键选择与提交**:使用 `world_press(id, "Enter")` 或 `world_press(id, "ArrowDown")` 操作建议项。
-4. **遮挡与层级提示**:若操作返回包含 `obscured_note`,说明目标上方有蒙层或对话框,优先处理上层元素。
-5. **CDP 挂载(实验性,独立 profile)**:`world_open(cdp_url="http://localhost:9222")` 可连接已启动调试端口的 Chrome,复用其会话;`world_close` 只断开连接、不关闭浏览器。**安全边界:必须用独立 profile 启动(`--user-data-dir` 指向新目录),暂不连接日常使用的浏览器;CDP 会话下 `world_eval` 已禁用,请走结构化查询。**
+4. **原生多模态视觉感知 (SoM 模式)**:当面对密集长列表、复杂卡片流或类似按钮时，调用 `world_screenshot(annotated=True)`，多模态模型可以直接在图上看到每个构件的 `[el_X]` 标签，彻底消除歧义。
+5. **遮挡与层级提示**:若操作返回包含 `obscured_note`,说明目标上方有蒙层或对话框,优先处理上层元素。
+6. **CDP 挂载(实验性,独立 profile)**:`world_open(cdp_url="http://localhost:9222")` 可连接已启动调试端口的 Chrome,复用其会话;`world_close` 只断开连接、不关闭浏览器。**安全边界:必须用独立 profile 启动(`--user-data-dir` 指向新目录),暂不连接日常使用的浏览器;CDP 会话下 `world_eval` 已禁用,请走结构化查询。**
+
