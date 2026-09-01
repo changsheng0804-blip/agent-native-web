@@ -5,7 +5,7 @@ description: Comprehensive Web Navigation, Scraping, Form Filling, and Multi-ste
 
 # Agent World 网页交互与自动化技能包
 
-> 基于 `agent-world-mcp` 的"四层能力（理解/行动/兜底/扩展）+ 状态卡仪表盘"标准化作业规范。
+> 基于 `mcp` 的"四层能力（理解/行动/兜底/扩展）+ 状态卡仪表盘"标准化作业规范。
 > 核心概念:原生网页世界——把网页实时翻译成智能体可直接理解、查询、操作的结构化空间。
 
 ---
