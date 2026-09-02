@@ -1645,10 +1645,29 @@ def _finalize_click_result(wid, ret, before_signal, submit_trigger=False):
         })
 
     # page_outcome:预合成情景判断(弱模型只读主标签,不需跨信道合并)
+    # 阶段A 统一后果卡:展开挂载(page_outcome 顶层直取字符串五态 + situation/evidence 并列)
     try:
-        ret["page_outcome"] = _build_page_outcome(wid, before_signal, after_signal, submit_trigger=submit_trigger)
+        ret.update(_build_page_outcome(wid, before_signal, after_signal, submit_trigger=submit_trigger))
     except Exception:
         pass
+    # 统一出口标记
+    ret["channel"] = "outcome"
+    return ret
+
+
+def _finalize_outcome(wid, ret, url_before=None):
+    """给 fill/press/click_at/navigate 等动作补统一后果卡出口(阶段A)。
+
+    与 _finalize_click_result 尾部一致:channel="outcome" + page_outcome 五态。
+    click 走 _finalize_click_result(已含),其余动作走这里,保证所有动作同一出口。
+    """
+    try:
+        before_signal = _page_signal_snapshot(wid)
+        after_signal = _page_signal_snapshot(wid)
+        ret.update(_build_page_outcome(wid, before_signal, after_signal, submit_trigger=False))
+    except Exception:
+        pass
+    ret["channel"] = "outcome"
     return ret
 
 
@@ -2121,7 +2140,7 @@ def _t_world_fill(args):
                 effect = _wait_click_effect(wid, snap_before, url_before, max_wait_ms=1500, fill_verified=True)
                 if effect:
                     ret["effect"] = effect
-                return _ok(ret)
+                return _ok(_finalize_outcome(wid, ret))
             fill_err = "fill 后未在可见输入框验证到文本(可能被 SPA 覆盖层拦截)"
         except Exception as e:
             fill_err = f"{type(e).__name__}: {str(e)[:200]}"
@@ -2169,7 +2188,7 @@ def _t_world_fill(args):
     effect = _wait_click_effect(wid, snap_before, url_before, max_wait_ms=1500, fill_verified=filled_ok)
     if effect:
         ret["effect"] = effect
-    return _ok(ret)
+    return _ok(_finalize_outcome(wid, ret))
 
 
 def _t_world_batch_fill(args):
@@ -2228,7 +2247,7 @@ def _t_world_press(args):
             effect = _wait_click_effect(wid, snap_before, url_before, disappear_ok=disappear_ok)
             if effect:
                 ret["effect"] = effect
-            return _ok(ret)
+            return _ok(_finalize_outcome(wid, ret))
         except Exception as e:
             raise ValueError(f"按键失败: {type(e).__name__}: {str(e)[:200]}")
     # 兜底:JS focus + dispatch keydown/keyup + 真实键盘事件(比纯 JS dispatch 更可靠)
@@ -2261,7 +2280,7 @@ def _t_world_press(args):
     effect = _wait_click_effect(wid, snap_before, url_before, disappear_ok=disappear_ok)
     if effect:
         ret["effect"] = effect
-    return _ok(ret)
+    return _ok(_finalize_outcome(wid, ret))
 
 
 def _t_world_wait(args):
@@ -2387,7 +2406,8 @@ def _t_world_click_at(args):
     w = _world(wid)
     w["page"].mouse.click(x, y)
     _refresh_core_status(wid)
-    return _ok({"world_id": wid, "clicked_at": [x, y], "method": "mouse-coords"})
+    ret = {"world_id": wid, "clicked_at": [x, y], "method": "mouse-coords"}
+    return _ok(_finalize_outcome(wid, ret))
 
 
 def _t_world_navigate(args):
@@ -2401,7 +2421,8 @@ def _t_world_navigate(args):
     if wait_ms:
         w["page"].wait_for_timeout(wait_ms)
     summary = _evaluate(wid, "agentWorld.query.getPageSummary()")
-    return _ok({"world_id": wid, "url": url, "summary": summary})
+    ret = {"world_id": wid, "url": url, "summary": summary}
+    return _ok(_finalize_outcome(wid, ret))
 
 
 def _t_world_close(args):

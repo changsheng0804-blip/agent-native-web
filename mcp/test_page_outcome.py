@@ -37,10 +37,10 @@ async def main():
             btn = next(e for e in btns.get("entities", []) if "continue" in (e.get("text") or "").lower())
             rc = json.loads((await call(session, "world_click", {"world_id": wid, "id": btn["id"]})).content[0].text)
             po = rc.get("page_outcome")
-            print(f"1. 挑战复刻: page_outcome = {po.get('page_outcome') if po else None}")
-            if po:
-                print(f"   situation = {json.dumps(po.get('situation', {}), ensure_ascii=False)[:200]}")
-            ok1 = po and po.get("page_outcome") == "challenged"
+            print(f"1. 挑战复刻: page_outcome = {po}")
+            if rc.get("situation"):
+                print(f"   situation = {json.dumps(rc.get('situation'), ensure_ascii=False)[:200]}")
+            ok1 = po == "challenged"
             await call(session, "world_close", {"world_id": wid})
 
             # 场景2:远距弹窗(普通 overlay,无 iframe 遮罩)
@@ -51,10 +51,10 @@ async def main():
             tgt = next(e for e in ents.get("entities", []) if e.get("interactive"))
             rc = json.loads((await call(session, "world_click", {"world_id": wid2, "id": tgt["id"]})).content[0].text)
             po2 = rc.get("page_outcome")
-            print(f"\n2. 远距弹窗(普通弹窗非遮罩): page_outcome = {po2.get('page_outcome') if po2 else None}")
-            print(f"   situation = {json.dumps(po2.get('situation', {}) if po2 else {}, ensure_ascii=False)[:120]}")
-            ok2 = po2 and po2.get("page_outcome") in ("progressed", "uncertain", "unchanged")
-            print(f"   (普通弹窗不应误判 challenged: {po2.get('page_outcome') != 'challenged' if po2 else '未知'})")
+            print(f"\n2. 远距弹窗(普通弹窗非遮罩): page_outcome = {po2}")
+            print(f"   situation = {json.dumps(rc.get('situation', {}), ensure_ascii=False)[:120]}")
+            ok2 = po2 in ("progressed", "uncertain", "unchanged")
+            print(f"   (普通弹窗不应误判 challenged: {po2 != 'challenged' if po2 else '未知'})")
             await call(session, "world_close", {"world_id": wid2})
 
             # 场景3:无副作用标题(负例)——页面上有动态变化时 uncertain 可接受,
@@ -65,8 +65,7 @@ async def main():
             ents = json.loads((await call(session, "world_entities", {"world_id": wid3, "text": "动态测试页", "role": "heading", "max_results": 4})).content[0].text)
             tgt3 = ents.get("entities", [])[0]
             rc = json.loads((await call(session, "world_click", {"world_id": wid3, "id": tgt3["id"]})).content[0].text)
-            po3 = rc.get("page_outcome")
-            po3v = po3.get("page_outcome") if po3 else None
+            po3v = rc.get("page_outcome")
             print(f"\n3. 负例无副作用标题: page_outcome = {po3v}(uncertain/unchanged 均可)")
             ok3 = po3v in ("unchanged", "uncertain")
             await call(session, "world_close", {"world_id": wid3})

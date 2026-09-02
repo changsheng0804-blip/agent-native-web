@@ -46,6 +46,59 @@ TIMEOUT_OVERRIDES = {
 
 # 测试条目可带参数(如 "validate_closed_loop.py --local"),运行时按空格拆分
 
+# ── 守护面标签(scope)────────────────────────────────────────
+# 每个测试标记它"守护什么代码面",用 --scope 只跑相关测试。
+# 原则:改文档/README → 不用跑;改工具逻辑 → 该工具相关的 scope;改内核 → 全量。
+# 全部合法 scope 可用 run_quality.py --list 查看。
+SCOPES = {
+    # 脚本名(不含参数) -> [守护面]
+    "test_enhancements.py": ["fill", "forms", "action"],
+    "test_ipi_filter.py": ["kernel", "visibility"],
+    "test_wait_event.py": ["observer", "kernel"],
+    "test_fingerprint.py": ["kernel", "identity"],
+    "validate_closed_loop.py": ["judgment", "action"],
+    "test_global_feedback.py": ["judgment", "navigation"],
+    "test_channels.py": ["channels"],
+    "test_guide.py": ["channels", "guide"],
+    "test_visual_evidence.py": ["visual", "screenshot"],
+    "test_form_names.py": ["fill", "identity"],
+    "test_page_outcome.py": ["judgment", "challenge"],
+    "test_challenge_overlay.py": ["challenge"],
+    "test_assumption_e_glass.py": ["action", "judgment"],
+    "test_assumption_r_cssvar.py": ["visibility", "ipi"],
+    "test_assumption_b_shadow.py": ["shadow", "kernel"],
+    "test_shadow_dynamic.py": ["shadow", "observer"],
+    "test_fill_clear_and_text.py": ["fill", "observer"],
+    # real 组
+    "test_map.py": ["map", "navigation"],
+    "test_map_drill.py": ["map"],
+    "test_click_effect.py": ["judgment", "action"],
+    "test_change_digest.py": ["channels", "digest"],
+    "test_click.py": ["action", "judgment"],
+    "test_fill.py": ["fill", "action"],
+    "test_eval.py": ["debug"],
+    "test_value.py": ["fill", "forms"],
+    "test_status.py": ["status"],
+    "test_gf_final.py": ["action", "fill", "navigation"],
+    "test_frames.py": ["frames"],
+    "test_compare.py": ["profile"],
+    "test_official.py": ["general"],
+    "test_action_layer.py": ["action", "fill"],
+    "test_fingerprint_real.py": ["identity"],
+    "test_map_real.py": ["map"],
+    "test_channels_real.py": ["channels"],
+}
+
+# 别名:常用改动面 → 推荐 scope 组合("--scope 别名" 一次跑多个面)
+SCOPE_ALIASES = {
+    "fill": ["fill", "forms", "action"],        # 改 world_fill/batch_fill/行动层
+    "observer": ["observer", "kernel"],         # 改观察器/变更感知
+    "judgment": ["judgment", "challenge", "action"],  # 改 effect/page_outcome 判定
+    "kernel": ["kernel", "observer", "visibility", "shadow", "identity"],  # 改内核任意处
+    "channels": ["channels", "digest", "guide"],       # 改信道/导览
+    "quick": ["fill", "judgment", "action"],    # 日常快速自检(1-3 分钟)
+}
+
 GROUPS = {
     "offline": {
         "desc": "本地夹具测试(不依赖网络,快速稳定)",
@@ -62,12 +115,11 @@ GROUPS = {
             "test_visual_evidence.py",   # SoM 标注/ImageContent/视觉 diff 兜底(正/负例)
             "test_form_names.py",      # 表单字段 name 属性定位(幽灵字段防错位)
             "test_page_outcome.py",    # 统一后果卡:全动作 page_outcome 五态(阶段 A)
-            "test_challenge_overlay.py",  # 挑战遮罩盲区复现(Step 1 的验收场景;当前记录盲区,page_outcome 实现后转绿)
+            "test_challenge_overlay.py",  # 挑战遮罩复刻(Step 1 的验收场景;page_outcome 已实现,守护不回归)
             "test_assumption_e_glass.py", # 玻璃罩按钮:不报假成功(预期通过)
             "test_assumption_r_cssvar.py",# CSS 变量藏字:IPI 过滤(预期通过)
             "test_assumption_b_shadow.py",# Shadow DOM 穿透修复后:静态可见(预期通过,防回归)
             "test_shadow_dynamic.py", # Shadow DOM 动态感知(运行期新增/点击,预期通过)
-            "test_page_outcome.py",  # page_outcome 五态(challenged 正例/弹窗不误判/负例保守)
             "test_fill_clear_and_text.py", # fill 清空语义 + 纯文本变更感知(弱模型验证发现的两个缺陷)
         ],
     },
@@ -216,20 +268,56 @@ def main():
     ap = argparse.ArgumentParser(description="Agent-Native Web 质检流水线")
     ap.add_argument("--all", action="store_true", help="跑全部三组(offline+real+special)")
     ap.add_argument("--real", action="store_true", help="跑 offline+real 两组")
-    ap.add_argument("--list", action="store_true", help="列出分组与脚本")
+    ap.add_argument("--list", action="store_true", help="列出分组、脚本与守护面")
     ap.add_argument("--only", metavar="SCRIPT", help="只跑指定脚本(如 test_map.py)")
+    ap.add_argument("--scope", metavar="SCOPE", help="只跑某守护面的测试(如 --scope fill;多面用逗号:--scope fill,observer;别名见 --list)")
     args = ap.parse_args()
 
     if args.list:
         for g in ORDER:
             print(f"[{g}] {GROUPS[g]['desc']}")
             for s in GROUPS[g]["scripts"]:
-                print(f"    {s}")
+                name = s.split()[0]
+                scopes = SCOPES.get(name, ["?"])
+                print(f"    {s:<58} 守护面: {', '.join(scopes)}")
+        print("\n别名(--scope 可用):")
+        for k, v in SCOPE_ALIASES.items():
+            print(f"    {k:<12} → {', '.join(v)}")
         return
 
     if args.only:
         targets = [args.only]
         groups_run = [f"only:{args.only}"]
+    elif args.scope:
+        # 展开别名 + 逗号分隔的面,收集覆盖这些面的所有测试。
+        # 默认只扫 offline 组(纯本地、快);若显式面里有 real-only 的
+        # (map/identity/frames/profile/digest/status/navigation/general/debug),
+        # 才同时扫 real 组——避免 --scope quick 误拉真站全量。
+        offline_only_faces = {"fill", "forms", "action", "kernel", "observer", "visibility",
+                              "shadow", "ipi", "judgment", "challenge", "channels", "guide",
+                              "visual", "screenshot"}
+        wanted = set()
+        for part in [p.strip() for p in args.scope.split(",") if p.strip()]:
+            if part in SCOPE_ALIASES:
+                wanted.update(SCOPE_ALIASES[part])
+            elif part in {s for v in SCOPES.values() for s in v}:
+                wanted.add(part)
+            else:
+                print(f"⚠️ 未知 scope: {part}(见 --list 的守护面/别名)")
+        include_real = bool(wanted - offline_only_faces)
+        order = ORDER if include_real else ["offline"]
+        targets = []
+        for g in order:
+            for s in GROUPS[g]["scripts"]:
+                name = s.split()[0]
+                scopes = SCOPES.get(name, [])
+                if scopes and set(scopes) & wanted:
+                    targets.append(s)
+        targets = list(dict.fromkeys(targets))  # 去重保序
+        groups_run = [f"scope:{args.scope}" + ("(含real)" if include_real else "")]
+        if not targets:
+            print(f"❌ scope={args.scope} 没有匹配到任何测试")
+            sys.exit(2)
     elif args.all:
         targets = [s for g in ORDER for s in GROUPS[g]["scripts"]]
         groups_run = ORDER
@@ -240,9 +328,9 @@ def main():
         targets = list(GROUPS["offline"]["scripts"])
         groups_run = ["offline"]
 
-    # 前置检查(仅完整流程执行;--only 单脚本时跳过,便于快速调式)
+    # 前置检查(仅完整流程执行;--only/--scope 跳过,便于快速调试)
     checks = []
-    if not args.only:
+    if not args.only and not args.scope:
         ok_all_in_one, msg_all_in_one = check_all_in_one()
         checks.append(("all-in-one.js 一致性", ok_all_in_one, msg_all_in_one))
         if not ok_all_in_one:
