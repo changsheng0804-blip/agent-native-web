@@ -192,7 +192,7 @@ async def list_tools():
         ),
         types.Tool(
             name="world_changes",
-            description="变更流(网页视频):读取自 since 序号以来的页面变化事件(add/remove/update/visibility),增量续读不重不漏。",
+            description="[何时用]调试用——需要逐条核对原始事件序列时用;常规操作请用 world_change_digest(更省)。[何时不用]只想知道有没有变化时不要用(噪声大)。变更流:读取自 since 序号以来的页面变化事件(add/remove/update/visibility),增量续读不重不漏。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -204,7 +204,7 @@ async def list_tools():
         ),
         types.Tool(
             name="world_state",
-            description="页面状态信道:只读取当前最新的整体页面状态,包括网址、标题、稳定状态、弹窗/菜单和变化序号;不返回完整页面结构。",
+            description="[何时用]操作后结果存疑时——看弹窗/表单/登录态/URL 在哪;或新开页面后做一次全局确认。[何时不用]不需要全局状态、只在查单个元素时不要用(用 world_entity)。页面状态信道:只读取当前最新的整体页面状态,包括网址、标题、稳定状态、弹窗/菜单和变化序号;不返回完整页面结构。",
             inputSchema={
                 "type": "object",
                 "properties": {"world_id": {"type": "integer"}},
@@ -213,7 +213,7 @@ async def list_tools():
         ),
         types.Tool(
             name="world_change_digest",
-            description="变化摘要信道:读取自 since 序号以来的压缩变化摘要,只返回数量、重要构件和变化游标,不返回原始事件列表。",
+            description="[何时用]操作后想了解'页面变了什么'的摘要(推荐日常用)——返回数量/重要构件/游标,不返回原始事件。[何时不用]需要完整事件序列时用 world_changes。变化摘要信道:读取自 since 序号以来的压缩变化摘要,只返回数量、重要构件和变化游标,不返回原始事件列表。",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -225,7 +225,7 @@ async def list_tools():
         ),
         types.Tool(
             name="world_evidence",
-            description="操作证据信道:读取动作前后页面状态、网址、弹窗/菜单变化和结果判断;不保存填入的具体文本内容。",
+            description="[何时用]调试/验证场景——追溯某次操作的证据链时用;[何时不用]常规流程不要主动调,操作返回值自带 verdict 证据即可。操作证据信道:读取动作前后页面状态、网址、弹窗/菜单变化和结果判断;不保存填入的具体文本内容。",
             inputSchema={
                 "type": "object",
                 "properties": {
