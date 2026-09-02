@@ -30,6 +30,7 @@ import asyncio
 import base64
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -99,9 +100,21 @@ def _evaluate(world_id, expr, arg=None):
 
 
 # ── 工具定义 ─────────────────────────────────────────────────
+# 阶段 B 收口:对外默认协议 6 个词(弱模型只学这一条环)
+#   world_open → world_guide → world_find → world_act → world_outcome → world_close
+# 其余 19 个旧工具全部保留(兼容已接入客户端),描述加 [内部/调试] 前缀;
+# AGENT_WORLD_LITE=1 时 list_tools 只暴露 6 个, call_tool 拒绝旧工具。
+CANONICAL_TOOLS = {"world_open", "world_guide", "world_find", "world_act", "world_outcome", "world_close"}
+CANONICAL_ORDER = ["world_open", "world_guide", "world_find", "world_act", "world_outcome", "world_close"]
+
+
+def _lite_mode():
+    return os.environ.get("AGENT_WORLD_LITE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 @server.list_tools()
 async def list_tools():
-    return [
+    tools = [
         types.Tool(
             name="world_open",
             description="打开一个网页并建立原生网页世界(注入 agent-runtime)。返回世界 ID 和页面摘要。可并行打开多个世界互不干扰。headful=true 时弹出可见窗口(人工介入点:登录/验证码/真人确认);profile=名称 时使用持久化登录态(同一名称复用);cdp_url 可连接已有 Chrome 调试端口(如 http://localhost:9222),复用日常已登录浏览器(注意:不会关闭用户浏览器)。",
@@ -399,7 +412,70 @@ async def list_tools():
             description="列出所有已打开的世界。",
             inputSchema={"type": "object", "properties": {}},
         ),
+        # ── 阶段 B 收口:3 个新工具(默认协议) ──
+        types.Tool(
+            name="world_find",
+            description="默认协议:按条件定位构件(替代 world_entities/world_resolve 的日常用法)。返回 matches[] 与 ambiguous 标记;禁止在本工具内执行任何动作。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "q": {"type": "string", "description": "一句话或弱 ID(名字/强 ID/页面原生 id),走 resolve 解析"},
+                    "role": {"type": "string", "description": "语义角色,如 button/link/input/combobox/heading"},
+                    "text": {"type": "string", "description": "文本包含(子串匹配)"},
+                    "name": {"type": "string", "description": "名字包含(如 round-trip 匹配 combobox.round-trip)"},
+                    "interactive": {"type": "boolean", "description": "仅返回可交互构件"},
+                    "in_viewport": {"type": "boolean", "description": "仅返回视口内构件"},
+                    "max_results": {"type": "integer", "description": "最多返回条数", "default": 20},
+                },
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_act",
+            description="默认协议:唯一行动入口。kind=click|fill|press|batch_fill,返回统一后果卡(page_outcome 五态)。steps 数组可在一个往返内执行多个动作(聚合执行,等价 RFC 的 world_run);任一步 errored 即停止。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "kind": {"type": "string", "description": "动作类型: click|fill|press|batch_fill", "enum": ["click", "fill", "press", "batch_fill"]},
+                    "id": {"type": "string", "description": "构件编号(如 el_89)或可解析的名字(world_find 返回的 id)"},
+                    "text": {"type": "string", "description": "fill 时填写的文本"},
+                    "key": {"type": "string", "description": "press 时的按键(Enter/Escape/Tab...)"},
+                    "fields": {"type": "array", "description": "batch_fill 的字段列表 [{\"id\":\"el_6\",\"text\":\"...\"}]", "items": {"type": "object"}},
+                    "type_delay_ms": {"type": "number", "description": "逐字打字延迟(触发联想下拉用)", "default": 0},
+                    "visual_evidence": {"type": "boolean", "description": "是否截前后帧做视觉 diff 兜底", "default": False},
+                    "steps": {"type": "array", "description": "聚合执行:多步动作序列 [{kind,id,text|key|fields,...}, ...],任一步 errored 即停", "items": {"type": "object"}},
+                },
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_outcome",
+            description="默认协议:读最近一张统一后果卡(幂等,弱模型'我刚才到底怎样了'的唯一查询)。since 传入 evidence_seq 时,仅当有新动作才返回新卡,否则返回 none 卡。watch_id 为阶段 C(验尸官)预留。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "since": {"type": "integer", "description": "仅当存在 evidence_seq 大于 since 的新卡时返回它", "default": 0},
+                },
+                "required": ["world_id"],
+            },
+        ),
     ]
+    # 阶段 B 收口:规范 6 词置前(保持协议顺序),旧工具描述加 [内部/调试] 前缀;LITE 模式只暴露 6 词
+    if _lite_mode():
+        tools = [t for t in tools if t.name in CANONICAL_TOOLS]
+    else:
+        tools = sorted(tools, key=lambda t: (CANONICAL_ORDER.index(t.name) if t.name in CANONICAL_TOOLS else 99, t.name))
+        tools = [
+            types.Tool(name=t.name,
+                       description=("[内部/调试] " + t.description) if t.name not in CANONICAL_TOOLS else t.description,
+                       inputSchema=t.inputSchema,
+                       outputSchema=t.outputSchema)
+            for t in tools
+        ]
+    return tools
 
 
 # ── 工具实现 ─────────────────────────────────────────────────
@@ -418,6 +494,8 @@ ACTION_NAMES = {"world_click", "world_click_at", "world_fill", "world_batch_fill
 
 
 def _impl_with_status(name, args):
+    if _lite_mode() and name not in CANONICAL_TOOLS:
+        raise ValueError(f"AGENT_WORLD_LITE 模式只开放 6 个默认工具({sorted(CANONICAL_TOOLS)});{name} 是内部/调试工具,请勿在 LITE 会话调用")
     wid = args.get("world_id")
     before_signal = None
     if name in ACTION_NAMES and wid is not None:
@@ -441,6 +519,14 @@ def _impl_with_status(name, args):
             _record_action_evidence(int(wid), name, args, before_signal, result)
         except Exception:
             # 证据记录不能阻断原有动作返回。
+            pass
+    # 阶段 B:动作出口的后果卡缓存,供 world_outcome 幂等读取(world_act 内部已记录证据,这里只缓存卡)
+    if name in ACTION_NAMES or name == "world_act":
+        try:
+            payload = _result_payload(result)
+            if payload and payload.get("channel") == "outcome":
+                _world(int(wid))["last_outcome_card"] = payload
+        except Exception:
             pass
     if name in {"world_state", "world_change_digest", "world_evidence", "world_guide"}:
         return result
@@ -611,6 +697,12 @@ def _impl(name, args, before_signal=None):
         return _t_world_batch_fill(args, before_signal)
     if name == "world_press":
         return _t_world_press(args, before_signal)
+    if name == "world_find":
+        return _t_world_find(args)
+    if name == "world_act":
+        return _t_world_act(args, before_signal)
+    if name == "world_outcome":
+        return _t_world_outcome(args)
     if name == "world_wait":
         return _t_world_wait(args)
     if name == "world_screenshot":
@@ -2695,6 +2787,178 @@ def _t_world_navigate(args, before_signal=None):
     summary = _evaluate(wid, "agentWorld.query.getPageSummary()")
     ret = {"world_id": wid, "url": url, "summary": summary}
     return _outcome_card(wid, "world_navigate", args, ret, before_signal)
+
+
+# ── 阶段 B 收口:默认协议 3 新工具 ─────────────────────────────
+# world_find → 定位构件;world_act → 唯一行动入口(含聚合 steps);
+# world_outcome → 幂等读最近一张后果卡。全部复用既有内核与 _outcome_card,不另起炉灶。
+
+ACT_DISPATCH = {
+    "click": ("world_click", _t_world_click),
+    "fill": ("world_fill", _t_world_fill),
+    "press": ("world_press", _t_world_press),
+    "batch_fill": ("world_batch_fill", _t_world_batch_fill),
+}
+
+
+def _act_one(wid, step, before_signal):
+    """把 world_act 的一个动作步骤分发到既有动作实现(复用统一后果卡)。"""
+    kind = step.get("kind")
+    if kind not in ACT_DISPATCH:
+        raise ValueError(f"world_act 不支持的 kind: {kind!r}(支持 click/fill/press/batch_fill)")
+    inner_name, handler = ACT_DISPATCH[kind]
+    sub_args = {k: v for k, v in step.items() if k != "kind"}
+    sub_args["world_id"] = wid
+    result = handler(sub_args, before_signal)
+    # 证据记录与既有动作一致(inner_name 入库,保持证据信道语义不变)
+    if before_signal is not None:
+        try:
+            _record_action_evidence(int(wid), inner_name, sub_args, before_signal, result)
+        except Exception:
+            pass
+    return result
+
+
+def _t_world_find(args):
+    """默认协议:按条件定位构件(替代 world_entities/world_resolve 的日常用法)。
+
+    q 提供时走弱 ID 解析(强 ID/名字/页面原生 id);否则按 role/text/name/interactive 过滤。
+    只返回 matches[] 与 ambiguous,禁止在 find 里执行动作。
+    """
+    wid = args["world_id"]
+    q = args.get("q")
+    max_results = max(1, min(int(args.get("max_results", 20)), 100))
+    filters = {k: v for k, v in args.items()
+               if k in ("role", "tag", "text", "name", "fingerprint", "interactive", "in_viewport")
+               and v is not None}
+    if "in_viewport" in filters:
+        filters["inViewport"] = filters.pop("in_viewport")
+    if "max_results" in args:
+        filters["maxResults"] = max_results
+
+    entities = []
+    if q:
+        r = _evaluate(wid, "(q) => agentWorld.query.resolve(q)", str(q)) or {}
+        ids = []
+        if r.get("id"):
+            ids = [r["id"]]
+        elif r.get("matches"):
+            ids = list(r.get("matches"))[:max_results]
+        for i in ids:
+            ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", i)
+            if ent:
+                entities.append(ent)
+        # q 解析后仍可叠加过滤器(角色/文本/可交互),过滤候选
+        if filters:
+            entities = [e for e in entities if _entity_match(e, filters)]
+    else:
+        entities = _evaluate(wid, "(f) => agentWorld.query.findEntities(f)", filters) or []
+
+    matches = [{
+        "id": e.get("id"),
+        "name": e.get("name"),
+        "semantic": e.get("semantic"),
+        "fingerprint": e.get("fingerprint"),
+        "bounds": e.get("bounds"),
+        "interactive": e.get("interactive"),
+    } for e in entities[:max_results] if e.get("id")]
+    interactive_hits = [m for m in matches if m.get("interactive")]
+    return _ok({
+        "world_id": wid,
+        "count": len(matches),
+        "ambiguous": len(interactive_hits) > 1,
+        "matches": matches,
+    })
+
+
+def _entity_match(e, filters):
+    """world_find 的候选后置过滤(小集合内精确过滤,复用内核语义口径)。"""
+    if "role" in filters and (e.get("semantic") or "") != filters["role"]:
+        return False
+    if "tag" in filters and (e.get("tag") or "").lower() != str(filters["tag"]).lower():
+        return False
+    if "name" in filters and filters["name"] not in (e.get("name") or ""):
+        return False
+    if "text" in filters and filters["text"] not in (e.get("text") or ""):
+        return False
+    if "interactive" in filters and bool(e.get("interactive")) != bool(filters["interactive"]):
+        return False
+    if "inViewport" in filters and bool(e.get("inViewport")) != bool(filters["inViewport"]):
+        return False
+    return True
+
+
+def _t_world_act(args, before_signal=None):
+    """默认协议:唯一行动入口。kind=click|fill|press|batch_fill → 统一后果卡。
+
+    steps 数组 = 聚合执行(等价 RFC 的 world_run):单个 MCP 往返内顺序执行多个动作,
+    每步都走 _outcome_card 同一出口;任一步 errored 即停止。返回最后一步的卡 + steps 明细。
+    """
+    wid = args["world_id"]
+    steps = args.get("steps")
+    if steps is not None:
+        if not isinstance(steps, list) or not steps:
+            raise ValueError("world_act 的 steps 必须是非空列表")
+        cards = []
+        for idx, step in enumerate(steps):
+            try:
+                before = _page_signal_snapshot(wid)
+            except Exception:
+                before = None
+            try:
+                res = _act_one(wid, step, before)
+                card = _result_payload(res)
+            except Exception as e:
+                card = _result_payload(_errored_card(wid, f"world_act.step{idx + 1}", step, before, e))
+            cards.append(card)
+            if card.get("page_outcome") == "errored":
+                break
+        last = dict(cards[-1])
+        last["steps"] = cards
+        last["step_count"] = len(cards)
+        last["action"] = {"kind": "act-sequence", "via": "self"}
+        last["channel"] = "outcome"
+        return _ok(last)
+
+    kind = args.get("kind") or "click"
+    if kind not in ACT_DISPATCH:
+        raise ValueError(f"world_act 不支持的 kind: {kind!r}(支持 click/fill/press/batch_fill)")
+    if before_signal is None:
+        try:
+            before_signal = _page_signal_snapshot(wid)
+        except Exception:
+            before_signal = None
+    try:
+        return _act_one(wid, args, before_signal)
+    except Exception as e:
+        return _errored_card(wid, f"world_act({kind})", args, before_signal, e)
+
+
+def _t_world_outcome(args):
+    """默认协议:读最近一张统一后果卡(幂等,弱模型"我刚才到底怎样了"的唯一查询)。
+
+    since 传入 evidence_seq 时,仅当存在更新动作的卡才返回;否则返回 none 卡。
+    watch_id 为阶段 C(验尸官模式)预留,当前忽略。
+    """
+    wid = args["world_id"]
+    since = int(args.get("since", 0))
+    w = _world(wid)
+    last = w.get("last_outcome_card")
+    if last and last.get("evidence_seq", 0) > since:
+        return _ok(last)
+    return _ok({
+        "world_id": wid,
+        "channel": "outcome",
+        "page_outcome": "none",
+        "situation": {"type": "none", "to_url": None},
+        "confidence": "high",
+        "why": "since 之后没有新动作" if since else "尚无动作;先 world_act 或 world_open",
+        "target": None,
+        "action": {"kind": "outcome", "via": "self"},
+        "evidence_seq": int(w.get("evidence_seq", 0)),
+        "changes_seq": {"before": 0, "after": 0},
+        "world_epoch": int(w.get("epoch", 0)),
+    })
 
 
 def _t_world_close(args):
