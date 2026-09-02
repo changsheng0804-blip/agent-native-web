@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>弹窗嵌套测试页(场景3 modal)</title>
+<style>
+  body { font-family: sans-serif; padding: 30px; }
+  button { padding: 8px 20px; cursor: pointer; margin-right: 8px; }
+  #overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.45); display: none; align-items: center; justify-content: center; z-index: 999; }
+  #overlay.show { display: flex; }
+  #dialog { background: #fff; border-radius: 8px; padding: 24px; width: 320px; box-shadow: 0 8px 30px rgba(0,0,0,0.3); }
+  #dialog[role="dialog"] h2 { margin-top: 0; }
+  #status { margin-top: 24px; font-weight: bold; }
+</style>
+</head>
+<body>
+  <h1>弹窗嵌套:打开弹窗 → 弹窗内确认 → 弹窗关闭</h1>
+  <button id="open-btn">打开弹窗</button>
+  <div id="status">(弹窗未打开)</div>
+
+  <div id="overlay" aria-hidden="true">
+    <div id="dialog" role="dialog" aria-modal="true" aria-label="确认对话框">
+      <h2>确认操作</h2>
+      <p>这是弹窗内的内容。点击"确认"按钮会关闭弹窗并更新状态。</p>
+      <button id="confirm-btn">确认</button>
+      <button id="cancel-btn">取消</button>
+    </div>
+  </div>
+
+  <script>
+    var overlay = document.getElementById('overlay');
+    var status = document.getElementById('status');
+    document.getElementById('open-btn').addEventListener('click', function () {
+      overlay.classList.add('show');
+      overlay.setAttribute('aria-hidden', 'false');
+      status.textContent = '弹窗已打开';
+    });
+    document.getElementById('confirm-btn').addEventListener('click', function () {
+      overlay.classList.remove('show');
+      overlay.setAttribute('aria-hidden', 'true');
+      status.textContent = '✅ 已确认,弹窗关闭';
+    });
+    document.getElementById('cancel-btn').addEventListener('click', function () {
+      overlay.classList.remove('show');
+      overlay.setAttribute('aria-hidden', 'true');
+      status.textContent = '已取消,弹窗关闭';
+    });
+  </script>
+</body>
+</html>

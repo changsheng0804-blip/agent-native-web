@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>联想下拉测试页(场景1 autocomplete)</title>
+<style>
+  body { font-family: sans-serif; padding: 30px; }
+  .wrap { position: relative; width: 300px; }
+  input { width: 100%; padding: 8px; font-size: 16px; box-sizing: border-box; }
+  ul { list-style: none; margin: 0; padding: 0; border: 1px solid #ccc; display: none; position: absolute; width: 100%; background: #fff; z-index: 10; }
+  ul.show { display: block; }
+  li { padding: 8px; cursor: pointer; }
+  li:hover, li.selected { background: #eef; }
+  #final-value { margin-top: 24px; font-weight: bold; }
+</style>
+</head>
+<body>
+  <h1>联想下拉:输入 ap 应出现 apple/apricot</h1>
+  <div class="wrap">
+    <input id="search" placeholder="输入以触发联想" autocomplete="off">
+    <ul id="suggest"></ul>
+  </div>
+  <div id="final-value">(尚未选择)</div>
+  <script>
+    const DATA = ['apple', 'apricot', 'banana', 'cherry'];
+    const input = document.getElementById('search');
+    const list = document.getElementById('suggest');
+    const final = document.getElementById('final-value');
+    let selected = -1;
+    input.addEventListener('input', () => {
+      const q = input.value.toLowerCase();
+      list.innerHTML = '';
+      selected = -1;
+      if (!q) { list.classList.remove('show'); return; }
+      const hits = DATA.filter(d => d.startsWith(q));
+      hits.forEach((d, i) => {
+        const li = document.createElement('li');
+        li.textContent = d;
+        li.setAttribute('role', 'option');
+        li.dataset.index = i;
+        li.addEventListener('click', () => { choose(d); });
+        list.appendChild(li);
+      });
+      list.classList.toggle('show', hits.length > 0);
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (list.children.length) {
+          selected = (selected + 1) % list.children.length;
+          [...list.children].forEach((li, i) => li.classList.toggle('selected', i === selected));
+        }
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (selected >= 0 && list.children[selected]) {
+          choose(list.children[selected].textContent);
+        } else {
+          final.textContent = '⚠️ 未选择联想项直接按了 Enter(值未提交): ' + input.value;
+        }
+      }
+    });
+    function choose(d) {
+      input.value = d;
+      list.classList.remove('show');
+      final.textContent = '✅ 已选择: ' + d;
+    }
+  </script>
+</body>
+</html>
