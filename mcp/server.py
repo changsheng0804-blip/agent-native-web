@@ -1419,7 +1419,161 @@ def _signal_delta(before, after, key):
     }
 
 
-def _finalize_click_result(wid, ret, before_signal):
+def _is_submit_trigger(wid, target_id):
+    """点击目标是否为"疑似提交动作"触发元素(form 关联 / type=submit)。
+
+    page_outcome 的 challenged 检测只在疑似提交动作后启用,避免普通点击
+    (点广告/点链接/点装饰)被页面里常驻的 fixed 遮罩 iframe(如支付组件、地图)
+    误触挑战判定。对应 Claude 评审的 submit_trigger 精确化建议。
+    """
+    try:
+        res = _evaluate(
+            wid,
+            """(id) => {
+                const el = agentWorld._runtime.world.elements.get(id);
+                if (!el || !el._el) return false;
+                const n = el._el;
+                // 1. 自身是 submit 类型
+                const tag = n.tagName.toLowerCase();
+                if (tag === 'button' || tag === 'input') {
+                    const t = (n.getAttribute('type') || '').toLowerCase();
+                    if (t === 'submit') return true;
+                }
+                // 2. 位于 form 内(button 默认行为=提交)
+                if (n.closest && n.closest('form')) return true;
+                // 3. input 按 Enter 隐式提交
+                if (tag === 'input') return true;
+                return false;
+            }""",
+            target_id,
+        )
+        return bool(res)
+    except Exception:
+        return False
+
+
+def _challenge_detection(wid):
+    """结构化挑战检测:新出现的"固定全屏遮罩 + iframe 子元素"。
+
+    特征①(强信号,对应 8.4 评审修正):
+      存在 position:fixed(覆盖大部分视口)的容器,且内部有可见 iframe 子元素。
+    不依赖任何 CAPTCHA 提供商 URL 白名单(提供商换 CDN/代理/第一方域名);②③
+    (sandbox/焦点捕获)不做为 challenged 依据,仅作 uncertain 的辅助证据。
+    返回 None(无挑战)或 {type, confidence, evidence[]}。
+    """
+    try:
+        raw = _evaluate(
+            wid,
+            """() => {
+                const vw = window.innerWidth, vh = window.innerHeight;
+                const fixed = [];
+                // 找所有 fixed 定位容器(排除纯装饰:面积需覆盖大部分视口)
+                for (const el of document.querySelectorAll('*')) {
+                    const s = getComputedStyle(el);
+                    if (s.position !== 'fixed') continue;
+                    const r = el.getBoundingClientRect();
+                    const area = r.width * r.height;
+                    if (area < vw * vh * 0.25) continue;  // 小于 25% 视口不算全屏遮罩
+                    // 容器内是否有可见 iframe
+                    const ifr = el.querySelector('iframe');
+                    if (ifr) {
+                        const ir = ifr.getBoundingClientRect();
+                        if (ir.width < 50 || ir.height < 50) continue;
+                        fixed.push({
+                            w: Math.round(r.width), h: Math.round(r.height),
+                            ifrW: Math.round(ir.width), ifrH: Math.round(ir.height),
+                            ifrSrc: (ifr.src || '').slice(0, 120),
+                            bg: (s.backgroundColor || ''),
+                        });
+                        break;  // 一个就够
+                    }
+                }
+                return JSON.stringify(fixed.slice(0, 2));
+            }""",
+        )
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        if data:
+            f = data[0]
+            return {
+                "type": "modal_iframe_challenge",
+                "confidence": "medium",
+                "evidence": [
+                    f"新出现 fixed 全屏遮罩(约 {f['w']}x{f['h']}px)内含 iframe({f['ifrW']}x{f['ifrH']}px)",
+                    f"iframe 来源: {f['ifrSrc'] or '(同源/空白)'}",
+                ],
+            }
+        return None
+    except Exception:
+        return None
+
+
+def _build_page_outcome(wid, before_signal, after_signal, submit_trigger=False):
+    """把动作前后的页面整体信号合成一个"预合成情景判断"(page_outcome)。
+
+    五态(主标签 + 证据列表,弱模型只读主标签):
+      progressed  URL 变化或内容区重建(明确前进)
+      challenged 出现阻断性中间态(CAPTCHA/二次验证)→ 停止截图上报人工
+      errored    出现错误提示信号(表单验证失败)→ 读错误修正重试
+      uncertain  变化发生但性质不明 → 最多补一次 world_state
+      unchanged  没有有效变化 → 按失败路径处理
+    设计:合并在 server 端完成,agent 收到的不是四条独立信号而是预合成判断。
+    """
+    url_changed = before_signal.get("url") != after_signal.get("url")
+    after = after_signal or {}
+
+    # 1. challenged:仅疑似提交动作后启用挑战检测(避免常驻遮罩组件误报)
+    if submit_trigger:
+        challenge = _challenge_detection(wid)
+        if challenge:
+            return {
+                "page_outcome": "challenged",
+                "situation": challenge,
+                "evidence": ["submit 动作后触发挑战检测", "URL 未前进" if not url_changed else "URL 已变化"],
+            }
+
+    # 2. errored:新出现错误提示信号(role=alert / aria-invalid 翻转)
+    try:
+        err_signal = _evaluate(
+            wid,
+            """() => {
+                const alerts = [...document.querySelectorAll('[role="alert"], [aria-live="assertive"], .gl-field-error, [aria-invalid="true"]')]
+                    .map(e => ({ tag: e.tagName.toLowerCase(), text: (e.textContent || '').trim().slice(0, 80) }))
+                    .filter(x => x.text && x.text.length > 1)
+                    .slice(0, 5);
+                return JSON.stringify(alerts);
+            }""",
+        )
+        alerts = json.loads(err_signal) if isinstance(err_signal, str) else (err_signal or [])
+        if alerts:
+            return {
+                "page_outcome": "errored",
+                "situation": {"type": "form_validation_error", "errors": alerts},
+                "evidence": [f"检测到 {len(alerts)} 个错误信号元素"],
+            }
+    except Exception:
+        pass
+
+    # 3. progressed / unchanged:既有全局信号
+    if url_changed:
+        return {
+            "page_outcome": "progressed",
+            "situation": {"type": "navigation", "to_url": after_signal.get("url")},
+            "evidence": [f"URL: {before_signal.get('url')} → {after_signal.get('url')}"],
+        }
+    if after.get("changes_seq", 0) and after["changes_seq"] != before_signal.get("changes_seq", 0):
+        return {
+            "page_outcome": "uncertain",
+            "situation": {"type": "page_content_changed"},
+            "evidence": [f"change_seq {before_signal.get('changes_seq')} → {after.get('changes_seq')}"],
+        }
+    return {
+        "page_outcome": "unchanged",
+        "situation": {"type": "no_page_change"},
+        "evidence": [],
+    }
+
+
+def _finalize_click_result(wid, ret, before_signal, submit_trigger=False):
     """把局部点击结果和页面整体信号合并成最小闭环反馈。
 
     URL 变化和新弹窗是强证据,即使点击目标附近没有变化,也不能报告 no-change。
@@ -1489,6 +1643,12 @@ def _finalize_click_result(wid, ret, before_signal):
             "confidence": "high",
             "why": f"页面整体出现新的弹窗/菜单: {names}",
         })
+
+    # page_outcome:预合成情景判断(弱模型只读主标签,不需跨信道合并)
+    try:
+        ret["page_outcome"] = _build_page_outcome(wid, before_signal, after_signal, submit_trigger=submit_trigger)
+    except Exception:
+        pass
     return ret
 
 
@@ -1843,6 +2003,9 @@ def _t_world_click(args):
     # 视觉证据开关:显式要求时才截前后帧(视觉 diff 兜底),避免每次操作的开销
     visual_evidence = bool(args.get("visual_evidence", False))
 
+    # 疑似提交动作判定(page_outcome 挑战检测的前置条件,只在提交类点击后启用)
+    submit_trigger = _is_submit_trigger(wid, target)
+
     # 点击前:冻结目标空间区域(生效报告的证据基线)
     snap_before = _click_region_snapshot(wid, target, capture_frame=visual_evidence)
     before_signal = _page_signal_snapshot(wid)
@@ -1885,7 +2048,7 @@ def _t_world_click(args):
             effect = _wait_click_effect(wid, snap_before, url_before)
             if effect:
                 ret["effect"] = effect
-            return _ok(_finalize_click_result(wid, ret, before_signal))
+            return _ok(_finalize_click_result(wid, ret, before_signal, submit_trigger=submit_trigger))
         except Exception as e:
             loc_err = f"{type(e).__name__}: {str(e)[:200]}"
     else:
@@ -1916,7 +2079,7 @@ def _t_world_click(args):
     effect = _wait_click_effect(wid, snap_before, url_before)
     if effect:
         ret["effect"] = effect
-    return _ok(_finalize_click_result(wid, ret, before_signal))
+    return _ok(_finalize_click_result(wid, ret, before_signal, submit_trigger=submit_trigger))
 
 
 def _t_world_fill(args):

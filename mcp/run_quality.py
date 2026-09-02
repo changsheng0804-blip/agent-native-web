@@ -62,6 +62,7 @@ GROUPS = {
             "test_assumption_r_cssvar.py",# CSS 变量藏字:IPI 过滤(预期通过)
             "test_assumption_b_shadow.py",# Shadow DOM 穿透修复后:静态可见(预期通过,防回归)
             "test_shadow_dynamic.py", # Shadow DOM 动态感知(运行期新增/点击,预期通过)
+            "test_page_outcome.py",  # page_outcome 五态(challenged 正例/弹窗不误判/负例保守)
         ],
     },
     "real": {
