@@ -16,11 +16,16 @@ window.AgentRuntime = window.AgentRuntime || {};
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ['style', 'class', 'id', 'role', 'aria-label', 'aria-hidden', 'aria-expanded', 'aria-selected', 'hidden', 'open', 'disabled']
+    attributeFilter: ['style', 'class', 'id', 'role', 'aria-label', 'aria-hidden', 'aria-expanded', 'aria-selected', 'hidden', 'open', 'disabled'],
+    // 缺陷修复(2026-09-02 弱模型验证):纯文本变化(textContent/value property)此前不被观察,
+    // 导致"最终值区域已更新但世界模型永远读旧文本"(A 组误判点击无效的根因)。
+    characterData: true,
+    characterDataOldValue: false
   };
 
   function isRelevantMutation(m) {
     if (m.type === 'childList') return true;
+    if (m.type === 'characterData') return true;
     if (m.type === 'attributes') {
       return ['style', 'class', 'id', 'role', 'aria-label', 'aria-hidden', 'aria-expanded', 'aria-selected', 'hidden', 'open', 'disabled'].includes(m.attributeName);
     }

@@ -249,6 +249,26 @@ window.AgentRuntime = window.AgentRuntime || {};
           });
         }
         
+        // 处理纯文本变化:textContent= 赋值在浏览器里表现为 childList
+        // (移除旧文本节点+插入新文本节点,addedNodes 是 TEXT_NODE 会被跳过),
+        // 且 m.target(父元素)本身不会被重扫——导致 text 快照陈旧。
+        // 缺陷修复(2026-09-02):childList 变化含文本节点时,重扫 m.target 更新 text。
+        if (m.type === 'childList' && m.target && m.target.nodeType === Node.ELEMENT_NODE) {
+          const hasTextNode = (m.addedNodes && [...m.addedNodes].some(n => n.nodeType === Node.TEXT_NODE)) ||
+                              (m.removedNodes && [...m.removedNodes].some(n => n.nodeType === Node.TEXT_NODE));
+          if (hasTextNode) {
+            const hostId = global.AgentRuntime.scanner.getStableId(m.target);
+            if (this.world.elements.has(hostId)) {
+              const el = global.AgentRuntime.scanner.scanElement(m.target);
+              if (el) {
+                this.world.elements.set(el.id, el);
+                changedIds.add(el.id);
+                updatedIds.add(el.id);
+              }
+            }
+          }
+        }
+
         // 处理属性变化
         if (m.type === 'attributes' && m.target.nodeType === Node.ELEMENT_NODE) {
           // 重新评估 target 及其所有后代:祖先 aria-hidden/隐藏样式变化会影响整棵子树,
@@ -274,6 +294,19 @@ window.AgentRuntime = window.AgentRuntime || {};
               changedIds.add(prevId);
               removedIds.add(prevId);
             }
+          }
+        }
+
+        // 处理纯文本变化(characterData):更新父元素的 text 字段并记 update 事件
+        // 缺陷修复(2026-09-02):此前 textContent/value 文本更新不产生可观察事件,
+        // 世界模型永远读旧文本——"最终值区域已更新但查询仍是旧值"。
+        if (m.type === 'characterData' && m.target.parentElement) {
+          const host = m.target.parentElement;
+          const el = global.AgentRuntime.scanner.scanElement(host);
+          if (el) {
+            this.world.elements.set(el.id, el);
+            changedIds.add(el.id);
+            updatedIds.add(el.id);
           }
         }
         

@@ -2100,6 +2100,13 @@ def _t_world_fill(args):
         try:
             if type_delay_ms > 0:
                 # 逐字打字:模拟真实键盘输入,触发受控组件/自动联想下拉
+                # 缺陷修复(2026-09-02 弱模型验证):press_sequentially 不清空现有值,
+                # 二次输入会追加污染("ap"→"apapple")。先 fill("") 清空(React 兼容),
+                # 再逐字打字——等价于真人"先清空再输入"。
+                try:
+                    loc.fill("", timeout=5000)
+                except Exception:
+                    pass  # 元素本身为空或 fill 清空失败时继续(打字仍可追加)
                 loc.press_sequentially(text, delay=type_delay_ms, timeout=10000)
             else:
                 # Playwright fill:自动等待 + React 兼容输入 + 清晰错误
