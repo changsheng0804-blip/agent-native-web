@@ -236,13 +236,18 @@ window.AgentRuntime = window.AgentRuntime || {};
     return depth;
   }
 
-  // 全量扫描（初始化用）
+  // 全量扫描（初始化用）—— 穿透 Shadow DOM(open);closed shadow root 无法访问,属已知边界
   function scanAll() {
     const elements = [];
-    document.querySelectorAll('*').forEach(el => {
-      const node = scanElement(el);
-      if (node) elements.push(node);
-    });
+    const scanTree = (root) => {
+      root.querySelectorAll('*').forEach(el => {
+        const node = scanElement(el);
+        if (node) elements.push(node);
+        // 递归进入 open shadow root(现代组件库:弹窗/下拉/日期选择器内部都在 shadow 里)
+        if (el.shadowRoot) scanTree(el.shadowRoot);
+      });
+    };
+    scanTree(document);
     return elements;
   }
 

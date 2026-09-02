@@ -60,7 +60,8 @@ GROUPS = {
             "test_challenge_overlay.py",  # 挑战遮罩盲区复现(Step 1 的验收场景;当前记录盲区,page_outcome 实现后转绿)
             "test_assumption_e_glass.py", # 玻璃罩按钮:不报假成功(预期通过)
             "test_assumption_r_cssvar.py",# CSS 变量藏字:IPI 过滤(预期通过)
-            "test_assumption_b_shadow.py",# ⚠️ Shadow DOM 盲区(当前预期失败=已知问题哨兵,修复后转绿)
+            "test_assumption_b_shadow.py",# Shadow DOM 穿透修复后:静态可见(预期通过,防回归)
+            "test_shadow_dynamic.py", # Shadow DOM 动态感知(运行期新增/点击,预期通过)
         ],
     },
     "real": {

@@ -46,13 +46,17 @@ async def main():
 
             if plain_btn and not inner_btn and not inner_input:
                 print("\n❌ 假设B 成立:扫描器看不见 Shadow DOM 内部——现代组件库(弹窗/下拉/日期选择器)页面会大面积失效")
-                sys.exit(1)
+                await call(session, "world_close", {"world_id": wid})
+                return 1
             elif inner_btn or inner_input:
                 print("\n✅ 假设B 不成立:Shadow DOM 元素可见(内核已穿透或组件内容被扫出)")
             else:
                 print("\n⚠️ 无法判定:普通按钮也不可见(页面整体问题)")
-                sys.exit(2)
+                await call(session, "world_close", {"world_id": wid})
+                return 2
             await call(session, "world_close", {"world_id": wid})
+            return 0
 
 
-asyncio.run(main())
+rc = asyncio.run(main())
+sys.exit(rc)

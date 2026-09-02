@@ -50,12 +50,15 @@ async def main():
 
             if leak_ents:
                 print("\n❌ 假设R 成立:独立隐藏元素进入世界清单(IPI 漏洞)")
-                sys.exit(1)
+                await call(session, "world_close", {"world_id": wid})
+                return 1
             elif vis:
                 print("\n✅ 假设R 不成立:CSS 变量藏字与直接同色都被 IPI 正确过滤;正常文字不受影响")
             else:
                 print("\n⚠️ 无法判定(正常文字也没了?)")
             await call(session, "world_close", {"world_id": wid})
+            return 0
 
 
-asyncio.run(main())
+rc = asyncio.run(main())
+sys.exit(rc)

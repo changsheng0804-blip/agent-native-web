@@ -85,7 +85,16 @@ window.AgentRuntime = window.AgentRuntime || {};
         const c = parseColor(bg);
         if (c && c.a > 0) return c;
       }
-      node = node.parentElement;
+      // 向上回溯;Shadow DOM 边界:shadow 内元素 parentElement 链到 shadowRoot 为止,
+      // 需跳到 host 元素继续(host 的背景同样决定 shadow 内元素的"有效背景")
+      const p = node.parentElement;
+      if (p) {
+        node = p;
+      } else if (node.getRootNode && node.getRootNode() instanceof ShadowRoot) {
+        node = node.getRootNode().host || null;
+      } else {
+        node = null;
+      }
     }
     return null;
   }
