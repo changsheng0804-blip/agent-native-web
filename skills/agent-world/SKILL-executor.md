@@ -77,8 +77,8 @@ description: 弱模型/executor 用的执行版技能(SKILL-executor)。把页�
 | `uncertain` | 变化了但性质不明 | ❓ 调 world_state 看 dialogs/forms,最多 1 次;仍不明 → 截图上报 |
 | `unchanged` | 没有有效变化 | 🔁 按下方"失败恢复路径"处理一次 |
 
-> page_outcome 不存在时(旧版服务器),退化为:读 effect.verdict
-> (effected=继续 / no-change=失败恢复 / changed=可继续但留意)。
+> 所有动作(world_click/fill/batch_fill/press/click_at/navigate)从阶段 A 起都返回 page_outcome,
+> 不存在"没有 page_outcome"的动作;读到 `errored` 时错误信息在卡片 `error` 字段或 `situation.errors`。
 
 ### 失败恢复路径(第一步失败后走这里,只走一遍)
 
