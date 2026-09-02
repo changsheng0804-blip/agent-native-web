@@ -27,6 +27,10 @@ import subprocess
 import sys
 import time
 
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MCP_DIR = ROOT / "mcp"
 REPORT = MCP_DIR / "quality_report.md"

@@ -3,3 +3,6 @@ mcp/profiles/
 mcp/screenshots/
 __pycache__/
 *.pyc
+
+# Firecrawl 工具缓存(不入库)
+.firecrawl/
