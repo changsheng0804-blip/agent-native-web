@@ -65,6 +65,9 @@ async def main():
             for nm, text in mapping.items():
                 r = await call(session, "world_fill", {"world_id": wid, "id": name_by_id[nm], "text": text})
                 assert r.get("effect", {}).get("verdict") in ("effected", "changed", "no-change"), f"{nm} 填表异常"
+                # 阶段 A:fill 统一出口必须带 page_outcome 主标签
+                assert r.get("page_outcome") in ("progressed", "challenged", "errored", "uncertain", "unchanged"), f"{nm} 缺 page_outcome"
+                assert r.get("channel") == "outcome", f"{nm} 缺统一后果卡"
             for nm, text in mapping.items():
                 ent = await call(session, "world_entity", {"world_id": wid, "id": name_by_id[nm]})
                 val = (ent.get("attributes") or {}).get("value", "")
