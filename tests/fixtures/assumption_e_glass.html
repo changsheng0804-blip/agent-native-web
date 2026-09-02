@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>假设E：玻璃罩按钮测试页</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; }
+  button { display: block; margin: 10px 0; padding: 8px 20px; cursor: pointer; }
+  #glass {
+    /* 玻璃罩:外观和正常按钮一样,但鼠标事件穿不过去 */
+    pointer-events: none;
+    cursor: default;
+  }
+  #glass.glassy { background: #999; color: #fff; }
+  #normal { background: #3498db; color: #fff; }
+  #result { margin-top: 20px; font-weight: bold; }
+</style>
+</head>
+<body>
+  <h1>假设E：pointer-events:none 按钮</h1>
+  <p>下面两个按钮外观都正常。左边的有"玻璃罩"(pointer-events:none),点了不会触发任何功能。</p>
+  <button id="glass" class="glassy">点我不该有反应(玻璃罩)</button>
+  <button id="normal" onclick="document.getElementById('result').textContent='✅ 正常按钮被点击,事件触发了!'">点我该有反应(正常)</button>
+  <div id="result">尚未点击</div>
+  <script>
+    document.getElementById('glass').addEventListener('click', function() {
+      document.getElementById('result').textContent = '❌ 玻璃罩按钮竟然触发了 click(这不正常)';
+    });
+  </script>
+</body>
+</html>

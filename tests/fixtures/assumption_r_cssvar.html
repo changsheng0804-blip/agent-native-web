@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>假设R：CSS 变量隐藏文字测试页</title>
+<style>
+  /* 用 CSS 变量玩"同色文字"把戏:变量在 :root 定义,子元素引用 */
+  :root {
+    --hidden-fg: #ffffff;
+    --hidden-bg: #ffffff;
+  }
+  .css-var-hidden {
+    /* 变量展开后 = 白字白底(与真实背景同色), 但代码里看不出直接同色 */
+    color: var(--hidden-fg);
+    background: var(--hidden-bg);
+  }
+  .plain-hidden {
+    /* 对照1:直接写同色(老把戏,应被现有 IPI 拦截) */
+    color: #ffffff;
+    background: #ffffff;
+  }
+  .normal-text {
+    /* 对照2:正常可见文字 */
+    color: #222222;
+    background: #ffffff;
+  }
+</style>
+</head>
+<body>
+  <h1>假设R：CSS 变量实现的同色隐藏文字</h1>
+  <div class="css-var-hidden">SECRET-CSSVAR 这是用 CSS 变量隐藏的敏感内容</div>
+  <div class="plain-hidden">SECRET-PLAIN 这是直接同色隐藏的敏感内容(老把戏)</div>
+  <div class="normal-text">VISIBLE 这是正常可见文字</div>
+</body>
+</html>

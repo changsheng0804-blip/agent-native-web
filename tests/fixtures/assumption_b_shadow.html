@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>假设B：Shadow DOM 组件测试页</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; }
+  .outside { margin: 10px 0; padding: 8px; border: 1px solid #ccc; }
+</style>
+</head>
+<body>
+  <h1>假设B：Shadow DOM(影子世界)组件</h1>
+
+  <div class="outside"><b>页面普通区域(主 DOM):</b>
+    <button id="plain-btn" onclick="document.getElementById('plain-msg').textContent='点了普通按钮'">普通按钮</button>
+    <span id="plain-msg"></span>
+  </div>
+
+  <!-- 模拟现代组件库:组件内部内容在 Shadow DOM 里(文档看不见) -->
+  <my-widget></my-widget>
+
+  <template id="widget-tpl">
+    <style>
+      .widget-box { border: 2px solid #e74c3c; padding: 10px; margin: 10px 0; }
+      .widget-box button { padding: 6px 16px; cursor: pointer; background: #e74c3c; color: white; }
+      input { padding: 4px; }
+    </style>
+    <div class="widget-box">
+      <b>自定义组件内部(Shadow DOM):</b><br>
+      <input placeholder="组件内的输入框" id="w-input">
+      <button id="w-btn">组件内的按钮</button>
+      <span id="w-msg"></span>
+    </div>
+  </template>
+
+  <script>
+    class MyWidget extends HTMLElement {
+      constructor() {
+        super();
+        const shadow = this.attachShadow({ mode: 'open' }); // open shadow
+        const tpl = document.getElementById('widget-tpl').content.cloneNode(true);
+        shadow.appendChild(tpl);
+        shadow.querySelector('#w-btn').addEventListener('click', () => {
+          shadow.querySelector('#w-msg').textContent = '点了组件内按钮';
+        });
+        // 让组件自己也"可交互"(有 onclick 的容器让内核可能识别)
+        this.setAttribute('role', 'region');
+        this.setAttribute('aria-label', '自定义组件区域');
+      }
+    }
+    customElements.define('my-widget', MyWidget);
+  </script>
+</body>
+</html>

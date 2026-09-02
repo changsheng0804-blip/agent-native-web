@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>挑战复刻:提交后出现固定遮罩+iframe验证(仿 GitLab Arkose)</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; }
+  form { max-width: 360px; }
+  input { display: block; width: 100%; margin: 6px 0; padding: 6px; box-sizing: border-box; }
+  button.submit { margin-top: 10px; padding: 8px 24px; cursor: pointer; background: #2b6cb0; color: #fff; border: none; }
+  /* 遮罩层:position:fixed 全屏,内含 iframe(仿 Arkose/hCaptcha 的挑战容器) */
+  #challenge-overlay {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.55); z-index: 9999;
+    display: none; align-items: center; justify-content: center;
+  }
+  #challenge-overlay.show { display: flex; }
+  #challenge-box {
+    width: 400px; height: 450px; background: #fff; border-radius: 8px;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  #challenge-box iframe { width: 100%; height: 100%; border: none; }
+  #challenge-title { padding: 10px 14px; background: #f0f0f0; font-weight: bold; }
+  #form-status { margin-top: 10px; color: #c0392b; font-size: 14px; }
+</style>
+</head>
+<body>
+  <h1>挑战复刻页(仿 GitLab 注册→Arkose)</h1>
+  <p>填写表单点 Continue 后:<br>
+    ① 表单字段被清空(URL 不变)<br>
+    ② 出现 position:fixed 全屏遮罩<br>
+    ③ 遮罩内是 iframe 挑战框(内容在一个独立 iframe 文档里,主文档 DOM 无对话框)</p>
+  <form id="signup">
+    <input name="new_user[first_name]" placeholder="名字" value="">
+    <input name="new_user[email]" type="email" placeholder="邮箱" value="">
+    <input name="new_user[password]" type="password" placeholder="密码" value="">
+    <button type="submit" class="submit">Continue</button>
+  </form>
+  <div id="form-status"></div>
+
+  <div id="challenge-overlay" aria-hidden="true">
+    <div id="challenge-box">
+      <div id="challenge-title">请完成验证以继续(模拟:iframe 内是挑战,主文档看不到内容)</div>
+      <iframe id="challenge-frame" srcdoc="
+        <html><body style='font-family:sans-serif;text-align:center;padding:40px 20px;'>
+          <p style='color:#666;'>这是挑战 iframe 内部内容</p>
+          <p style='font-size:22px;'>√ 我不是机器人</p>
+          <p><button onclick='parent.document.getElementById(&quot;challenge-overlay&quot;).classList.remove(&quot;show&quot;)'>完成(模拟人工通过)</button></p>
+        </body></html>
+      "></iframe>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('signup').addEventListener('submit', function(e) {
+      e.preventDefault();
+      // ① 清空表单(仿 GitLab 提交后被重置)
+      this.querySelectorAll('input').forEach(i => i.value = '');
+      // ② 弹出固定遮罩+iframe 挑战
+      var ov = document.getElementById('challenge-overlay');
+      ov.classList.add('show');
+      ov.setAttribute('aria-hidden', 'false');
+      // ③ 全局状态:URL 不变化
+      document.getElementById('form-status').textContent = 'Complete verification to sign up.(模拟)';
+    });
+  </script>
+</body>
+</html>
