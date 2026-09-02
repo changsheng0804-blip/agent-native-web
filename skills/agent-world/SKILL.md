@@ -33,7 +33,12 @@ description: Comprehensive Web Navigation, Scraping, Form Filling, and Multi-ste
                └─→ 行动层自动走 Locator -> 坐标手势 -> JS Setter 降级
                └─→ 自带 DOM Diff 与视觉帧差双轨生效报告(visual-effected 捕捉纯 CSS 动效/浮层)
 
-4. 验证变化    查看操作返回值自带的 status 卡与 effect 证据
+4. 验证变化    读操作返回的 page_outcome 五态主标签 + 统一后果卡
+               └─→ progressed:继续按 guide 推进
+               └─→ challenged:停下,报告"被挑战遮罩/验证墙拦截",转 headful 人工或更换路径
+               └─→ errored:重试一次或换动作路径(如 click_at/截图)
+               └─→ uncertain:有变化但没确认生效,调用 world_state / world_screenshot 复核一次
+               └─→ unchanged:未生效,不得重复硬点,换目标或重新 world_guide
                └─→ 必要时调用 world_changes(since) 游标续读增量事件流
                └─→ 或调用 world_wait(mode="appear", name="...") 等待预期构件渲染
 
@@ -46,7 +51,25 @@ description: Comprehensive Web Navigation, Scraping, Form Filling, and Multi-ste
 
 ---
 
-## 三、状态卡 (Status Dashboard) 判定准则
+## 三、统一后果卡 (page_outcome) 判定准则
+
+**每次动作(world_click / world_fill / world_batch_fill / world_press / world_click_at / world_navigate)
+都返回同一张后果卡**。弱模型只读首层主标签,不需要拼装 effect/feedback/status:
+
+| 主标签 | 含义 | 下一步 |
+|---|---|---|
+| `progressed` | 已生效(导航/弹窗/状态翻转/填表验证/视觉变化),含 `situation.type` 与 `why` | 继续任务 |
+| `challenged` | 被挑战遮罩/验证墙拦截(检测到新的全屏遮罩或挑战 iframe) | **停下**,报告人类或换路径 |
+| `errored` | 动作抛异常,未获得生效判定(可能已部分生效) | 重试一次或换动作路径 |
+| `uncertain` | 有变化但无法确认是否生效(`effect.verdict=changed`) | 用 world_state / world_screenshot 复核一次 |
+| `unchanged` | 未观察到任何生效证据(`no-change`),可能是目标错了或已失效 | 换目标或重新 world_guide,**不得重复硬点** |
+
+卡片结构:`page_outcome / situation / confidence / why / target / action / effect / feedback / status /
+page / overlays / sources / next / evidence_seq / changes_seq / world_epoch`。
+`el_N` 编号可回查(`world_entity`)、可对质;`world_navigate` 成功后旧编号全部失效(`world_epoch` +1)。
+`evidence_seq` 与 `changes_seq` 成对出现,是"这次动作到底发生了什么"的原始凭证。
+
+## 四、状态卡 (Status Dashboard) 判定准则
 
 每次 MCP 工具调用均返回最新的 `status` 字段,重点关注:
 
@@ -60,7 +83,7 @@ description: Comprehensive Web Navigation, Scraping, Form Filling, and Multi-ste
 
 ---
 
-## 四、行动层与多模态最佳实践
+## 五、行动层与多模态最佳实践
 
 1. **输入联想搜索**:对于输入后需要触发下拉推荐的搜索框,设置 `type_delay_ms: 30` 模拟真实键盘打字。
 2. **多字段表单录入**:优先使用 `world_batch_fill` 一次性提交多个字段,减少通信往返(逐字段容错,失败会记录在 results)。
