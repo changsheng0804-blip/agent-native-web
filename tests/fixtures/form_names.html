@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>表单 name 属性测试页</title>
+<style>
+  input { display: block; margin: 6px 0; width: 240px; padding: 4px; }
+  button { margin-top: 8px; padding: 6px 16px; }
+</style>
+</head>
+<body>
+  <h1>表单字段测试</h1>
+  <!-- 幽灵字段:模拟真实站点在表单前出现的干扰 input(如 GitLab 的 firstname/lastname) -->
+  <input name="firstname" placeholder="幽灵名字">
+  <input name="lastname" placeholder="幽灵姓">
+  <form id="main-form">
+    <input name="new_user[first_name]" placeholder="真实名字">
+    <input name="new_user[last_name]" placeholder="真实姓">
+    <input name="new_user[username]" placeholder="用户名">
+    <input name="new_user[email]" type="email" placeholder="邮箱">
+    <input name="new_user[password]" type="password" placeholder="密码">
+  </form>
+  <button onclick="alert('提交')">Continue</button>
+</body>
+</html>

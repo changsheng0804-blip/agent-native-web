@@ -172,6 +172,9 @@ window.AgentRuntime = window.AgentRuntime || {};
         href: el.getAttribute('href'),
         type: el.getAttribute('type'),
         placeholder: el.getAttribute('placeholder'),
+        // 表单字段的 name 属性(2026-09-01 端到端实验发现缺失):
+        // 真实站点表单字段按 name 精确定位(如 new_user[email]),DOM 顺序不可假设(幽灵字段会错位)
+        name: (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'form') ? (el.getAttribute('name') || '') : '',
         value: (tag === 'input' || tag === 'textarea') ? (el.value || '') : undefined
       },
       depth: getDepth(el),

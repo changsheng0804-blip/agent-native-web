@@ -56,6 +56,7 @@ GROUPS = {
             "test_channels.py",          # 三条独立信道(状态/变化摘要/操作证据)
             "test_guide.py",             # 实时任务导览接入信道
             "test_visual_evidence.py",   # SoM 标注/ImageContent/视觉 diff 兜底(正/负例)
+            "test_form_names.py",      # 表单字段 name 属性定位(幽灵字段防错位)
         ],
     },
     "real": {
