@@ -8,6 +8,11 @@ Agent-Native Web（智能体原生网页）让智能体可以在网页世界中�
 快速导览页面 → 按需找到目标 → 执行动作 → 立即获得真实反馈
 ```
 
+**默认协议只有 6 个词(弱模型友好):** `open → guide → find → act → outcome → close`。
+每次 `world_act` 都返回同一张统一后果卡(`page_outcome` 五态:progressed/challenged/errored/uncertain/unchanged),
+弱模型不再需要自行合并多条信道。旧 `world_*` 工具(22 个)全部保留并标记为 `[内部/调试]`,
+可用 `AGENT_WORLD_LITE=1` 启动只暴露 6 词的精简模式。
+
 ## 快速入口
 
 - [完整项目指南](docs/项目指南与架构.md)

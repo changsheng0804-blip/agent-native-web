@@ -56,15 +56,18 @@ description: 弱模型/executor 用的执行版技能(SKILL-executor)。把页�
             否 → 记住最佳候选的 id
 
 第 3 步  定位目标
-        → world_entities(role/name/text 过滤, max_results=8)
-        → 结果为空 ?
-            是 → 扩大过滤条件,再查一次(max_results=30)
+        → world_find(q=候选名/编号 或 role/name/text 过滤, interactive=true)
+        → matches 为空 ?
+            是 → 换一组过滤条件,再查一次(max_results=30)
             仍为空 → world_screenshot → 停止,上报
+        → matches.ambiguous = true ?
+            是 → 用更精确的 q(全名/编号)再 find 一次;仍歧义 → 截图上报
         → 取【可交互】目标(interactive=true)的 id
 
 第 4 步  执行操作
-        → world_click / world_fill / world_press(用第 3 步的 id)
-        → 【立即】读返回值中的 effect.verdict 和 page_outcome:
+        → world_act(kind="click|fill|press|batch_fill", id=第 3 步的 id, ...)
+        → 连续动作用 world_act(steps=[...]) 聚合(一个往返,任一步 errored 即停)
+        → 【立即】读返回值的 page_outcome 主标签:
 ```
 
 ### 操作后判定表(核心,每次操作后必查)
@@ -77,19 +80,22 @@ description: 弱模型/executor 用的执行版技能(SKILL-executor)。把页�
 | `uncertain` | 变化了但性质不明 | ❓ 调 world_state 看 dialogs/forms,最多 1 次;仍不明 → 截图上报 |
 | `unchanged` | 没有有效变化 | 🔁 按下方"失败恢复路径"处理一次 |
 
-> page_outcome 不存在时(旧版服务器),退化为:读 effect.verdict
-> (effected=继续 / no-change=失败恢复 / changed=可继续但留意)。
+> 所有动作(world_click/fill/batch_fill/press/click_at/navigate)从阶段 A 起都返回 page_outcome,
+> 不存在"没有 page_outcome"的动作;读到 `errored` 时错误信息在卡片 `error` 字段或 `situation.errors`。
 
 ### 失败恢复路径(第一步失败后走这里,只走一遍)
 
 ```
 世界状态存在疑问时的唯一顺序(不自由发挥):
-  1. world_state → 看 dialogs
+  1. world_outcome() → 重读最近一张后果卡(since 可增量)
+      page_outcome=unchanged/uncertain ?
+      是 → 继续
+  2. world_state → 看 dialogs(逃生工具,仅此一步)
       有弹窗 → 先处理弹窗(场景3)
       无弹窗 → 继续
-  2. world_map → 重新定位目标区域
-  3. 用新 id 重试一次操作
-  4. 仍失败(第二次失败) → world_screenshot → 停止,上报截图+失败原因
+  3. world_map → 重新定位目标区域(逃生工具)
+  4. world_find 新 id → world_act 重试一次操作
+  5. 仍失败(第二次失败) → world_screenshot → 停止,上报截图+失败原因
 ```
 
 ---
@@ -99,29 +105,29 @@ description: 弱模型/executor 用的执行版技能(SKILL-executor)。把页�
 ### 场景 1:输入触发联想下拉(autocomplete)
 
 ```
-world_fill(id, text, type_delay_ms=30)        ← 必须用打字间隔,不可直接 fill 后提交
-  → 读 effect.verdict
-  → = no-change ? 失败恢复路径,结束
-  → = effected/changed ?
-      → world_entities(role="listbox" 或 role="option")
+world_act(kind="fill", id, text, type_delay_ms=30)  ← 必须用打字间隔,不可直接 fill 后提交
+  → 读 page_outcome
+  → = unchanged ? 失败恢复路径,结束
+  → = progressed/uncertain ?
+      → world_find(role="listbox" 或 role="option")
       → 找到 option ?
-          是 → world_click(option 的 id)          ← 选中联想项,不是按 Enter
-          否 → world_wait(appear, role="listbox", timeout_ms=2000)
-                命中 → 再查 option → 点击
-                超时 → world_press(id, "ArrowDown") 触发联想 → 再查
-  → 最终确认:world_state.forms 里能看到你填的值
+          是 → world_act(kind="click", id=option 的 id)  ← 选中联想项,不是按 Enter
+          否 → world_wait(appear, role="listbox", timeout_ms=2000)   ← 逃生工具
+                命中 → 再 find option → world_act click
+                超时 → world_act(kind="press", key="ArrowDown") 触发联想 → 再查
+  → 最终确认:world_state.forms 里能看到你填的值(逃生工具)
 【禁止】fill 后直接按 Enter 提交(联想未选择时提交的是空表单)
 ```
 
 ### 场景 3:弹窗/遮罩嵌套
 
 ```
-任何操作返回 effect 后,先查 page_outcome:
+任何操作返回后,先查 page_outcome:
   = challenged ? 停止上报(见判定表)
   = progressed/uncertain ?
-      → world_state → dialogs
+      → world_outcome() 重读卡;仍不明 → world_state → dialogs(逃生工具)
       → dialogs 有新增 ?
-          是 → 只操作弹窗内元素(world_entities 加 bounds 过滤到弹窗范围)
+          是 → 只操作弹窗内元素(world_find 加 bounds 过滤到弹窗范围)
                完成弹窗内交互 → world_state 确认 dialogs 已消失 → 继续
           否 → 继续主流程
 【禁止】忽略 dialogs 直接操作主页面的元素(会被遮挡操作失败)
@@ -159,15 +165,18 @@ status.auth.loggedIn = false 且 URL 含 login/signin/auth ?
 
 ---
 
-## 五、工具使用速查(何时用哪个,何时不用)
+## 五、工具使用速查(默认 6 词,其余为逃生)
+
+**默认协议(弱模型只用这 6 个):** `world_open → world_guide → world_find → world_act → world_outcome → world_close`
 
 | 时机 | 用 | 不用 |
 |---|---|---|
-| 打开新页面后 | world_guide(强制) | world_entities(太早) |
-| 找目标元素 | world_entities(过滤) | world_screenshot(最后手段) |
-| 操作后判断 | 读返回的 page_outcome/effect | 再调 world_changes(噪声大) |
-| 操作结果存疑 | world_state(看 dialogs/forms) | 反复 world_click |
-| 想了解页面变化 | world_change_digest | world_changes(原始流,调试才用) |
+| 打开新页面后 | world_guide(强制) | world_find(太早) |
+| 找目标元素 | world_find(q/role/name/text, interactive=true) | world_screenshot(最后手段) |
+| 执行动作 | world_act(kind=click/fill/press/batch_fill, steps=[...] 聚合) | 旧 world_click/world_fill |
+| 操作后判断 | 读返回的 page_outcome;存疑时 world_outcome() 幂等重读 | 再调 world_changes(噪声大) |
+| 操作结果存疑 | world_outcome(最多 1 次)→ world_state(逃生,看 dialogs/forms) | 反复 world_act |
+| 想了解页面变化 | world_change_digest(逃生) | world_changes(原始流,调试才用) |
 | 连续失败 2 次 | world_screenshot → 停止上报 | 第三次重试相同路径 |
 | 任务完成 | world_close | — |
 

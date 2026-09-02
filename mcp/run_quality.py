@@ -114,6 +114,7 @@ GROUPS = {
             "test_guide.py",             # 实时任务导览接入信道
             "test_visual_evidence.py",   # SoM 标注/ImageContent/视觉 diff 兜底(正/负例)
             "test_form_names.py",      # 表单字段 name 属性定位(幽灵字段防错位)
+            "test_protocol.py",        # 阶段 B 收口:默认 6 词协议(find/act/outcome + LITE 模式)
             "test_page_outcome.py",    # 统一后果卡:全动作 page_outcome 五态(阶段 A)
             "test_challenge_overlay.py",  # 挑战遮罩复刻(Step 1 的验收场景;page_outcome 已实现,守护不回归)
             "test_assumption_e_glass.py", # 玻璃罩按钮:不报假成功(预期通过)

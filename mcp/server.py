@@ -30,6 +30,7 @@ import asyncio
 import base64
 import json
 import math
+import os
 import re
 import sys
 import time
@@ -99,9 +100,21 @@ def _evaluate(world_id, expr, arg=None):
 
 
 # ── 工具定义 ─────────────────────────────────────────────────
+# 阶段 B 收口:对外默认协议 6 个词(弱模型只学这一条环)
+#   world_open → world_guide → world_find → world_act → world_outcome → world_close
+# 其余 19 个旧工具全部保留(兼容已接入客户端),描述加 [内部/调试] 前缀;
+# AGENT_WORLD_LITE=1 时 list_tools 只暴露 6 个, call_tool 拒绝旧工具。
+CANONICAL_TOOLS = {"world_open", "world_guide", "world_find", "world_act", "world_outcome", "world_close"}
+CANONICAL_ORDER = ["world_open", "world_guide", "world_find", "world_act", "world_outcome", "world_close"]
+
+
+def _lite_mode():
+    return os.environ.get("AGENT_WORLD_LITE", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 @server.list_tools()
 async def list_tools():
-    return [
+    tools = [
         types.Tool(
             name="world_open",
             description="打开一个网页并建立原生网页世界(注入 agent-runtime)。返回世界 ID 和页面摘要。可并行打开多个世界互不干扰。headful=true 时弹出可见窗口(人工介入点:登录/验证码/真人确认);profile=名称 时使用持久化登录态(同一名称复用);cdp_url 可连接已有 Chrome 调试端口(如 http://localhost:9222),复用日常已登录浏览器(注意:不会关闭用户浏览器)。",
@@ -399,7 +412,70 @@ async def list_tools():
             description="列出所有已打开的世界。",
             inputSchema={"type": "object", "properties": {}},
         ),
+        # ── 阶段 B 收口:3 个新工具(默认协议) ──
+        types.Tool(
+            name="world_find",
+            description="默认协议:按条件定位构件(替代 world_entities/world_resolve 的日常用法)。返回 matches[] 与 ambiguous 标记;禁止在本工具内执行任何动作。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "q": {"type": "string", "description": "一句话或弱 ID(名字/强 ID/页面原生 id),走 resolve 解析"},
+                    "role": {"type": "string", "description": "语义角色,如 button/link/input/combobox/heading"},
+                    "text": {"type": "string", "description": "文本包含(子串匹配)"},
+                    "name": {"type": "string", "description": "名字包含(如 round-trip 匹配 combobox.round-trip)"},
+                    "interactive": {"type": "boolean", "description": "仅返回可交互构件"},
+                    "in_viewport": {"type": "boolean", "description": "仅返回视口内构件"},
+                    "max_results": {"type": "integer", "description": "最多返回条数", "default": 20},
+                },
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_act",
+            description="默认协议:唯一行动入口。kind=click|fill|press|batch_fill,返回统一后果卡(page_outcome 五态)。steps 数组可在一个往返内执行多个动作(聚合执行,等价 RFC 的 world_run);任一步 errored 即停止。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "kind": {"type": "string", "description": "动作类型: click|fill|press|batch_fill", "enum": ["click", "fill", "press", "batch_fill"]},
+                    "id": {"type": "string", "description": "构件编号(如 el_89)或可解析的名字(world_find 返回的 id)"},
+                    "text": {"type": "string", "description": "fill 时填写的文本"},
+                    "key": {"type": "string", "description": "press 时的按键(Enter/Escape/Tab...)"},
+                    "fields": {"type": "array", "description": "batch_fill 的字段列表 [{\"id\":\"el_6\",\"text\":\"...\"}]", "items": {"type": "object"}},
+                    "type_delay_ms": {"type": "number", "description": "逐字打字延迟(触发联想下拉用)", "default": 0},
+                    "visual_evidence": {"type": "boolean", "description": "是否截前后帧做视觉 diff 兜底", "default": False},
+                    "steps": {"type": "array", "description": "聚合执行:多步动作序列 [{kind,id,text|key|fields,...}, ...],任一步 errored 即停", "items": {"type": "object"}},
+                },
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_outcome",
+            description="默认协议:读最近一张统一后果卡(幂等,弱模型'我刚才到底怎样了'的唯一查询)。since 传入 evidence_seq 时,仅当有新动作才返回新卡,否则返回 none 卡。watch_id 为阶段 C(验尸官)预留。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "since": {"type": "integer", "description": "仅当存在 evidence_seq 大于 since 的新卡时返回它", "default": 0},
+                },
+                "required": ["world_id"],
+            },
+        ),
     ]
+    # 阶段 B 收口:规范 6 词置前(保持协议顺序),旧工具描述加 [内部/调试] 前缀;LITE 模式只暴露 6 词
+    if _lite_mode():
+        tools = [t for t in tools if t.name in CANONICAL_TOOLS]
+    else:
+        tools = sorted(tools, key=lambda t: (CANONICAL_ORDER.index(t.name) if t.name in CANONICAL_TOOLS else 99, t.name))
+        tools = [
+            types.Tool(name=t.name,
+                       description=("[内部/调试] " + t.description) if t.name not in CANONICAL_TOOLS else t.description,
+                       inputSchema=t.inputSchema,
+                       outputSchema=t.outputSchema)
+            for t in tools
+        ]
+    return tools
 
 
 # ── 工具实现 ─────────────────────────────────────────────────
@@ -413,21 +489,44 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         return [types.TextContent(type="text", text=f"错误: {e}")]
 
 
+# 动作类工具:统一走 before_signal + 证据记录 + 统一后果卡(阶段 A)
+ACTION_NAMES = {"world_click", "world_click_at", "world_fill", "world_batch_fill", "world_press", "world_navigate"}
+
+
 def _impl_with_status(name, args):
-    action_names = {"world_click", "world_click_at", "world_fill", "world_batch_fill", "world_press", "world_navigate"}
+    if _lite_mode() and name not in CANONICAL_TOOLS:
+        raise ValueError(f"AGENT_WORLD_LITE 模式只开放 6 个默认工具({sorted(CANONICAL_TOOLS)});{name} 是内部/调试工具,请勿在 LITE 会话调用")
     wid = args.get("world_id")
     before_signal = None
-    if name in action_names and wid is not None:
+    if name in ACTION_NAMES and wid is not None:
         try:
             before_signal = _page_signal_snapshot(int(wid))
         except Exception:
             before_signal = None
-    result = _impl(name, args)
-    if name in action_names and wid is not None and before_signal is not None:
+    try:
+        result = _impl(name, args, before_signal)
+    except Exception as e:
+        # 动作异常路径:返回统一后果卡 page_outcome=errored(结构化返回,不吞错误)
+        if name in ACTION_NAMES and wid is not None:
+            traceback.print_exc()
+            try:
+                return _inject_status(_errored_card(int(wid), name, args, before_signal, e), wid)
+            except Exception:
+                return _errored_card(int(wid), name, args, before_signal, e)
+        raise
+    if name in ACTION_NAMES and wid is not None and before_signal is not None:
         try:
             _record_action_evidence(int(wid), name, args, before_signal, result)
         except Exception:
             # 证据记录不能阻断原有动作返回。
+            pass
+    # 阶段 B:动作出口的后果卡缓存,供 world_outcome 幂等读取(world_act 内部已记录证据,这里只缓存卡)
+    if name in ACTION_NAMES or name == "world_act":
+        try:
+            payload = _result_payload(result)
+            if payload and payload.get("channel") == "outcome":
+                _world(int(wid))["last_outcome_card"] = payload
+        except Exception:
             pass
     if name in {"world_state", "world_change_digest", "world_evidence", "world_guide"}:
         return result
@@ -567,7 +666,7 @@ def _inject_status(result, wid):
     return result
 
 
-def _impl(name, args):
+def _impl(name, args, before_signal=None):
     if name == "world_open":
         return _t_world_open(args)
     if name == "world_entities":
@@ -591,13 +690,19 @@ def _impl(name, args):
     if name == "world_guide":
         return _t_world_guide(args)
     if name == "world_click":
-        return _t_world_click(args)
+        return _t_world_click(args, before_signal)
     if name == "world_fill":
-        return _t_world_fill(args)
+        return _t_world_fill(args, before_signal)
     if name == "world_batch_fill":
-        return _t_world_batch_fill(args)
+        return _t_world_batch_fill(args, before_signal)
     if name == "world_press":
-        return _t_world_press(args)
+        return _t_world_press(args, before_signal)
+    if name == "world_find":
+        return _t_world_find(args)
+    if name == "world_act":
+        return _t_world_act(args, before_signal)
+    if name == "world_outcome":
+        return _t_world_outcome(args)
     if name == "world_wait":
         return _t_world_wait(args)
     if name == "world_screenshot":
@@ -605,9 +710,9 @@ def _impl(name, args):
     if name == "world_eval":
         return _t_world_eval(args)
     if name == "world_click_at":
-        return _t_world_click_at(args)
+        return _t_world_click_at(args, before_signal)
     if name == "world_navigate":
-        return _t_world_navigate(args)
+        return _t_world_navigate(args, before_signal)
     if name == "world_close":
         return _t_world_close(args)
     if name == "world_list":
@@ -709,6 +814,8 @@ def _t_world_open(args):
         # 操作证据信道只在当前网页世界内短暂保存,不落盘。
         "evidence_seq": 0,
         "evidence_log": [],
+        # 世界纪元:world_navigate 成功导航 +1;跨纪元旧 el_N 全部失效
+        "epoch": 0,
     }
     # 等待世界稳定(分层加载:渐进渲染/懒加载,固定秒数不可靠,以状态卡 stable 为准)
     stabilize_ms = int(args.get("stabilize_ms", 10000))
@@ -1419,13 +1526,16 @@ def _signal_delta(before, after, key):
     }
 
 
-def _is_submit_trigger(wid, target_id):
-    """点击目标是否为"疑似提交动作"触发元素(form 关联 / type=submit)。
+def _is_submit_trigger(wid, target_id, key=None):
+    """点击/按键目标是否为"疑似提交动作"触发元素(form 关联 / type=submit)。
 
     page_outcome 的 challenged 检测只在疑似提交动作后启用,避免普通点击
     (点广告/点链接/点装饰)被页面里常驻的 fixed 遮罩 iframe(如支付组件、地图)
     误触挑战判定。对应 Claude 评审的 submit_trigger 精确化建议。
+    key 非 None 时仅 Enter 视为提交类按键。
     """
+    if key is not None and str(key).lower() not in ("enter",):
+        return False
     try:
         res = _evaluate(
             wid,
@@ -1507,78 +1617,104 @@ def _challenge_detection(wid):
         return None
 
 
-def _build_page_outcome(wid, before_signal, after_signal, submit_trigger=False):
-    """把动作前后的页面整体信号合成一个"预合成情景判断"(page_outcome)。
+def _build_page_outcome(wid, before_signal, after_signal, submit_trigger=False, effect=None,
+                        overlays_changed=False, check_errors=False):
+    """把动作前后信号 + 局部判定合成统一后果卡主标签(五态,平铺字符串)。
 
-    五态(主标签 + 证据列表,弱模型只读主标签):
-      progressed  URL 变化或内容区重建(明确前进)
-      challenged 出现阻断性中间态(CAPTCHA/二次验证)→ 停止截图上报人工
-      errored    出现错误提示信号(表单验证失败)→ 读错误修正重试
-      uncertain  变化发生但性质不明 → 最多补一次 world_state
-      unchanged  没有有效变化 → 按失败路径处理
-    设计:合并在 server 端完成,agent 收到的不是四条独立信号而是预合成判断。
+    progressed  effect.verdict ∈ {effected, visual-effected}(导航/弹窗/状态翻转/填表验证/视觉)
+    challenged 疑似提交动作后出现 fixed 全屏遮罩+iframe(CAPTCHA/二次验证)→ 停止上报人工
+    errored    表单错误信号(role=alert / aria-invalid,仅表单类动作后检测)→ 读错误修正重试
+    uncertain  effect.verdict == changed(有变化但性质不明)→ 最多补一次 world_state
+    unchanged  其余(没有有效变化)→ 按失败路径处理
+
+    设计:合并在 server 端完成,agent 收到的不是四条独立信号而是预合成主标签。
+    返回 (page_outcome, situation, confidence, why)。
     """
     url_changed = before_signal.get("url") != after_signal.get("url")
-    after = after_signal or {}
+    effect = effect or {}
+    verdict = effect.get("verdict")
 
     # 1. challenged:仅疑似提交动作后启用挑战检测(避免常驻遮罩组件误报)
     if submit_trigger:
         challenge = _challenge_detection(wid)
         if challenge:
-            return {
-                "page_outcome": "challenged",
-                "situation": challenge,
-                "evidence": ["submit 动作后触发挑战检测", "URL 未前进" if not url_changed else "URL 已变化"],
-            }
+            why = "页面被挑战遮罩/验证墙拦截: " + " ".join(challenge.get("evidence", []))[:200]
+            return (
+                "challenged",
+                {"type": challenge.get("type", "challenge"), "to_url": None,
+                 "evidence": challenge.get("evidence", [])},
+                challenge.get("confidence", "medium"),
+                why,
+            )
 
-    # 2. errored:新出现错误提示信号(role=alert / aria-invalid 翻转)
-    try:
-        err_signal = _evaluate(
-            wid,
-            """() => {
-                const alerts = [...document.querySelectorAll('[role="alert"], [aria-live="assertive"], .gl-field-error, [aria-invalid="true"]')]
-                    .map(e => ({ tag: e.tagName.toLowerCase(), text: (e.textContent || '').trim().slice(0, 80) }))
-                    .filter(x => x.text && x.text.length > 1)
-                    .slice(0, 5);
-                return JSON.stringify(alerts);
-            }""",
+    # 2. errored:表单错误信号(role=alert / aria-invalid,仅表单类动作后检测,
+    #    避免普通点击被页面常驻错误提示元素误判)
+    if check_errors:
+        try:
+            err_signal = _evaluate(
+                wid,
+                """() => {
+                    const alerts = [...document.querySelectorAll('[role="alert"], [aria-live="assertive"], .gl-field-error, [aria-invalid="true"]')]
+                        .filter(e => {
+                            const s = getComputedStyle(e);
+                            const r = e.getBoundingClientRect();
+                            if (s.display === 'none' || s.visibility === 'hidden') return false;
+                            return r.width > 0 && r.height > 0;
+                        })
+                        .map(e => ({ tag: e.tagName.toLowerCase(), text: (e.textContent || '').trim().slice(0, 80) }))
+                        .filter(x => x.text && x.text.length > 1)
+                        .slice(0, 5);
+                    return JSON.stringify(alerts);
+                }""",
+            )
+            alerts = json.loads(err_signal) if isinstance(err_signal, str) else (err_signal or [])
+            if alerts:
+                names = "、".join(a.get("text", "")[:40] for a in alerts[:3])
+                return (
+                    "errored",
+                    {"type": "form_validation_error", "to_url": None, "errors": alerts},
+                    "high",
+                    f"检测到 {len(alerts)} 个错误信号元素: {names}",
+                )
+        except Exception:
+            pass
+
+    # 3. effect 判定(局部判定 + 全局纠正之后)
+    if verdict in ("effected", "visual-effected"):
+        situation_type = "navigation" if url_changed else \
+            ("overlay" if overlays_changed else \
+             ("form" if "填表值" in (effect.get("why") or "") else \
+              ("state-flip" if "状态变化" in (effect.get("why") or "") else \
+               ("visual" if verdict == "visual-effected" or "视觉" in (effect.get("why") or "") else "none"))))
+        return (
+            "progressed",
+            {"type": situation_type, "to_url": after_signal.get("url") if url_changed else None},
+            effect.get("confidence") or "high",
+            effect.get("why") or "操作已生效",
         )
-        alerts = json.loads(err_signal) if isinstance(err_signal, str) else (err_signal or [])
-        if alerts:
-            return {
-                "page_outcome": "errored",
-                "situation": {"type": "form_validation_error", "errors": alerts},
-                "evidence": [f"检测到 {len(alerts)} 个错误信号元素"],
-            }
-    except Exception:
-        pass
-
-    # 3. progressed / unchanged:既有全局信号
-    if url_changed:
-        return {
-            "page_outcome": "progressed",
-            "situation": {"type": "navigation", "to_url": after_signal.get("url")},
-            "evidence": [f"URL: {before_signal.get('url')} → {after_signal.get('url')}"],
-        }
-    if after.get("changes_seq", 0) and after["changes_seq"] != before_signal.get("changes_seq", 0):
-        return {
-            "page_outcome": "uncertain",
-            "situation": {"type": "page_content_changed"},
-            "evidence": [f"change_seq {before_signal.get('changes_seq')} → {after.get('changes_seq')}"],
-        }
-    return {
-        "page_outcome": "unchanged",
-        "situation": {"type": "no_page_change"},
-        "evidence": [],
-    }
+    if verdict == "changed":
+        return (
+            "uncertain",
+            {"type": "none", "to_url": None},
+            effect.get("confidence") or "medium",
+            effect.get("why") or "有变化但无法确认是否生效",
+        )
+    return (
+        "unchanged",
+        {"type": "none", "to_url": None},
+        effect.get("confidence") or "high",
+        effect.get("why") or "未观察到任何生效证据",
+    )
 
 
-def _finalize_click_result(wid, ret, before_signal, submit_trigger=False):
+def _finalize_click_result(wid, ret, before_signal, after_signal=None):
     """把局部点击结果和页面整体信号合并成最小闭环反馈。
 
     URL 变化和新弹窗是强证据,即使点击目标附近没有变化,也不能报告 no-change。
+    after_signal 可由调用方传入(统一后果卡复用同一份快照,避免重复 evaluate)。
     """
-    after_signal = _page_signal_snapshot(wid)
+    if after_signal is None:
+        after_signal = _page_signal_snapshot(wid)
     url_changed = before_signal.get("url") != after_signal.get("url")
     title_changed = before_signal.get("title") != after_signal.get("title")
     dialog_delta = _signal_delta(before_signal, after_signal, "dialogs")
@@ -1643,32 +1779,189 @@ def _finalize_click_result(wid, ret, before_signal, submit_trigger=False):
             "confidence": "high",
             "why": f"页面整体出现新的弹窗/菜单: {names}",
         })
-
-    # page_outcome:预合成情景判断(弱模型只读主标签,不需跨信道合并)
-    # 阶段A 统一后果卡:展开挂载(page_outcome 顶层直取字符串五态 + situation/evidence 并列)
-    try:
-        ret.update(_build_page_outcome(wid, before_signal, after_signal, submit_trigger=submit_trigger))
-    except Exception:
-        pass
-    # 统一出口标记
-    ret["channel"] = "outcome"
     return ret
 
 
-def _finalize_outcome(wid, ret, url_before=None):
-    """给 fill/press/click_at/navigate 等动作补统一后果卡出口(阶段A)。
+# ── 统一后果卡(阶段 A:所有动作的同一出口)──────────────────────
+# page_outcome 五态:progressed | challenged | errored | uncertain | unchanged
+# 主标签为平铺字符串(弱模型只读 page_outcome 一个键),卡片其余字段为证据与契约。
 
-    与 _finalize_click_result 尾部一致:channel="outcome" + page_outcome 五态。
-    click 走 _finalize_click_result(已含),其余动作走这里,保证所有动作同一出口。
+
+def _outcome_card(wid, action, args, ret, before_signal):
+    """所有动作的统一出口:在动作返回上追加统一后果卡(五态 page_outcome)。
+
+    结构 = 旧返回字段(超集,兼容现有客户端)+ 卡片字段。
+    主标签(page_outcome/situation/confidence/why)位于字段最前。
     """
+    w = _world(int(wid))
     try:
-        before_signal = _page_signal_snapshot(wid)
-        after_signal = _page_signal_snapshot(wid)
-        ret.update(_build_page_outcome(wid, before_signal, after_signal, submit_trigger=False))
+        before = before_signal or _page_signal_snapshot(int(wid))
     except Exception:
-        pass
-    ret["channel"] = "outcome"
-    return ret
+        before = {}
+    try:
+        after = _page_signal_snapshot(int(wid))
+    except Exception:
+        after = {}
+    # 保留旧 feedback/全局纠正逻辑(URL/弹窗覆盖局部判定)
+    ret = _finalize_click_result(int(wid), ret, before, after)
+
+    fb = ret.get("feedback") or {}
+    page_fb = fb.get("page") or {}
+    ov_fb = fb.get("overlays") or {}
+    url_changed = bool(page_fb.get("url_changed"))
+    new_overlays = ov_fb.get("new") or []
+    gone_overlays = ov_fb.get("gone") or []
+    effect = ret.get("effect") or {}
+
+    # 疑似提交动作判定(challenged 检测的前置):click 目标为 form/submit;
+    # press 仅 Enter 且目标在 form 内;其余动作不启用
+    submit_trigger = False
+    resolved = None
+    ent = None
+    target_arg = args.get("id")
+    if target_arg and action != "world_navigate":
+        try:
+            resolved = _resolve_id(int(wid), target_arg)
+        except Exception:
+            resolved = None
+        if resolved:
+            try:
+                ent = _evaluate(int(wid), "(id) => agentWorld.query.getEntity(id)", resolved)
+            except Exception:
+                ent = None
+    if action == "world_click" and resolved:
+        submit_trigger = _is_submit_trigger(int(wid), resolved)
+    elif action == "world_press" and resolved:
+        submit_trigger = _is_submit_trigger(int(wid), resolved, args.get("key"))
+
+    check_errors = action in ("world_fill", "world_batch_fill", "world_press") or submit_trigger
+    page_outcome, situation, confidence, why = _build_page_outcome(
+        int(wid), before, after,
+        submit_trigger=submit_trigger, effect=effect,
+        overlays_changed=bool(new_overlays or gone_overlays),
+        check_errors=check_errors,
+    )
+
+    # 目标身份(最佳努力;导航后旧 el_N 全部失效,target.id 置空,只留 URL)
+    if action == "world_navigate":
+        target = {"id": None, "name": str(args.get("url", ""))[:300], "fingerprint": None}
+    else:
+        target = {
+            "id": (ent or {}).get("id"),
+            "name": (ent or {}).get("name"),
+            "fingerprint": (ent or {}).get("fingerprint") if ent else None,
+        }
+
+    # 导览失效判定:全局事实变了,旧导览不可信
+    guide_stale = bool(url_changed or new_overlays or gone_overlays or page_fb.get("title_changed"))
+
+    ret.update({
+        "world_id": int(wid),
+        "channel": "outcome",
+        "page_outcome": page_outcome,
+        "situation": situation,
+        "confidence": confidence,
+        "why": why,
+        "target": target,
+        "action": {"kind": action.split("_", 1)[1], "via": "self"},
+        "page": {
+            "before_url": before.get("url"),
+            "after_url": after.get("url") or before.get("url"),
+            "url_changed": url_changed,
+            "state": after.get("state", "unknown"),
+            "anomaly": False,
+        },
+        "overlays": {"new": new_overlays[:8], "gone": gone_overlays[:8]},
+        "sources": {},  # F2 阶段填充 fact/evidence/inference/untrusted 标记
+        "next": {"guide_stale": guide_stale, "suggested": "重新调用 world_guide" if guide_stale else None, "candidates": []},
+        "evidence_seq": int(w.get("evidence_seq", 0)) + 1,
+        "changes_seq": {"before": before.get("changes_seq", 0), "after": after.get("changes_seq", 0)},
+        "world_epoch": int(w.get("epoch", 0)),
+    })
+    return _ok(ret)
+
+
+def _errored_card(wid, action, args, before_signal, exc):
+    """动作执行异常 → 统一后果卡 page_outcome=errored(结构化返回,保留错误信息)。"""
+    w = _world(int(wid))
+    try:
+        before = before_signal or _page_signal_snapshot(int(wid))
+    except Exception:
+        before = {}
+    try:
+        after = _page_signal_snapshot(int(wid))
+    except Exception:
+        after = {}
+    return _ok({
+        "world_id": int(wid),
+        "channel": "outcome",
+        "page_outcome": "errored",
+        "situation": {"type": "error", "to_url": None},
+        "confidence": "high",
+        "why": "动作执行抛异常,未获得生效判定(可能已部分生效)",
+        "target": {"id": args.get("id"), "name": None, "fingerprint": None},
+        "action": {"kind": action.split("_", 1)[1] if action.startswith("world_") else action, "via": "self"},
+        "effect": {},
+        "page": {
+            "before_url": before.get("url"),
+            "after_url": after.get("url") or before.get("url"),
+            "url_changed": bool(before.get("url") and before.get("url") != (after.get("url") or before.get("url"))),
+            "state": after.get("state", "unknown"),
+            "anomaly": False,
+        },
+        "overlays": {"new": [], "gone": []},
+        "sources": {},
+        "next": {"guide_stale": False, "suggested": None, "candidates": []},
+        "evidence_seq": int(w.get("evidence_seq", 0)),
+        "changes_seq": {"before": before.get("changes_seq", 0), "after": after.get("changes_seq", 0)},
+        "world_epoch": int(w.get("epoch", 0)),
+        "error": f"{type(exc).__name__}: {str(exc)[:300]}",
+    })
+
+
+def _region_snapshot_at(wid, x, y):
+    """坐标点击的生效证据基线:以 (x,y) 为中心 ±200px 构造区域(不依赖构件编号)。
+
+    返回结构与 _click_region_snapshot 相同(region/rows/dialogs/target),复用同一套证据窗。
+    """
+    raw = _evaluate(
+        wid,
+        """(p) => {
+            const pad = 200;
+            const reg = { x0: p.x - pad, y0: p.y - pad, x1: p.x + pad, y1: p.y + pad };
+            const rows = [];
+            for (const e of agentWorld._runtime.world.elements.values()) {
+                const ex = e.bounds.x, ey = e.bounds.y;
+                if (ex + e.bounds.w > reg.x0 && ex < reg.x1 && ey + e.bounds.h > reg.y0 && ey < reg.y1) {
+                    rows.push([e.id, e.semantic, (e.name || '').slice(0, 60)]);
+                }
+            }
+            const dialogs = [];
+            for (const e of agentWorld._runtime.world.elements.values()) {
+                if (e.semantic === 'dialog' || e.semantic === 'alertdialog' || e.semantic === 'menu') {
+                    if (e.inViewport) dialogs.push([e.id, e.semantic, (e.name || '').slice(0, 60)]);
+                }
+            }
+            let target = null;
+            const top = document.elementFromPoint(p.x, p.y);
+            if (top) {
+                target = {
+                    page_id: (top.getAttribute && top.getAttribute('id')) || '',
+                    state: {
+                        ariaSelected: top.getAttribute('aria-selected'),
+                        ariaExpanded: top.getAttribute('aria-expanded'),
+                        checked: top.hasAttribute('checked'),
+                        className: (top.className && top.className.baseVal !== undefined ? top.className.baseVal : top.className) || ''
+                    }
+                };
+            }
+            return JSON.stringify({ region: reg, rows, dialogs, target });
+        }""",
+        {"x": x, "y": y},
+    )
+    if not raw:
+        return None
+    return json.loads(raw)
 
 
 def _click_region_snapshot(wid, target_id, capture_frame=False):
@@ -2011,7 +2304,7 @@ def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500, disappear
     return effect
 
 
-def _t_world_click(args):
+def _t_world_click(args, before_signal=None):
     wid = args["world_id"]
     target = _resolve_id(wid, args["id"])
     w = _world(wid)
@@ -2022,12 +2315,13 @@ def _t_world_click(args):
     # 视觉证据开关:显式要求时才截前后帧(视觉 diff 兜底),避免每次操作的开销
     visual_evidence = bool(args.get("visual_evidence", False))
 
-    # 疑似提交动作判定(page_outcome 挑战检测的前置条件,只在提交类点击后启用)
-    submit_trigger = _is_submit_trigger(wid, target)
-
     # 点击前:冻结目标空间区域(生效报告的证据基线)
     snap_before = _click_region_snapshot(wid, target, capture_frame=visual_evidence)
-    before_signal = _page_signal_snapshot(wid)
+    if before_signal is None:
+        try:
+            before_signal = _page_signal_snapshot(wid)
+        except Exception:
+            before_signal = {}
     url_before = before_signal["url"]
 
     # 遮挡检测:检查元素中心点是否被上层弹窗/遮罩层挡住(信息提示,不改变点击行为)
@@ -2067,7 +2361,7 @@ def _t_world_click(args):
             effect = _wait_click_effect(wid, snap_before, url_before)
             if effect:
                 ret["effect"] = effect
-            return _ok(_finalize_click_result(wid, ret, before_signal, submit_trigger=submit_trigger))
+            return _outcome_card(wid, "world_click", args, ret, before_signal)
         except Exception as e:
             loc_err = f"{type(e).__name__}: {str(e)[:200]}"
     else:
@@ -2098,10 +2392,10 @@ def _t_world_click(args):
     effect = _wait_click_effect(wid, snap_before, url_before)
     if effect:
         ret["effect"] = effect
-    return _ok(_finalize_click_result(wid, ret, before_signal, submit_trigger=submit_trigger))
+    return _outcome_card(wid, "world_click", args, ret, before_signal)
 
 
-def _t_world_fill(args):
+def _t_world_fill(args, before_signal=None):
     wid = args["world_id"]
     target = _resolve_id(wid, args["id"])
     text = args["text"]
@@ -2110,6 +2404,11 @@ def _t_world_fill(args):
     ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target)
     if not ent:
         raise ValueError(f"构件不存在: {args['id']}")
+    if before_signal is None:
+        try:
+            before_signal = _page_signal_snapshot(wid)
+        except Exception:
+            before_signal = {}
     visual_evidence = bool(args.get("visual_evidence", False))
     # 填表前:冻结目标空间区域(生效报告的证据基线)
     snap_before = _click_region_snapshot(wid, target, capture_frame=visual_evidence)
@@ -2140,7 +2439,7 @@ def _t_world_fill(args):
                 effect = _wait_click_effect(wid, snap_before, url_before, max_wait_ms=1500, fill_verified=True)
                 if effect:
                     ret["effect"] = effect
-                return _ok(_finalize_outcome(wid, ret))
+                return _outcome_card(wid, "world_fill", args, ret, before_signal)
             fill_err = "fill 后未在可见输入框验证到文本(可能被 SPA 覆盖层拦截)"
         except Exception as e:
             fill_err = f"{type(e).__name__}: {str(e)[:200]}"
@@ -2188,12 +2487,13 @@ def _t_world_fill(args):
     effect = _wait_click_effect(wid, snap_before, url_before, max_wait_ms=1500, fill_verified=filled_ok)
     if effect:
         ret["effect"] = effect
-    return _ok(_finalize_outcome(wid, ret))
+    return _outcome_card(wid, "world_fill", args, ret, before_signal)
 
 
-def _t_world_batch_fill(args):
+def _t_world_batch_fill(args, before_signal=None):
     """批量填入表单字段:单次 MCP 往返完成多个输入框填写。
     逐字段容错:单个字段失败记录 error 并继续,不中断整个批次。
+    返回:旧结构(batch_count/ok_count/results)+ 统一后果卡(聚合判定)。
     """
     wid = args["world_id"]
     fields = args.get("fields") or []
@@ -2220,11 +2520,52 @@ def _t_world_batch_fill(args):
             results.append({"id": fid, "ok": False, "error": f"{type(e).__name__}: {str(e)[:150]}"})
     _refresh_core_status(wid)
     ok_count = sum(1 for r in results if r.get("ok"))
-    return _ok({"world_id": wid, "batch_count": len(results), "ok_count": ok_count, "results": results})
+    ret = {"world_id": wid, "batch_count": len(results), "ok_count": ok_count, "results": results}
+
+    # 统一后果卡(聚合判定):全过→progressed;部分过→uncertain;全败→errored
+    w = _world(wid)
+    try:
+        before = before_signal or _page_signal_snapshot(wid)
+    except Exception:
+        before = {}
+    try:
+        after = _page_signal_snapshot(wid)
+    except Exception:
+        after = {}
+    if ok_count == len(results) and len(results) > 0:
+        po, conf, wh = "progressed", "high", f"批量填入 {ok_count}/{len(results)} 字段全部成功"
+    elif ok_count > 0:
+        po, conf, wh = "uncertain", "medium", f"批量填入部分成功({ok_count}/{len(results)} 个字段)"
+    else:
+        po, conf, wh = "errored", "high", "批量填入全部失败"
+    ret.update({
+        "channel": "outcome",
+        "page_outcome": po,
+        "situation": {"type": "form" if po == "progressed" else "none", "to_url": None},
+        "confidence": conf,
+        "why": wh,
+        "target": {"id": [f.get("id") for f in fields], "name": None, "fingerprint": None},
+        "action": {"kind": "batch_fill", "via": "self"},
+        "effect": {"verdict": "effected" if po == "progressed" else "no-change", "observed": [], "region_changed": {"new": 0, "gone": 0}},
+        "page": {
+            "before_url": before.get("url"),
+            "after_url": after.get("url") or before.get("url"),
+            "url_changed": bool(before.get("url") and before.get("url") != (after.get("url") or before.get("url"))),
+            "state": after.get("state", "unknown"),
+            "anomaly": False,
+        },
+        "overlays": {"new": [], "gone": []},
+        "sources": {},
+        "next": {"guide_stale": False, "suggested": None, "candidates": []},
+        "evidence_seq": int(w.get("evidence_seq", 0)) + 1,
+        "changes_seq": {"before": before.get("changes_seq", 0), "after": after.get("changes_seq", 0)},
+        "world_epoch": int(w.get("epoch", 0)),
+    })
+    return _ok(ret)
 
 
-def _t_world_press(args):
-    """按编号聚焦并按按键(如 Enter/Escape/Tab)。返回 effect 生效报告。"""
+def _t_world_press(args, before_signal=None):
+    """按编号聚焦并按按键(如 Enter/Escape/Tab)。返回 effect 生效报告 + 统一后果卡。"""
     wid = args["world_id"]
     target = _resolve_id(wid, args["id"])
     key = args["key"]
@@ -2232,6 +2573,11 @@ def _t_world_press(args):
     ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target)
     if not ent:
         raise ValueError(f"构件不存在: {args['id']}")
+    if before_signal is None:
+        try:
+            before_signal = _page_signal_snapshot(wid)
+        except Exception:
+            before_signal = {}
     visual_evidence = bool(args.get("visual_evidence", False))
     # 按键前:冻结目标空间区域 + URL(生效报告的证据基线)
     snap_before = _click_region_snapshot(wid, target, capture_frame=visual_evidence)
@@ -2247,7 +2593,7 @@ def _t_world_press(args):
             effect = _wait_click_effect(wid, snap_before, url_before, disappear_ok=disappear_ok)
             if effect:
                 ret["effect"] = effect
-            return _ok(_finalize_outcome(wid, ret))
+            return _outcome_card(wid, "world_press", args, ret, before_signal)
         except Exception as e:
             raise ValueError(f"按键失败: {type(e).__name__}: {str(e)[:200]}")
     # 兜底:JS focus + dispatch keydown/keyup + 真实键盘事件(比纯 JS dispatch 更可靠)
@@ -2280,7 +2626,7 @@ def _t_world_press(args):
     effect = _wait_click_effect(wid, snap_before, url_before, disappear_ok=disappear_ok)
     if effect:
         ret["effect"] = effect
-    return _ok(_finalize_outcome(wid, ret))
+    return _outcome_card(wid, "world_press", args, ret, before_signal)
 
 
 def _t_world_wait(args):
@@ -2398,31 +2744,221 @@ def _t_world_eval(args):
     return _ok({"world_id": wid, "result": text})
 
 
-def _t_world_click_at(args):
-    """视口坐标点击(原生网页世界外元素兜底,坐标来自截图/视觉)"""
+def _t_world_click_at(args, before_signal=None):
+    """视口坐标点击(原生网页世界外元素兜底,坐标来自截图/视觉)。
+    以坐标为中心拍区域证据基线,返回统一后果卡。"""
     wid = args["world_id"]
     x = int(args["x"])
     y = int(args["y"])
     w = _world(wid)
+    if before_signal is None:
+        try:
+            before_signal = _page_signal_snapshot(wid)
+        except Exception:
+            before_signal = {}
+    snap_before = _region_snapshot_at(wid, x, y)
+    url_before = w["page"].url
     w["page"].mouse.click(x, y)
     _refresh_core_status(wid)
     ret = {"world_id": wid, "clicked_at": [x, y], "method": "mouse-coords"}
-    return _ok(_finalize_outcome(wid, ret))
+    effect = _wait_click_effect(wid, snap_before, url_before)
+    if effect:
+        ret["effect"] = effect
+    return _outcome_card(wid, "world_click_at", args, ret, before_signal)
 
 
-def _t_world_navigate(args):
-    """世界内导航(无需关闭重开)"""
+def _t_world_navigate(args, before_signal=None):
+    """世界内导航(无需关闭重开)。返回统一后果卡(navigation)。
+    导航后旧 el_N 编号全部失效:target.id 恒为 null,world_epoch +1。"""
     wid = args["world_id"]
     url = args["url"]
     wait_ms = int(args.get("wait_ms", 2000))
     w = _world(wid)
+    if before_signal is None:
+        try:
+            before_signal = _page_signal_snapshot(wid)
+        except Exception:
+            before_signal = {}
     w["page"].goto(url, wait_until="domcontentloaded", timeout=60000)
     _wait_world_ready(w["page"])
     if wait_ms:
         w["page"].wait_for_timeout(wait_ms)
+    w["epoch"] = int(w.get("epoch", 0)) + 1
     summary = _evaluate(wid, "agentWorld.query.getPageSummary()")
     ret = {"world_id": wid, "url": url, "summary": summary}
-    return _ok(_finalize_outcome(wid, ret))
+    return _outcome_card(wid, "world_navigate", args, ret, before_signal)
+
+
+# ── 阶段 B 收口:默认协议 3 新工具 ─────────────────────────────
+# world_find → 定位构件;world_act → 唯一行动入口(含聚合 steps);
+# world_outcome → 幂等读最近一张后果卡。全部复用既有内核与 _outcome_card,不另起炉灶。
+
+ACT_DISPATCH = {
+    "click": ("world_click", _t_world_click),
+    "fill": ("world_fill", _t_world_fill),
+    "press": ("world_press", _t_world_press),
+    "batch_fill": ("world_batch_fill", _t_world_batch_fill),
+}
+
+
+def _act_one(wid, step, before_signal):
+    """把 world_act 的一个动作步骤分发到既有动作实现(复用统一后果卡)。"""
+    kind = step.get("kind")
+    if kind not in ACT_DISPATCH:
+        raise ValueError(f"world_act 不支持的 kind: {kind!r}(支持 click/fill/press/batch_fill)")
+    inner_name, handler = ACT_DISPATCH[kind]
+    sub_args = {k: v for k, v in step.items() if k != "kind"}
+    sub_args["world_id"] = wid
+    result = handler(sub_args, before_signal)
+    # 证据记录与既有动作一致(inner_name 入库,保持证据信道语义不变)
+    if before_signal is not None:
+        try:
+            _record_action_evidence(int(wid), inner_name, sub_args, before_signal, result)
+        except Exception:
+            pass
+    return result
+
+
+def _t_world_find(args):
+    """默认协议:按条件定位构件(替代 world_entities/world_resolve 的日常用法)。
+
+    q 提供时走弱 ID 解析(强 ID/名字/页面原生 id);否则按 role/text/name/interactive 过滤。
+    只返回 matches[] 与 ambiguous,禁止在 find 里执行动作。
+    """
+    wid = args["world_id"]
+    q = args.get("q")
+    max_results = max(1, min(int(args.get("max_results", 20)), 100))
+    filters = {k: v for k, v in args.items()
+               if k in ("role", "tag", "text", "name", "fingerprint", "interactive", "in_viewport")
+               and v is not None}
+    if "in_viewport" in filters:
+        filters["inViewport"] = filters.pop("in_viewport")
+    if "max_results" in args:
+        filters["maxResults"] = max_results
+
+    entities = []
+    if q:
+        r = _evaluate(wid, "(q) => agentWorld.query.resolve(q)", str(q)) or {}
+        ids = []
+        if r.get("id"):
+            ids = [r["id"]]
+        elif r.get("matches"):
+            ids = list(r.get("matches"))[:max_results]
+        for i in ids:
+            ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", i)
+            if ent:
+                entities.append(ent)
+        # q 解析后仍可叠加过滤器(角色/文本/可交互),过滤候选
+        if filters:
+            entities = [e for e in entities if _entity_match(e, filters)]
+    else:
+        entities = _evaluate(wid, "(f) => agentWorld.query.findEntities(f)", filters) or []
+
+    matches = [{
+        "id": e.get("id"),
+        "name": e.get("name"),
+        "semantic": e.get("semantic"),
+        "fingerprint": e.get("fingerprint"),
+        "bounds": e.get("bounds"),
+        "interactive": e.get("interactive"),
+    } for e in entities[:max_results] if e.get("id")]
+    interactive_hits = [m for m in matches if m.get("interactive")]
+    return _ok({
+        "world_id": wid,
+        "count": len(matches),
+        "ambiguous": len(interactive_hits) > 1,
+        "matches": matches,
+    })
+
+
+def _entity_match(e, filters):
+    """world_find 的候选后置过滤(小集合内精确过滤,复用内核语义口径)。"""
+    if "role" in filters and (e.get("semantic") or "") != filters["role"]:
+        return False
+    if "tag" in filters and (e.get("tag") or "").lower() != str(filters["tag"]).lower():
+        return False
+    if "name" in filters and filters["name"] not in (e.get("name") or ""):
+        return False
+    if "text" in filters and filters["text"] not in (e.get("text") or ""):
+        return False
+    if "interactive" in filters and bool(e.get("interactive")) != bool(filters["interactive"]):
+        return False
+    if "inViewport" in filters and bool(e.get("inViewport")) != bool(filters["inViewport"]):
+        return False
+    return True
+
+
+def _t_world_act(args, before_signal=None):
+    """默认协议:唯一行动入口。kind=click|fill|press|batch_fill → 统一后果卡。
+
+    steps 数组 = 聚合执行(等价 RFC 的 world_run):单个 MCP 往返内顺序执行多个动作,
+    每步都走 _outcome_card 同一出口;任一步 errored 即停止。返回最后一步的卡 + steps 明细。
+    """
+    wid = args["world_id"]
+    steps = args.get("steps")
+    if steps is not None:
+        if not isinstance(steps, list) or not steps:
+            raise ValueError("world_act 的 steps 必须是非空列表")
+        cards = []
+        for idx, step in enumerate(steps):
+            try:
+                before = _page_signal_snapshot(wid)
+            except Exception:
+                before = None
+            try:
+                res = _act_one(wid, step, before)
+                card = _result_payload(res)
+            except Exception as e:
+                card = _result_payload(_errored_card(wid, f"world_act.step{idx + 1}", step, before, e))
+            cards.append(card)
+            if card.get("page_outcome") == "errored":
+                break
+        last = dict(cards[-1])
+        last["steps"] = cards
+        last["step_count"] = len(cards)
+        last["action"] = {"kind": "act-sequence", "via": "self"}
+        last["channel"] = "outcome"
+        return _ok(last)
+
+    kind = args.get("kind") or "click"
+    if kind not in ACT_DISPATCH:
+        raise ValueError(f"world_act 不支持的 kind: {kind!r}(支持 click/fill/press/batch_fill)")
+    if before_signal is None:
+        try:
+            before_signal = _page_signal_snapshot(wid)
+        except Exception:
+            before_signal = None
+    try:
+        return _act_one(wid, args, before_signal)
+    except Exception as e:
+        return _errored_card(wid, f"world_act({kind})", args, before_signal, e)
+
+
+def _t_world_outcome(args):
+    """默认协议:读最近一张统一后果卡(幂等,弱模型"我刚才到底怎样了"的唯一查询)。
+
+    since 传入 evidence_seq 时,仅当存在更新动作的卡才返回;否则返回 none 卡。
+    watch_id 为阶段 C(验尸官模式)预留,当前忽略。
+    """
+    wid = args["world_id"]
+    since = int(args.get("since", 0))
+    w = _world(wid)
+    last = w.get("last_outcome_card")
+    if last and last.get("evidence_seq", 0) > since:
+        return _ok(last)
+    return _ok({
+        "world_id": wid,
+        "channel": "outcome",
+        "page_outcome": "none",
+        "situation": {"type": "none", "to_url": None},
+        "confidence": "high",
+        "why": "since 之后没有新动作" if since else "尚无动作;先 world_act 或 world_open",
+        "target": None,
+        "action": {"kind": "outcome", "via": "self"},
+        "evidence_seq": int(w.get("evidence_seq", 0)),
+        "changes_seq": {"before": 0, "after": 0},
+        "world_epoch": int(w.get("epoch", 0)),
+    })
 
 
 def _t_world_close(args):
