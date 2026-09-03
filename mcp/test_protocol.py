@@ -137,6 +137,27 @@ async def main():
                 {"kind": "click", "id": sub_id},
             ]})
             check("聚合提交 → challenged", agg3["page_outcome"] == "challenged", agg3.get("why"))
+            # 阶段 C: handoff 协议
+            check("challenged 包含 handoff", agg3.get("handoff", {}).get("required") is True, str(agg3.get("handoff")))
+            check("challenged 包含明确交接提示", "人工" in (agg3.get("next", {}).get("suggested") or ""), str(agg3.get("next")))
+            await call(session, "world_close", {"world_id": wid})
+
+            # ── 4b. 弹窗阻挡自愈处方: recipes 验证 ──
+            print("\n[4b] 弹窗阻挡自愈处方 (recipes)")
+            wid = await open_world(session, FAR_URI)
+            f = await call(session, "world_find", {"world_id": wid, "q": "打开居中弹窗"})
+            btn_id = f["matches"][0]["id"]
+            # 1. 打开弹窗
+            await call(session, "world_act", {"world_id": wid, "kind": "click", "id": btn_id})
+            # 2. 再次点击外部按钮(此时弹窗已打开)
+            c_blocked = await call(session, "world_act", {"world_id": wid, "kind": "click", "id": btn_id})
+            check("弹窗激活下点击外部 → unchanged", c_blocked["page_outcome"] == "unchanged", c_blocked.get("why"))
+            check("unchanged 包含 recipes 处方候选", len(c_blocked.get("recipes", [])) >= 1, str(c_blocked.get("recipes")))
+            check("recipes 推荐 Escape 或关闭", any(rec.get("key") == "Escape" for rec in c_blocked.get("recipes", [])), str(c_blocked.get("recipes")))
+            # 执行处方 1 (Escape)
+            esc_rec = next(r for r in c_blocked["recipes"] if r.get("key") == "Escape")
+            c_esc = await call(session, "world_act", {"world_id": wid, "kind": esc_rec["kind"], "id": esc_rec["id"], "key": esc_rec["key"]})
+            check("执行处方 Escape → progressed", c_esc["page_outcome"] == "progressed", c_esc.get("why"))
             await call(session, "world_close", {"world_id": wid})
 
     # ── 5. LITE 模式:只暴露 6 词,旧工具被拒 ──
@@ -162,6 +183,14 @@ async def main():
             r = await session.call_tool("world_click", {"world_id": wid, "id": btn["id"]})
             txt = r.content[0].text
             check("LITE 下旧工具被拒", "只开放 6 个默认工具" in txt or "内部/调试" in txt, txt[:120])
+
+            # ── 6. 并发调度验证(专属单工作线程杜绝 greenlet.error) ──
+            print("\n[6] 并发调度与线程亲和性")
+            t1 = session.call_tool("world_act", {"world_id": wid, "kind": "click", "id": btn["id"]})
+            t2 = session.call_tool("world_act", {"world_id": wid, "kind": "click", "id": btn["id"]})
+            res1, res2 = await asyncio.gather(t1, t2, return_exceptions=True)
+            check("并发调用 Task1 无跨线程异常", not isinstance(res1, Exception), str(res1))
+            check("并发调用 Task2 无跨线程异常", not isinstance(res2, Exception), str(res2))
             await call(session, "world_close", {"world_id": wid})
 
     print(f"\n===== 结果:通过 {PASS} 项,失败 {FAIL} 项 =====")
