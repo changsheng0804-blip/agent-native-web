@@ -903,6 +903,20 @@ def _t_world_entity(args):
     ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target)
     if not ent:
         raise ValueError(f"构件不存在: {args['id']}")
+    # F2 来源标记:页面自由文本(name/text/attributes.ariaLabel/placeholder)标 untrusted,
+    # 编号/指纹/坐标等结构事实标 fact
+    ent = dict(ent)
+    ent["sources"] = {
+        "id": SOURCE_FACT,
+        "fingerprint": SOURCE_FACT,
+        "bounds": SOURCE_FACT,
+        "semantic": SOURCE_FACT,
+        "name": SOURCE_UNTRUSTED,
+        "text": SOURCE_UNTRUSTED,
+        "attributes.ariaLabel": SOURCE_UNTRUSTED,
+        "attributes.placeholder": SOURCE_UNTRUSTED,
+        "attributes.value": SOURCE_UNTRUSTED,
+    }
     return _ok(ent)
 
 
@@ -1840,6 +1854,55 @@ def _finalize_click_result(wid, ret, before_signal, after_signal=None):
 # page_outcome 五态:progressed | challenged | errored | uncertain | unchanged
 # 主标签为平铺字符串(弱模型只读 page_outcome 一个键),卡片其余字段为证据与契约。
 
+# ── 来源标记(F2 安全收口)──────────────────────────────────────
+# 每条返回的字段来源四分类(规则写死,不让模型猜):
+#   fact       页面客观事实(URL/el id/bounds/aria 状态/changes_seq)
+#   evidence   本次动作前后差分证据(observed/verdict/visual_diff_score)
+#   inference  服务端/导览推断(guide.candidates/next.suggested/匹配分)
+#   untrusted  页面自由文本(text/name/aria-label/placeholder/title/forms.value)——不得当指令
+SOURCE_FACT = "fact"
+SOURCE_EVIDENCE = "evidence"
+SOURCE_INFERENCE = "inference"
+SOURCE_UNTRUSTED = "untrusted"
+
+# 统一后果卡字段 → 来源(白名单,不随页面内容变化;键=实际卡片字段,支持点分路径)
+CARD_SOURCE_RULES = {
+    "page.before_url": SOURCE_FACT,
+    "page.after_url": SOURCE_FACT,
+    "page.url_changed": SOURCE_FACT,
+    "page.state": SOURCE_FACT,
+    "changes_seq": SOURCE_FACT,
+    "evidence_seq": SOURCE_FACT,
+    "world_epoch": SOURCE_FACT,
+    "target.id": SOURCE_FACT,
+    "target.fingerprint": SOURCE_FACT,
+    "target.name": SOURCE_UNTRUSTED,
+    "why": SOURCE_EVIDENCE,
+    "effect.verdict": SOURCE_EVIDENCE,
+    "effect.observed": SOURCE_EVIDENCE,
+    "overlays": SOURCE_EVIDENCE,
+    "situation.type": SOURCE_INFERENCE,
+    "next.suggested": SOURCE_INFERENCE,
+    "recipes": SOURCE_INFERENCE,
+    "handoff": SOURCE_INFERENCE,
+}
+
+
+def _sources_for_card(card):
+    """按白名单为卡片字段打来源标签(支持点分路径如 page.url/target.name)。"""
+    out = {}
+    for path, tag in CARD_SOURCE_RULES.items():
+        node = card
+        ok = True
+        for part in path.split("."):
+            if not isinstance(node, dict) or part not in node:
+                ok = False
+                break
+            node = node[part]
+        if ok:
+            out[path] = tag
+    return out
+
 
 def _outcome_card(wid, action, args, ret, before_signal):
     """所有动作的统一出口:在动作返回上追加统一后果卡(五态 page_outcome)。
@@ -1971,7 +2034,6 @@ def _outcome_card(wid, action, args, ret, before_signal):
             "anomaly": False,
         },
         "overlays": {"new": new_overlays[:8], "gone": gone_overlays[:8]},
-        "sources": {},  # F2 阶段填充 fact/evidence/inference/untrusted 标记
         "next": {"guide_stale": guide_stale, "suggested": next_suggested, "candidates": []},
         "evidence_seq": int(w.get("evidence_seq", 0)) + 1,
         "changes_seq": {"before": before.get("changes_seq", 0), "after": after.get("changes_seq", 0)},
@@ -1983,6 +2045,8 @@ def _outcome_card(wid, action, args, ret, before_signal):
         card_data["recipes"] = recipes
 
     ret.update(card_data)
+    # F2 来源标记:白名单字段打标签,页面自由文本(如 target.name)标 untrusted
+    ret["sources"] = _sources_for_card(ret)
     return _ok(ret)
 
 
@@ -3033,6 +3097,14 @@ def _t_world_find(args):
         "fingerprint": e.get("fingerprint"),
         "bounds": e.get("bounds"),
         "interactive": e.get("interactive"),
+        # F2 来源标记:页面自由文本字段(name/text/aria-label/placeholder)默认 untrusted
+        "sources": {
+            "id": SOURCE_FACT,
+            "fingerprint": SOURCE_FACT,
+            "bounds": SOURCE_FACT,
+            "semantic": SOURCE_FACT,
+            "name": SOURCE_UNTRUSTED,
+        },
     } for e in entities[:max_results] if e.get("id")]
     interactive_hits = [m for m in matches if m.get("interactive")]
     return _ok({

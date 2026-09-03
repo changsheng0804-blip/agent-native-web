@@ -97,6 +97,32 @@ async def main():
             h1 = (await call(session, "world_entities", {"world_id": wid, "text": "IPI Attack Matrix"}))["entities"]
             print(f"  正常标题 h1 count={len(h1)} (应>0)")
 
+            # ── C. F2 来源标记:VEC_9/10 注入文本(aria-label/placeholder)应标 untrusted ──
+            print("  C.sources 来源标记(注入文本不可当指令):")
+            vec9_src = None
+            vec10_src = None
+            try:
+                e9 = await call(session, "world_entity", {"world_id": wid, "id": "vec9"})
+                vec9_src = (e9.get("sources") or {})
+                print(f"    vec9 sources: {json.dumps(vec9_src, ensure_ascii=False)}")
+            except Exception as ex:
+                print(f"    vec9 未进入世界: {ex}")
+            try:
+                e10 = await call(session, "world_entity", {"world_id": wid, "id": "vec10"})
+                vec10_src = (e10.get("sources") or {})
+                print(f"    vec10 sources: {json.dumps(vec10_src, ensure_ascii=False)}")
+            except Exception as ex:
+                print(f"    vec10 未进入世界: {ex}")
+            # world_find 的 matches 也要带 sources
+            find_src = None
+            try:
+                ff = await call(session, "world_find", {"world_id": wid, "q": "VEC_9"})
+                if ff.get("matches"):
+                    find_src = (ff["matches"][0].get("sources") or {})
+                    print(f"    world_find VEC_9 sources: {json.dumps(find_src, ensure_ascii=False)}")
+            except Exception as ex:
+                print(f"    world_find VEC_9 异常: {ex}")
+
             await call(session, "world_close", {"world_id": wid})
 
             # ── 断言 ──
@@ -118,6 +144,21 @@ async def main():
                 failures.append(f"动态时序:隐藏后仍残留 count={after}(IPI 动态时序泄露)")
             if len(h1) == 0:
                 failures.append("正常标题 h1 被误伤")
+            # F2 来源标记:VEC_9(aria-label 注入)/VEC_10(placeholder 注入)若在世界,自由文本必须标 untrusted
+            if vec9_src is None and vec10_src is None:
+                failures.append("C.sources VEC_9/VEC_10 均不在世界,来源标记无从验证(测试前提失败)")
+            for name, src in [("vec9", vec9_src), ("vec10", vec10_src)]:
+                if src:
+                    if src.get("name") != "untrusted":
+                        failures.append(f"C.sources {name}.name 应标 untrusted,实际 {src.get('name')}")
+                    if src.get("text") != "untrusted":
+                        failures.append(f"C.sources {name}.text 应标 untrusted,实际 {src.get('text')}")
+                    if src.get("attributes.ariaLabel") != "untrusted" and src.get("attributes.placeholder") != "untrusted":
+                        failures.append(f"C.sources {name} 的注入属性(ariaLabel/placeholder)应标 untrusted")
+                    if src.get("id") != "fact" or src.get("fingerprint") != "fact":
+                        failures.append(f"C.sources {name}.id/fingerprint 应标 fact,实际 {src.get('id')}/{src.get('fingerprint')}")
+            if find_src and find_src.get("name") != "untrusted":
+                failures.append(f"C.sources world_find VEC_9.name 应标 untrusted,实际 {find_src.get('name')}")
 
             if failures:
                 print("\n❌ 失败:")

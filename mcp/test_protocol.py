@@ -76,6 +76,13 @@ async def main():
             card = await call(session, "world_act", {"world_id": wid, "kind": "click", "id": btn["id"]})
             check("act(click) → progressed", card["page_outcome"] == "progressed", card.get("why"))
             check("act 返回统一卡", card["channel"] == "outcome" and card["evidence_seq"] >= 1)
+            # F2 来源标记:卡片 sources 白名单标记(页面自由文本 untrusted,结构事实 fact)
+            src = card.get("sources") or {}
+            check("卡 sources.page.after_url=fact", src.get("page.after_url") == "fact", str(src))
+            check("卡 sources.target.name=untrusted", src.get("target.name") == "untrusted", str(src))
+            check("卡 sources.why=evidence", src.get("why") == "evidence", str(src))
+            check("卡 sources.next.suggested=inference", src.get("next.suggested") == "inference", str(src))
+            check("find matches 带 sources(name=untrusted)", (btn.get("sources") or {}).get("name") == "untrusted", str(btn.get("sources")))
             # Phase 2 Diff-First:默认轻量 status(无 frames/forms/world 明细)
             check("默认轻量 status(light)", card["status"].get("light") is True and "frames" not in card["status"], str(list(card["status"].keys())))
             out1 = await call(session, "world_outcome", {"world_id": wid})
