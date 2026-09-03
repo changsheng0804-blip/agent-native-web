@@ -35,6 +35,7 @@ import re
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageStat
 
@@ -42,6 +43,9 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 import mcp.types as types
 from playwright.sync_api import sync_playwright
+
+# Playwright 同步 API 强依赖 greenlet 协程上下文，必须在单一固定 OS 工作线程内运行，杜绝多线程竞争切换
+_pw_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="playwright_worker")
 
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -485,8 +489,8 @@ async def list_tools():
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     try:
-        # 全部在 executor 线程执行(Playwright 同步 API 线程亲和)
-        return await asyncio.get_event_loop().run_in_executor(None, _impl_with_status, name, arguments)
+        # 全部在专用单一 executor 线程执行(Playwright 同步 API 强线程亲和)
+        return await asyncio.get_event_loop().run_in_executor(_pw_executor, _impl_with_status, name, arguments)
     except Exception as e:
         traceback.print_exc()
         return [types.TextContent(type="text", text=f"错误: {e}")]
@@ -1905,7 +1909,41 @@ def _outcome_card(wid, action, args, ret, before_signal):
     # 导览失效判定:全局事实变了,旧导览不可信
     guide_stale = bool(url_changed or new_overlays or gone_overlays or page_fb.get("title_changed"))
 
-    ret.update({
+    # 阶段 C: 自愈处方 (recipes) 与 人机交接 (handoff) 协议
+    handoff = None
+    recipes = []
+    if page_outcome == "challenged":
+        handoff = {
+            "required": True,
+            "type": "human_challenge",
+            "reason": why,
+            "suggested": "页面触发人机验证或固定遮罩,请通知用户在可见窗口协助完成",
+            "resume_condition": "challenge_cleared",
+        }
+        next_suggested = "页面被挑战遮罩/验证墙拦截,请暂停自动推进并转交人工处理"
+    elif page_outcome == "unchanged":
+        # 探测是否受活动弹窗/遮罩阻挡
+        dialogs = (after.get("dialogs") if after else None) or []
+        if not dialogs:
+            try:
+                core_status = _evaluate(int(wid), "() => agentWorld.query.getStatus()") or {}
+                dialogs = core_status.get("dialogs") or []
+            except Exception:
+                dialogs = []
+        if dialogs:
+            d_id = dialogs[0].get("id") or target_arg
+            d_name = dialogs[0].get("name") or d_id or "活动弹窗"
+            recipes = [
+                {"action": "world_act", "kind": "press", "id": d_id, "key": "Escape", "why": f"当前存在未关闭的活动弹窗({d_name}),优先按 Escape 退出"},
+                {"action": "world_find", "q": "关闭", "why": "寻找弹窗内的关闭按钮并点击"},
+            ]
+            next_suggested = f"检测到存在活动弹窗({d_name}),当前操作未生效可能受其阻挡,建议按 Escape 或先关闭弹窗"
+        else:
+            next_suggested = "重新调用 world_guide" if guide_stale else None
+    else:
+        next_suggested = "重新调用 world_guide" if guide_stale else None
+
+    card_data = {
         "world_id": int(wid),
         "channel": "outcome",
         "page_outcome": page_outcome,
@@ -1923,11 +1961,17 @@ def _outcome_card(wid, action, args, ret, before_signal):
         },
         "overlays": {"new": new_overlays[:8], "gone": gone_overlays[:8]},
         "sources": {},  # F2 阶段填充 fact/evidence/inference/untrusted 标记
-        "next": {"guide_stale": guide_stale, "suggested": "重新调用 world_guide" if guide_stale else None, "candidates": []},
+        "next": {"guide_stale": guide_stale, "suggested": next_suggested, "candidates": []},
         "evidence_seq": int(w.get("evidence_seq", 0)) + 1,
         "changes_seq": {"before": before.get("changes_seq", 0), "after": after.get("changes_seq", 0)},
         "world_epoch": int(w.get("epoch", 0)),
-    })
+    }
+    if handoff:
+        card_data["handoff"] = handoff
+    if recipes:
+        card_data["recipes"] = recipes
+
+    ret.update(card_data)
     return _ok(ret)
 
 

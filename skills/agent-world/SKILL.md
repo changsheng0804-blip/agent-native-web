@@ -68,13 +68,15 @@ description: Comprehensive Web Navigation, Scraping, Form Filling, and Multi-ste
 | 主标签 | 含义 | 下一步 |
 |---|---|---|
 | `progressed` | 已生效(导航/弹窗/状态翻转/填表验证/视觉变化),含 `situation.type` 与 `why` | 继续任务 |
-| `challenged` | 被挑战遮罩/验证墙拦截(检测到新的全屏遮罩或挑战 iframe) | **停下**,报告人类或换路径 |
+| `challenged` | 被挑战遮罩/验证墙拦截(检测到新的全屏遮罩或挑战 iframe) | **停下**,优先读取卡片中的 `handoff` 字典通知人工介入 |
 | `errored` | 动作抛异常,未获得生效判定(可能已部分生效) | 重试一次或换动作路径 |
 | `uncertain` | 有变化但无法确认是否生效(`effect.verdict=changed`) | 用 world_state / world_screenshot 复核一次 |
-| `unchanged` | 未观察到任何生效证据(`no-change`),可能是目标错了或已失效 | 换目标或重新 world_guide,**不得重复硬点** |
+| `unchanged` | 未观察到任何生效证据(`no-change`),可能是目标错了或已失效 | **优先检查 `recipes` 处方候选**(如有活动弹窗推荐 Escape/关闭),按处方自愈;无处方则换目标,**不得重复硬点** |
 
 卡片结构:`page_outcome / situation / confidence / why / target / action / effect / feedback / status /
-page / overlays / sources / next / evidence_seq / changes_seq / world_epoch`。
+page / overlays / sources / next / evidence_seq / changes_seq / world_epoch / recipes / handoff`。
+- **自愈处方 `recipes`**: 当存在活动弹窗阻挡点击时,卡片自动提供破局动作候选(如按 Escape 或寻找关闭按钮),模型可直接拾取执行。
+- **人机交接 `handoff`**: 当触发反爬挑战或验证码固定遮罩时,提供结构化的人机协作说明与恢复条件。
 `el_N` 编号可回查(`world_entity`)、可对质;`world_navigate` 成功后旧编号全部失效(`world_epoch` +1)。
 `evidence_seq` 与 `changes_seq` 成对出现,是"这次动作到底发生了什么"的原始凭证。
 
