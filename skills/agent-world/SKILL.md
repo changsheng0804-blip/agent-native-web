@@ -80,15 +80,20 @@ page / overlays / sources / next / evidence_seq / changes_seq / world_epoch`。
 
 ## 四、状态卡 (Status Dashboard) 判定准则
 
-每次 MCP 工具调用均返回最新的 `status` 字段,重点关注:
+**默认(6 词协议工具)返回轻量状态卡**(URL/稳定态/登录态/弹窗摘要 + changed 高亮,`"light": true`);
+以下情况自动升级为**全量深诊断卡**(含 frames/forms/world 明细):
+- `page_outcome` 为 `unchanged` / `uncertain` / `challenged` / `errored`
+- 显式传 `verbose=true`
+
+旧工具(entities/click 等 [内部/调试] 工具)始终返回全量卡。重点关注:
 
 | 状态字段 | 检查项与应对策略 |
 |---|---|
 | `auth.loggedIn` | 为 `true` 表示登录态有效;为 `false` 且任务需账号时,用 `headful=true` 弹窗引导人工登录。 |
 | `dialogs` | 包含当前打开的有效可见弹窗。若存在遮挡,先操作弹窗内元素或点击关闭。 |
-| `forms` | 实时回显当前已填入 values 的表单字段,用于确认输入是否成功生效。 |
 | `page.state` | • `stable`:页面已稳定,可安全读取。<br>• `loading`:正在渲染,等待或使用 `stabilize_ms`。<br>• `anomaly`:反爬拦截或简化页信号,立即切换 headful 或转视觉兜底。 |
 | `changed` | 高亮本轮操作刚刚发生状态翻转的模块(如 `changed.dialogs: true`)。 |
+| `forms`(全量卡) | 实时回显当前已填入 values 的表单字段,用于确认输入是否成功生效。 |
 
 ---
 

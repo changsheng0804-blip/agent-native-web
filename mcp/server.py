@@ -427,6 +427,7 @@ async def list_tools():
                     "interactive": {"type": "boolean", "description": "仅返回可交互构件"},
                     "in_viewport": {"type": "boolean", "description": "仅返回视口内构件"},
                     "max_results": {"type": "integer", "description": "最多返回条数", "default": 20},
+                    "verbose": {"type": "boolean", "description": "true 时返回全量深诊断状态卡;默认轻量", "default": False},
                 },
                 "required": ["world_id"],
             },
@@ -445,6 +446,7 @@ async def list_tools():
                     "fields": {"type": "array", "description": "batch_fill 的字段列表 [{\"id\":\"el_6\",\"text\":\"...\"}]", "items": {"type": "object"}},
                     "type_delay_ms": {"type": "number", "description": "逐字打字延迟(触发联想下拉用)", "default": 0},
                     "visual_evidence": {"type": "boolean", "description": "是否截前后帧做视觉 diff 兜底", "default": False},
+                    "verbose": {"type": "boolean", "description": "true 时返回全量深诊断状态卡(frames/forms/world 明细);默认轻量(URL/稳定态/登录态/弹窗)", "default": False},
                     "steps": {"type": "array", "description": "聚合执行:多步动作序列 [{kind,id,text|key|fields,...}, ...],任一步 errored 即停", "items": {"type": "object"}},
                 },
                 "required": ["world_id"],
@@ -458,6 +460,7 @@ async def list_tools():
                 "properties": {
                     "world_id": {"type": "integer"},
                     "since": {"type": "integer", "description": "仅当存在 evidence_seq 大于 since 的新卡时返回它", "default": 0},
+                    "verbose": {"type": "boolean", "description": "true 时返回全量深诊断状态卡;默认轻量", "default": False},
                 },
                 "required": ["world_id"],
             },
@@ -530,7 +533,18 @@ def _impl_with_status(name, args):
             pass
     if name in {"world_state", "world_change_digest", "world_evidence", "world_guide"}:
         return result
-    return _inject_status(result, wid)
+    # Phase 2 Diff-First 载荷:协议 6 词工具默认轻量 status;
+    # verbose=true 或 page_outcome 为失败/存疑态(unchanged/uncertain/challenged/errored)时自动全量深诊断
+    light = name in ("world_act", "world_find", "world_outcome")
+    if light:
+        try:
+            payload = _result_payload(result)
+            po = (payload or {}).get("page_outcome")
+            if args.get("verbose") or po in ("unchanged", "uncertain", "challenged", "errored"):
+                light = False
+        except Exception:
+            light = False
+    return _inject_status(result, wid, light=light)
 
 
 # ── 网页状态卡(仪表盘)────────────────────────────────────────
@@ -563,6 +577,38 @@ def _auth_status(wid):
     except Exception:
         pass
     return {"loggedIn": False, "via": "no-signal"}
+
+
+def _status_light(wid):
+    """轻量状态卡:URL/稳定态/登录态/弹窗摘要 + 变化高亮。
+
+    Diff-First 载荷(Phase 2):默认协议工具(world_act/find/outcome)默认注入轻量卡,
+    不读 frames/forms/world 明细;verbose=true 或失败/存疑态(unchanged/uncertain/
+    challenged/errored)时自动升级为全量 _status 深诊断。
+    """
+    w = _world(wid)
+    try:
+        core = _evaluate(wid, "() => agentWorld.query.getStatus()") or {}
+    except Exception:
+        core = {}
+    cur = {
+        "light": True,
+        "url": w["page"].url[:120],
+        "state": (core.get("page") or {}).get("state", "unknown"),
+        "auth": _auth_status(wid),
+        "dialogs": core.get("dialogs", []) or [],
+        "changed": {},
+    }
+    last = w.get("last_status_light")
+    w["last_status_light"] = cur
+    if last:
+        if last.get("url") != cur.get("url"):
+            cur["changed"]["url"] = True
+        if last.get("state") != cur.get("state"):
+            cur["changed"]["state"] = True
+        if len(last.get("dialogs") or []) != len(cur.get("dialogs") or []):
+            cur["changed"]["dialogs"] = True
+    return cur
 
 
 def _status(wid):
@@ -633,8 +679,12 @@ def _status(wid):
     return cur
 
 
-def _inject_status(result, wid):
-    """给工具返回 JSON 注入状态卡(所有工具统一附带)"""
+def _inject_status(result, wid, light=False):
+    """给工具返回 JSON 注入状态卡。
+
+    light=True 时注入轻量卡(URL/稳定态/登录态/弹窗摘要,不读 frames/forms/world 明细)。
+    Phase 2 Diff-First 载荷:协议 6 词工具默认 light;verbose=true 或失败/存疑态自动全量。
+    """
     if wid is None:
         # world_open 的返回里包含新建的 world_id
         for item in result:
@@ -659,7 +709,7 @@ def _inject_status(result, wid):
             try:
                 data = json.loads(item.text)
                 if isinstance(data, dict):
-                    data["status"] = _status(wid_i)
+                    data["status"] = _status_light(wid_i) if light else _status(wid_i)
                     item.text = json.dumps(data, ensure_ascii=False, indent=2)
             except Exception:
                 pass

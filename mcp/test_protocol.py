@@ -76,16 +76,22 @@ async def main():
             card = await call(session, "world_act", {"world_id": wid, "kind": "click", "id": btn["id"]})
             check("act(click) → progressed", card["page_outcome"] == "progressed", card.get("why"))
             check("act 返回统一卡", card["channel"] == "outcome" and card["evidence_seq"] >= 1)
+            # Phase 2 Diff-First:默认轻量 status(无 frames/forms/world 明细)
+            check("默认轻量 status(light)", card["status"].get("light") is True and "frames" not in card["status"], str(list(card["status"].keys())))
             out1 = await call(session, "world_outcome", {"world_id": wid})
             check("outcome 幂等=progressed", out1["page_outcome"] == "progressed" and out1["evidence_seq"] == card["evidence_seq"], str(out1.get("page_outcome")))
             out2 = await call(session, "world_outcome", {"world_id": wid, "since": 999999})
             check("outcome(since=新) → none 卡", out2["page_outcome"] == "none", str(out2.get("page_outcome")))
 
-            # 负例:find 标题 → act click → unchanged
+            # 负例:find 标题 → act click → unchanged(失败态自动全量深诊断)
             h = await call(session, "world_find", {"world_id": wid, "role": "heading", "text": "Far Modal Test"})
             check("find(role=heading) 命中", len(h["matches"]) >= 1, str(h["matches"]))
             card2 = await call(session, "world_act", {"world_id": wid, "kind": "click", "id": h["matches"][0]["id"]})
             check("负例 act → unchanged", card2["page_outcome"] == "unchanged", card2.get("why"))
+            check("unchanged 自动全量深诊断(含 frames)", card2["status"].get("light") is None and "frames" in card2["status"], str(list(card2["status"].keys())))
+            # verbose=true 强制全量(即使 outcome 是 progressed 也带 frames)
+            card_verbose = await call(session, "world_act", {"world_id": wid, "kind": "click", "id": btn["id"], "verbose": True})
+            check("verbose=true 全量 status(含 frames)", card_verbose["status"].get("light") is None and "frames" in card_verbose["status"], str(list(card_verbose["status"].keys())))
             await call(session, "world_close", {"world_id": wid})
 
             # ── 3. dyn:act steps 聚合执行(等价 world_run)──
