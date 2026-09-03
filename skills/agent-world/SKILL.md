@@ -103,6 +103,6 @@ page / overlays / sources / next / evidence_seq / changes_seq / world_epoch`。
 2. **多字段表单录入**:`world_act(kind="batch_fill", fields=[...])` 一次性提交多个字段,减少通信往返(逐字段容错,失败会记录在 results);或 `world_act(steps=[...])` 聚合多动作。
 3. **按键选择与提交**:`world_act(kind="press", key="Enter")` 或 `world_act(kind="press", key="ArrowDown")` 操作建议项。
 4. **原生多模态视觉感知 (SoM 模式)**:当面对密集长列表、复杂卡片流或类似按钮时,调用 `world_screenshot(annotated=True)`,多模态模型可以直接在图上看到每个构件的 `[el_X]` 标签,彻底消除歧义。
-5. **遮挡与层级提示**:若操作返回包含 `obscured_note`,说明目标上方有蒙层或对话框,优先处理上层元素。
+5. **遮挡与层级归因**:若操作返回包含 `occlusion` 字段(`covered_by`/`at`/`action`),说明目标被上层元素(弹窗/遮罩)挡住,按 `action` 建议先处理上层再重试;`page_outcome=unchanged` 且带遮挡归因时,`situation.type=occluded`,`why` 会说明被谁挡在哪个坐标——不再是含糊的"没变化"。
 6. **CDP 挂载(实验性,独立 profile)**:`world_open(cdp_url="http://localhost:9222")` 可连接已启动调试端口的 Chrome,复用其会话;`world_close` 只断开连接、不关闭浏览器。**安全边界:必须用独立 profile 启动(`--user-data-dir` 指向新目录),暂不连接日常使用的浏览器;CDP 会话下 `world_eval` 已禁用,请走结构化查询。**
 

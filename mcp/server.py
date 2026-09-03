@@ -1892,6 +1892,17 @@ def _outcome_card(wid, action, args, ret, before_signal):
         check_errors=check_errors,
     )
 
+    # Phase 3 遮挡归因:unchanged + 目标被遮挡 → why 并入归因,消除"含糊的 unchanged"
+    occlusion = ret.get("occlusion")
+    if page_outcome == "unchanged" and occlusion and occlusion.get("covered"):
+        occl_hint = ret.get("obscured_note") or ""
+        if occl_hint:
+            why = f"{why};{occl_hint}"
+        by = occlusion.get("covered_by") or {}
+        situation = {"type": "occluded", "to_url": None,
+                     "covered_by": by, "at": occlusion.get("at") or [],
+                     "action": occlusion.get("action")}
+
     # 目标身份(最佳努力;导航后旧 el_N 全部失效,target.id 置空,只留 URL)
     if action == "world_navigate":
         target = {"id": None, "name": str(args.get("url", ""))[:300], "fingerprint": None}
@@ -2354,6 +2365,86 @@ def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500, disappear
     return effect
 
 
+def _occlusion_probe(wid, target_id=None, x=None, y=None):
+    """遮挡归因探测(Phase 3):elementFromPoint 单点检查。
+
+    目标模式(target_id):检查元素中心点是否被上层元素遮挡。
+    坐标模式(x/y,click_at 用):报告坐标处顶层元素,遮罩类(role=dialog/menu 或
+    backdrop/overlay/modal class)标记 covered。
+    返回 None 或 {covered, covered_by:{tag,role,id,cls}, at:[x,y], target_tag}。
+    本函数只检测与归因,不改变任何动作行为。
+    """
+    try:
+        data = _evaluate(
+            wid,
+            """(arg) => {
+                let el = null, cx = null, cy = null;
+                if (arg.id !== null && arg.id !== undefined && arg.id !== '') {
+                    el = agentWorld._runtime.world.elements.get(arg.id);
+                    if (!el || !el._el) return null;
+                    el._el.scrollIntoView({ block: 'center', inline: 'center' });
+                    const r = el._el.getBoundingClientRect();
+                    if (r.width <= 0 || r.height <= 0) return { covered: false, hidden: true };
+                    cx = Math.round(r.x + r.width / 2); cy = Math.round(r.y + r.height / 2);
+                } else {
+                    cx = Math.round(arg.x); cy = Math.round(arg.y);
+                }
+                const top = document.elementFromPoint(cx, cy);
+                if (!top) return { covered: false };
+                const tag = top.tagName.toLowerCase();
+                const cls = (top.className && typeof top.className === 'string')
+                    ? top.className.split(/\\s+/).slice(0, 3).join(' ') : '';
+                const role = top.getAttribute('role') || '';
+                let covered;
+                if (arg.id !== null && arg.id !== undefined && arg.id !== '') {
+                    covered = Boolean(el && top !== el._el && !el._el.contains(top));
+                } else {
+                    covered = ['dialog', 'alertdialog', 'menu'].includes(role)
+                        || /backdrop|overlay|modal/i.test(cls);
+                }
+                return {
+                    covered: covered,
+                    covered_by: { tag, role, id: top.id || '', cls },
+                    at: [cx, cy],
+                    target_tag: el && el._el ? el._el.tagName.toLowerCase() : null,
+                };
+            }""",
+            {"id": target_id, "x": x, "y": y},
+        )
+        if not data or data.get("hidden"):
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def _occlusion_attach(ret, probe):
+    """把遮挡归因挂到动作返回:结构化 occlusion 字段 + 兼容旧 obscured_note。"""
+    if not probe or not probe.get("covered"):
+        return
+    by = probe.get("covered_by") or {}
+    label = f"<{by.get('tag') or '?'}"
+    if by.get("role"):
+        label += f" role={by['role']}"
+    if by.get("id"):
+        label += f" id={by['id']}"
+    if by.get("cls"):
+        label += f" class={by['cls']}"
+    label += ">"
+    at = probe.get("at") or []
+    if by.get("role") in ("dialog", "alertdialog", "menu"):
+        action = "先关闭/操作该弹窗,再重试动作"
+    else:
+        action = "先处理该遮挡元素,再重试动作"
+    ret["occlusion"] = {
+        "covered": True,
+        "covered_by": by,
+        "at": at,
+        "action": action,
+    }
+    ret["obscured_note"] = f"目标被 {label} 遮挡于 {at}:{action}"
+
+
 def _t_world_click(args, before_signal=None):
     wid = args["world_id"]
     target = _resolve_id(wid, args["id"])
@@ -2374,30 +2465,8 @@ def _t_world_click(args, before_signal=None):
             before_signal = {}
     url_before = before_signal["url"]
 
-    # 遮挡检测:检查元素中心点是否被上层弹窗/遮罩层挡住(信息提示,不改变点击行为)
-    hit_info = _evaluate(
-        wid,
-        """(id) => {
-            const el = agentWorld._runtime.world.elements.get(id);
-            if (!el) return null;
-            el._el.scrollIntoView({ block: 'center', inline: 'center' });
-            const r = el._el.getBoundingClientRect();
-            if (r.width <= 0 || r.height <= 0) return { visible: false };
-            const cx = Math.round(r.x + r.width / 2), cy = Math.round(r.y + r.height / 2);
-            const top = document.elementFromPoint(cx, cy);
-            const obscured = (top && top !== el._el && !el._el.contains(top));
-            return {
-                visible: true,
-                obscured: Boolean(obscured),
-                topTag: top ? top.tagName.toLowerCase() : null,
-                topRole: top ? (top.getAttribute('role') || '') : null
-            };
-        }""",
-        target,
-    )
-    obscured_note = None
-    if hit_info and hit_info.get("obscured"):
-        obscured_note = f"目标上方存在层级: <{hit_info.get('topTag')}> role={hit_info.get('topRole') or 'none'}"
+    # 遮挡归因:检查元素中心点是否被上层弹窗/遮罩层挡住(结构化 covered_by/at/action,不改变点击行为)
+    occl_probe = _occlusion_probe(wid, target_id=target)
 
     loc = _build_locator(w, ent)
     if loc:
@@ -2406,8 +2475,7 @@ def _t_world_click(args, before_signal=None):
             loc.click(timeout=10000)
             _refresh_core_status(wid)
             ret = {"world_id": wid, "clicked": target, "method": "locator"}
-            if obscured_note:
-                ret["obscured_note"] = obscured_note
+            _occlusion_attach(ret, occl_probe)
             effect = _wait_click_effect(wid, snap_before, url_before)
             if effect:
                 ret["effect"] = effect
@@ -2437,8 +2505,7 @@ def _t_world_click(args, before_signal=None):
     w["page"].mouse.up()
     _refresh_core_status(wid)
     ret = {"world_id": wid, "clicked": target, "method": "mouse-gesture", "at": [cx, cy], "locator_note": loc_err}
-    if obscured_note:
-        ret["obscured_note"] = obscured_note
+    _occlusion_attach(ret, occl_probe)
     effect = _wait_click_effect(wid, snap_before, url_before)
     if effect:
         ret["effect"] = effect
@@ -2463,6 +2530,8 @@ def _t_world_fill(args, before_signal=None):
     # 填表前:冻结目标空间区域(生效报告的证据基线)
     snap_before = _click_region_snapshot(wid, target, capture_frame=visual_evidence)
     url_before = w["page"].url
+    # 遮挡归因(Phase 3):填表目标被上层元素挡住时结构化报告(不改变行为)
+    occl_probe = _occlusion_probe(wid, target_id=target)
     loc = _build_locator(w, ent)
     if loc:
         try:
@@ -2486,6 +2555,7 @@ def _t_world_fill(args, before_signal=None):
                 _refresh_core_status(wid)
                 method = "locator-sequential-type" if type_delay_ms > 0 else "locator-fill"
                 ret = {"world_id": wid, "filled": target, "text": text, "method": method}
+                _occlusion_attach(ret, occl_probe)
                 effect = _wait_click_effect(wid, snap_before, url_before, max_wait_ms=1500, fill_verified=True)
                 if effect:
                     ret["effect"] = effect
@@ -2532,6 +2602,7 @@ def _t_world_fill(args, before_signal=None):
         raise ValueError(f"fill 失败: {r} (locator: {fill_err})")
     _refresh_core_status(wid)
     ret = {"world_id": wid, "filled": target, "text": text, "target_tag": r.get("tag"), "method": "js-setter", "locator_note": fill_err}
+    _occlusion_attach(ret, occl_probe)
     # js-setter 兜底路径同样验证"值是否进入可见输入框"作为生效证据
     filled_ok = _fill_visible(wid, text)
     effect = _wait_click_effect(wid, snap_before, url_before, max_wait_ms=1500, fill_verified=filled_ok)
@@ -2634,12 +2705,15 @@ def _t_world_press(args, before_signal=None):
     url_before = w["page"].url
     # 按 key 决定是否开启"弹窗消失"证据(Escape 关弹窗/菜单 = 生效)
     disappear_ok = key.lower() in ("escape", "esc")
+    # 遮挡归因(Phase 3):按键目标被上层元素挡住时结构化报告
+    occl_probe = _occlusion_probe(wid, target_id=target)
     loc = _build_locator(w, ent)
     if loc:
         try:
             loc.press(key, timeout=10000)
             _refresh_core_status(wid)
             ret = {"world_id": wid, "pressed": target, "key": key, "method": "locator-press"}
+            _occlusion_attach(ret, occl_probe)
             effect = _wait_click_effect(wid, snap_before, url_before, disappear_ok=disappear_ok)
             if effect:
                 ret["effect"] = effect
@@ -2673,6 +2747,7 @@ def _t_world_press(args, before_signal=None):
         pass
     _refresh_core_status(wid)
     ret = {"world_id": wid, "pressed": target, "key": key, "method": "native-keyboard"}
+    _occlusion_attach(ret, occl_probe)
     effect = _wait_click_effect(wid, snap_before, url_before, disappear_ok=disappear_ok)
     if effect:
         ret["effect"] = effect
@@ -2808,9 +2883,12 @@ def _t_world_click_at(args, before_signal=None):
             before_signal = {}
     snap_before = _region_snapshot_at(wid, x, y)
     url_before = w["page"].url
+    # 遮挡归因(Phase 3):坐标模式——报告命中点顶层元素,遮罩类(role=dialog/backdrop)标 covered
+    occl_probe = _occlusion_probe(wid, x=x, y=y)
     w["page"].mouse.click(x, y)
     _refresh_core_status(wid)
     ret = {"world_id": wid, "clicked_at": [x, y], "method": "mouse-coords"}
+    _occlusion_attach(ret, occl_probe)
     effect = _wait_click_effect(wid, snap_before, url_before)
     if effect:
         ret["effect"] = effect
