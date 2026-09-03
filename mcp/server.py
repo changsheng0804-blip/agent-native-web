@@ -424,7 +424,7 @@ async def list_tools():
                 "type": "object",
                 "properties": {
                     "world_id": {"type": "integer"},
-                    "q": {"type": "string", "description": "一句话或弱 ID(名字/强 ID/页面原生 id),走 resolve 解析"},
+                    "q": {"type": "string", "description": "一句话或弱 ID(名字/强 ID/页面原生 id),走 resolve 解析;未命中时按可见文本/名字子串兜底(大小写不敏感)"},
                     "role": {"type": "string", "description": "语义角色,如 button/link/input/combobox/heading"},
                     "text": {"type": "string", "description": "文本包含(子串匹配)"},
                     "name": {"type": "string", "description": "名字包含(如 round-trip 匹配 combobox.round-trip)"},
@@ -785,6 +785,12 @@ def _resolve_id(world_id, q):
         return r["id"]
     if r and r.get("matches"):
         raise ValueError(f"{q!r} 有 {len(r['matches'])} 个候选: {r['matches']},请用 findEntities 精确过滤")
+    # 文本兜底:resolve 未命中时,按可见文本做大小写不敏感子串匹配(与内核 findEntities 口径一致)
+    texts = _evaluate(world_id, "(q) => agentWorld.query.findEntities({text: q})", q) or []
+    if len(texts) == 1:
+        return texts[0]["id"]
+    if len(texts) > 1:
+        raise ValueError(f"{q!r} 文本匹配到 {len(texts)} 个候选,请用 world_find 精确定位")
     raise ValueError(f"找不到构件: {q!r}")
 
 
@@ -3084,6 +3090,12 @@ def _t_world_find(args):
             ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", i)
             if ent:
                 entities.append(ent)
+        # 文本兜底:resolve 未命中时,按可见文本/名字做大小写不敏感子串匹配(与内核 findEntities 口径一致)
+        if not entities:
+            fallback = _evaluate(wid, "(q) => agentWorld.query.findEntities({text: q})", str(q)) or []
+            if not fallback:
+                fallback = _evaluate(wid, "(q) => agentWorld.query.findEntities({name: q})", str(q)) or []
+            entities = fallback
         # q 解析后仍可叠加过滤器(角色/文本/可交互),过滤候选
         if filters:
             entities = [e for e in entities if _entity_match(e, filters)]

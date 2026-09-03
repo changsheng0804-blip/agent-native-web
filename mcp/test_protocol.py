@@ -93,6 +93,9 @@ async def main():
             # 负例:find 标题 → act click → unchanged(失败态自动全量深诊断)
             h = await call(session, "world_find", {"world_id": wid, "role": "heading", "text": "Far Modal Test"})
             check("find(role=heading) 命中", len(h["matches"]) >= 1, str(h["matches"]))
+            # 文本兜底回归:英文可见文本 q 走 text 子串(大小写不敏感),旧实现只解析 name 会 0 命中
+            ft = await call(session, "world_find", {"world_id": wid, "q": "Far Modal Test"})
+            check("find(q=英文文本) 文本兜底命中", len(ft["matches"]) >= 1, str(ft["matches"]))
             card2 = await call(session, "world_act", {"world_id": wid, "kind": "click", "id": h["matches"][0]["id"]})
             check("负例 act → unchanged", card2["page_outcome"] == "unchanged", card2.get("why"))
             check("unchanged 自动全量深诊断(含 frames)", card2["status"].get("light") is None and "frames" in card2["status"], str(list(card2["status"].keys())))
@@ -137,6 +140,9 @@ async def main():
                 fields[ph] = matches[0]["id"]
             sub = await call(session, "world_find", {"world_id": wid, "role": "button", "text": "Continue"})
             sub_id = next(m["id"] for m in sub["matches"] if m.get("interactive"))
+            # 文本兜底回归:交互元素英文文本 q(旧实现 resolve 只匹配语义名会 0 命中)
+            qc = await call(session, "world_find", {"world_id": wid, "q": "Continue"})
+            check("find(q=英文按钮文本) 文本兜底命中可交互", any(m.get("interactive") for m in qc["matches"]), str(qc["matches"]))
             agg3 = await call(session, "world_act", {"world_id": wid, "steps": [
                 {"kind": "fill", "id": fields["名字"], "text": "Alice"},
                 {"kind": "fill", "id": fields["邮箱"], "text": "a@example.com"},
