@@ -34,6 +34,34 @@ python mcp/server.py
 
 `server.py` 使用标准输入输出模式运行，通常由 MCP 客户端自动启动，不建议直接在终端中手动操作。
 
+## 测试与质量门禁(何时跑什么)
+
+测试分三层,不是每次改动都要跑全量:
+
+| 层 | 内容 | 耗时 | 何时跑 |
+|---|---|---|---|
+| **offline** | 本地夹具 19 项(快、稳定、不联网) | 串行约 14 分钟 / 并行 ×3 约 5 分钟 | 改代码后、提交合并前 |
+| **real** | 真实网站 18 项(GitHub/闲鱼等) | 慢,受网络/反爬影响 | 只做真站功能验证时 |
+| **special** | 特殊环境(CDP/有头窗口) | — | 按需手动 |
+
+日常节奏(建议规矩):
+
+```bash
+# 改文档/说明 → 不用跑测试
+# 改某个工具逻辑 → 只跑相关守护面(最快)
+python mcp/run_quality.py --scope fill            # 只跑填表相关
+python mcp/run_quality.py --scope judgment,challenge
+# 只跑一个脚本
+python mcp/run_quality.py --only test_protocol.py
+# 提交合并前 → 全量 offline(必跑,全绿才合)
+python mcp/run_quality.py                          # 串行,约 13 分钟
+python mcp/run_quality.py --parallel 3             # 并行,约 5-6 分钟(内存够用建议 3)
+# 查看全部守护面与别名
+python mcp/run_quality.py --list
+```
+
+**门禁纪律**:offline 全量必须全绿;`validate_closed_loop` 的 FP=0 一票否决(把"没生效"误报成"成功"即失败);真实网站测试失败不一定是代码问题(网络/反爬),需人工判断。
+
 ## 项目核心
 
 项目最初的重要目标是降低浏览器操作的视觉读取和上下文消耗；随着模型成本下降，当前更核心的问题变成了：复杂网页操作慢、定位难、反馈延迟，并容易让智能体把“没有反馈”误判成“已经成功”。Agent-Native Web 围绕网页导览图、实时变化流和操作生效报告，减少这种猜测空间。

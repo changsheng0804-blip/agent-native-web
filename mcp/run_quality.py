@@ -267,6 +267,19 @@ def write_report(results, checks, groups_run, started):
 
 
 # ── 主流程 ───────────────────────────────────────────────────
+def _run_one(target, timeout_factor=1.0):
+    """跑单个测试(供并行与串行共用)。"""
+    group = next((g for g in ORDER if target in GROUPS[g]["scripts"]), "?")
+    timeout = TIMEOUT_OVERRIDES.get(target) or GROUPS[group]["timeout"] if group in GROUPS else 180
+    # 并行时多个浏览器共享 CPU,单测耗时会明显变长——超时按因子放宽,避免误杀
+    if timeout_factor > 1.0:
+        timeout = int(timeout * timeout_factor)
+    display = target.split()[0]  # 报告里只显示脚本名(不带参数)
+    r = run_script(target, timeout)
+    r["script"], r["group"] = display, group
+    return r
+
+
 def main():
     ap = argparse.ArgumentParser(description="Agent-Native Web 质检流水线")
     ap.add_argument("--all", action="store_true", help="跑全部三组(offline+real+special)")
@@ -274,6 +287,8 @@ def main():
     ap.add_argument("--list", action="store_true", help="列出分组、脚本与守护面")
     ap.add_argument("--only", metavar="SCRIPT", help="只跑指定脚本(如 test_map.py)")
     ap.add_argument("--scope", metavar="SCOPE", help="只跑某守护面的测试(如 --scope fill;多面用逗号:--scope fill,observer;别名见 --list)")
+    ap.add_argument("--parallel", type=int, default=1, metavar="N",
+                    help="并行跑 N 个测试(默认 1=串行;offline 全量建议 3,约 13 分钟→5 分钟。注意每个测试会拉起独立浏览器,内存有限时用 2)")
     args = ap.parse_args()
 
     if args.list:
@@ -343,16 +358,37 @@ def main():
 
     started = time.time()
     results = []
-    for script in targets:
-        group = next((g for g in ORDER if script in GROUPS[g]["scripts"]), "?")
-        timeout = TIMEOUT_OVERRIDES.get(script) or GROUPS[group]["timeout"] if group in GROUPS else 180
-        display = script.split()[0]  # 报告里只显示脚本名(不带参数)
-        print(f"\n▶ [{group}] {display} (超时 {timeout}s)")
-        sys.stdout.flush()
-        r = run_script(script, timeout)
-        r["script"], r["group"] = display, group
-        results.append(r)
-        print(f"  → {r['status']}  {r['elapsed']:.1f}s")
+    if args.parallel and args.parallel > 1:
+        # ── 并行模式:每个测试独立子进程+独立浏览器,线程池并发提交 ──
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        # 并行超时放宽:多浏览器共享 CPU,单测耗时显著变长(实测 3 并行 ≈ 1.7x)
+        timeout_factor = max(1.5, 0.5 * args.parallel + 1.0)
+        order_index = {s.split()[0]: i for i, s in enumerate(targets)}
+        with ThreadPoolExecutor(max_workers=args.parallel, thread_name_prefix="quality") as pool:
+            futures = {}
+            for script in targets:
+                display = script.split()[0]
+                print(f"\n▶ {display} (并行, 池 {args.parallel}, 超时×{timeout_factor:.1f})")
+                sys.stdout.flush()
+                futures[pool.submit(_run_one, script, timeout_factor)] = script
+            for fut in as_completed(futures):
+                r = fut.result()
+                print(f"  → {r['status']}  {r['elapsed']:.1f}s  {r['script']}")
+                sys.stdout.flush()
+                results.append(r)
+        results.sort(key=lambda r: order_index.get(r["script"], 999))  # 报告按原顺序
+    else:
+        # ── 串行模式(默认,行为不变) ──
+        for script in targets:
+            group = next((g for g in ORDER if script in GROUPS[g]["scripts"]), "?")
+            timeout = TIMEOUT_OVERRIDES.get(script) or GROUPS[group]["timeout"] if group in GROUPS else 180
+            display = script.split()[0]  # 报告里只显示脚本名(不带参数)
+            print(f"\n▶ [{group}] {display} (超时 {timeout}s)")
+            sys.stdout.flush()
+            r = _run_one(script)
+            results.append(r)
+            print(f"  → {r['status']}  {r['elapsed']:.1f}s")
 
     total = time.time() - started
     print(f"\n{'=' * 56}")
@@ -360,7 +396,7 @@ def main():
     for r in results:
         print(f"  {r['status']:<8} {r['elapsed']:6.1f}s  {r['script']}")
     print(f"{'=' * 56}")
-    print(f"通过 {passed}/{len(results)}  总耗时 {total:.1f}s")
+    print(f"通过 {passed}/{len(results)}  总耗时 {total:.1f}s" + (f"  (并行 ×{args.parallel})" if args.parallel > 1 else ""))
     write_report(results, checks, groups_run, started)
     print(f"报告已写入 {REPORT}")
 
