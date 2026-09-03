@@ -65,6 +65,13 @@ def assert_receipt(card, label=""):
           card.get("evidence_seq"))
     cs = card.get("changes_seq") or {}
     check(f"{label}changes_seq成对", "before" in cs and "after" in cs, cs)
+    # 审查 P1/P2a:effect 不得缺 verdict;anomaly 须为真布尔;candidates 须为列表(可空)
+    check(f"{label}effect.verdict非空", bool((card.get("effect") or {}).get("verdict")),
+          card.get("effect"))
+    check(f"{label}page.anomaly为布尔", isinstance((card.get("page") or {}).get("anomaly"), bool),
+          (card.get("page") or {}).get("anomaly"))
+    check(f"{label}next.candidates为列表", isinstance((card.get("next") or {}).get("candidates"), list),
+          (card.get("next") or {}).get("candidates"))
 
 
 def assert_sources(card, label=""):
@@ -155,6 +162,16 @@ async def main():
                   card.get("page_outcome"))
             check("errored带evidence_seq", isinstance(card.get("evidence_seq"), int),
                   card.get("evidence_seq"))
+            # 审查 P2b:errored 非空壳
+            check("errored effect=unevaluated",
+                  card.get("effect", {}).get("verdict") == "unevaluated",
+                  card.get("effect"))
+            check("errored sources填实(error→evidence)",
+                  bool(card.get("sources")) and card.get("sources", {}).get("error") == "evidence",
+                  card.get("sources"))
+            check("errored page.anomaly为布尔",
+                  isinstance((card.get("page") or {}).get("anomaly"), bool),
+                  (card.get("page") or {}).get("anomaly"))
             await call(session, "world_close", {"world_id": wid})
 
             # ── 5. navigate → epoch+1 + target.id=null ──

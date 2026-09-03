@@ -647,9 +647,7 @@ def _status(wid):
     # 环境异常检测:稳定后,原生网页世界 vs 可见 DOM(阈值 35%,排除隐藏/装饰元素)
     visible_dom = frames[0].get("visible", 0) if frames else 0
     world_count = core.get("world", {}).get("elements", 0)
-    anomaly = False
-    if visible_dom > 50 and world_count < visible_dom * 0.35:
-        anomaly = True
+    anomaly = _anomaly_from_counts(visible_dom, world_count)
     try:
         page_state = core.get("page", {}).get("state", "unknown")
     except Exception:
@@ -1766,6 +1764,7 @@ def _build_page_outcome(wid, before_signal, after_signal, submit_trigger=False, 
     errored    表单错误信号(role=alert / aria-invalid,仅表单类动作后检测)→ 读错误修正重试
               或网络/控制台静默失败(HTTP 4xx/5xx / console.error)→ 即使 DOM 无变化也能精准归因
     uncertain  effect.verdict == changed(有变化但性质不明)→ 最多补一次 world_state
+    uncertain  effect.verdict == unknown(证据管线缺席,生效未知)→ 复核一次,绝不当失败
     unchanged  其余(没有有效变化)→ 按失败路径处理
 
     设计:合并在 server 端完成,agent 收到的不是四条独立信号而是预合成主标签。
@@ -1839,6 +1838,14 @@ def _build_page_outcome(wid, before_signal, after_signal, submit_trigger=False, 
             {"type": "none", "to_url": None},
             effect.get("confidence") or "medium",
             effect.get("why") or "有变化但无法确认是否生效",
+        )
+    if verdict == "unknown":
+        # P1:证据缺席→ uncertain(复核一次),绝不映射为 unchanged(未知不是失败)。
+        return (
+            "uncertain",
+            {"type": "none", "to_url": None},
+            effect.get("confidence") or "low",
+            effect.get("why") or "证据缺失,生效未知",
         )
 
     # 4. 静默失败气泡(借鉴 Chrome DevTools MCP):
@@ -2005,6 +2012,7 @@ CARD_SOURCE_RULES = {
     "next.suggested": SOURCE_INFERENCE,
     "recipes": SOURCE_INFERENCE,
     "handoff": SOURCE_INFERENCE,
+    "error": SOURCE_EVIDENCE,
 }
 
 
@@ -2022,6 +2030,41 @@ def _sources_for_card(card):
         if ok:
             out[path] = tag
     return out
+
+
+def _anomaly_from_counts(visible_dom, world_count):
+    """环境异常纯判定(与 _status 同口径):可见 DOM 远多于世界元素即异常。
+    阈值 35%/50 个沿用状态卡实战值(Booking.com 误报教训),改动须两处同步。"""
+    try:
+        return bool(visible_dom and visible_dom > 50 and (world_count or 0) < visible_dom * 0.35)
+    except Exception:
+        return False
+
+
+def _anomaly_check(wid):
+    """供小票 page.anomaly 的轻量检测:主 frame 可见元素 vs 世界元素数。
+    任何失败默认 False(宁可漏报,不误报)。每次动作约 +2 次 evaluate。"""
+    try:
+        w = _world(int(wid))
+        core = _evaluate(int(wid), "() => agentWorld.query.getStatus()") or {}
+        page = w["page"]
+        target = None
+        for f in page.frames:
+            try:
+                if f.url and not f.url.startswith("about:"):
+                    target = f
+                    break
+            except Exception:
+                continue
+        if target is None:
+            return False
+        visible = target.evaluate(
+            "[...document.querySelectorAll('*')].filter(e => { const t = e.tagName.toLowerCase(); if (['br','hr','script','style','link','meta','noscript','svg','path','g','defs','use'].includes(t)) return false; const s = getComputedStyle(e); const r = e.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) !== 0 && r.width > 3 && r.height > 3; }).length"
+        )
+        world_count = (core.get("world") or {}).get("elements", 0)
+        return _anomaly_from_counts(visible, world_count)
+    except Exception:
+        return False
 
 
 def _outcome_card(wid, action, args, ret, before_signal):
@@ -2049,6 +2092,13 @@ def _outcome_card(wid, action, args, ret, before_signal):
     new_overlays = ov_fb.get("new") or []
     gone_overlays = ov_fb.get("gone") or []
     effect = ret.get("effect") or {}
+    # P1:证据管线缺席兜底。快照缺失等竞态下 effect 为空,以往会一路掉进 unchanged(把未知判成失败);
+    # 现合成 unknown 证据,由 _build_page_outcome 映射为 uncertain(复核一次,而非当失败)。
+    if not isinstance(effect, dict) or not effect.get("verdict"):
+        effect = {"verdict": "unknown", "confidence": "low",
+                  "why": "证据管线未返回 effect(快照缺失或采集中断),生效未知",
+                  "observed": []}
+        ret["effect"] = effect
 
     # 疑似提交动作判定(challenged 检测的前置):click 目标为 form/submit;
     # press 仅 Enter 且目标在 form 内;其余动作不启用
@@ -2102,6 +2152,11 @@ def _outcome_card(wid, action, args, ret, before_signal):
 
     # 导览失效判定:全局事实变了,旧导览不可信
     guide_stale = bool(url_changed or new_overlays or gone_overlays or page_fb.get("title_changed"))
+    # P2a:page.anomaly 接真信号(与状态卡同口径的轻量检测),异常安全默认 False。
+    try:
+        _anomaly = _anomaly_check(int(wid))
+    except Exception:
+        _anomaly = False
 
     # 阶段 C: 自愈处方 (recipes) 与 人机交接 (handoff) 协议
     handoff = None
@@ -2159,7 +2214,7 @@ def _outcome_card(wid, action, args, ret, before_signal):
             "after_url": after.get("url") or before.get("url"),
             "url_changed": url_changed,
             "state": after.get("state", "unknown"),
-            "anomaly": False,
+            "anomaly": _anomaly,
         },
         "overlays": {"new": new_overlays[:8], "gone": gone_overlays[:8]},
         "next": {"guide_stale": guide_stale, "suggested": next_suggested, "candidates": []},
@@ -2194,10 +2249,20 @@ def _errored_card(wid, action, args, before_signal, exc):
     # P0-1:errored 卡也消耗一个序号。不 mint 的话,它的序号会与上一张成功卡重复,
     # world_outcome(since=上一序号) 将返回 none,把这张 errored 藏掉(对账黑洞)。
     try:
+        after = _page_signal_snapshot(int(wid))
+    except Exception:
+        after = {}
+    # P0-1 续:mint 序号(独立 try,与快照无关)。不 mint 则与上一张成功卡同号,对账黑洞。
+    try:
         w["evidence_seq"] = int(w.get("evidence_seq", 0)) + 1
     except Exception:
         pass
-    return _ok({
+    # P2b:异常真信号(与 _outcome_card 同口径),异常安全。
+    try:
+        _err_anomaly = _anomaly_check(int(wid))
+    except Exception:
+        _err_anomaly = False
+    _err_card = {
         "world_id": int(wid),
         "channel": "outcome",
         "page_outcome": "errored",
@@ -2206,13 +2271,16 @@ def _errored_card(wid, action, args, before_signal, exc):
         "why": "动作执行抛异常,未获得生效判定(可能已部分生效)",
         "target": {"id": args.get("id"), "name": None, "fingerprint": None},
         "action": {"kind": action.split("_", 1)[1] if action.startswith("world_") else action, "via": "self"},
-        "effect": {},
+        # P2b:errored 不是无证据,而是"未评估"。verdict 用 unevaluated(与 unknown/changed 并列第三态),
+        # 映射仍为 errored(异常本身即结论),效果字段诚实声明未评估而非留空。
+        "effect": {"verdict": "unevaluated", "confidence": "high",
+                   "why": "动作抛异常,效果未评估(见 error 字段)", "observed": []},
         "page": {
             "before_url": before.get("url"),
             "after_url": after.get("url") or before.get("url"),
             "url_changed": bool(before.get("url") and before.get("url") != (after.get("url") or before.get("url"))),
             "state": after.get("state", "unknown"),
-            "anomaly": False,
+            "anomaly": _err_anomaly,
         },
         "overlays": {"new": [], "gone": []},
         "sources": {},
@@ -2221,7 +2289,13 @@ def _errored_card(wid, action, args, before_signal, exc):
         "changes_seq": {"before": before.get("changes_seq", 0), "after": after.get("changes_seq", 0)},
         "world_epoch": int(w.get("epoch", 0)),
         "error": f"{type(exc).__name__}: {str(exc)[:300]}",
-    })
+    }
+    # P2b:空壳填实——对真卡打来源标记(error 字段已纳入白名单)。
+    try:
+        _err_card["sources"] = _sources_for_card(_err_card)
+    except Exception:
+        pass
+    return _ok(_err_card)
 
 
 def _region_snapshot_at(wid, x, y):
@@ -3037,6 +3111,15 @@ def _t_world_batch_fill(args, before_signal=None):
         "changes_seq": {"before": before.get("changes_seq", 0), "after": after.get("changes_seq", 0)},
         "world_epoch": int(w.get("epoch", 0)),
     })
+    # P2a/P2b 同口径(本卡绕过 _outcome_card,在此补齐):异常真信号 + 来源标记填实。
+    try:
+        ret["page"]["anomaly"] = _anomaly_check(int(wid))
+    except Exception:
+        pass
+    try:
+        ret["sources"] = _sources_for_card(ret)
+    except Exception:
+        pass
     return _ok(ret)
 
 

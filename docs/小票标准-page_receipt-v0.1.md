@@ -109,6 +109,21 @@ untrusted  页面自由文本（target.name、text、aria-label、placeholder）
 
 不做钱包、不存密码、不上链、不签发身份；`world_eval` 永不进小票信任边界。
 
+## 11. 审查补丁（分支审查 2026-09-03，三项）
+
+- **P1 证据缺席→uncertain**：快照缺失等竞态下 effect 为空，以往掉进 `unchanged`（把未知判成失败）。
+  现 `_outcome_card` 合成 `effect.verdict=unknown`，映射为 `uncertain`（复核一次）。
+  `effect.verdict` 全集：`effected / visual-effected / no-change / changed / unknown / unevaluated`。
+- **P2a anomaly 接真信号**：`page.anomaly` 不再恒 False，复用与状态卡同口径的轻量检测
+  （主 frame 可见元素 vs 世界元素数，35%/50 个阈值，`_anomaly_from_counts` 两处共用），
+  异常安全默认 False，每动作约 +2 次 evaluate。
+  `next.candidates` 仍恒 `[]`：填它要多付一次导览代价，暂列为**预留字段**（有键、为列表，内容留空），
+  不撒谎，不断言。
+- **P2b errored 空壳填实**：`effect={"verdict":"unevaluated",...}`（未评估≠无证据，映射仍为 errored），
+  `sources` 按白名单实打（新增 `error→evidence` 规则），`page.anomaly` 同口径。
+  另：`errored` 卡也消耗序号（否则与上一张成功卡同号，`world_outcome(since)` 把它藏掉）。
+- 同病：`world_batch_fill` 自建卡绕过 `_outcome_card`，同补 anomaly+sources。
+
 ## 10. L2 样式层（视觉梯子第二级，P0-2 后续）
 
 `effect.verdict=visual-effected` 有两条路，`effect.visual_path` 标明走了哪条：
