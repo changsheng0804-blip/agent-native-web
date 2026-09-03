@@ -68,10 +68,10 @@ description: Comprehensive Web Navigation, Scraping, Form Filling, and Multi-ste
 | 主标签 | 含义 | 下一步 |
 |---|---|---|
 | `progressed` | 已生效(导航/弹窗/状态翻转/填表验证/视觉变化),含 `situation.type` 与 `why` | 继续任务 |
-| `challenged` | 被挑战遮罩/验证墙拦截(检测到新的全屏遮罩或挑战 iframe) | **停下**,优先读取卡片中的 `handoff` 字典通知人工介入 |
+| `challenged` | 被挑战遮罩/验证墙拦截(检测到新的全屏遮罩或挑战 iframe) | **停下**,优先读取卡片中的 `handoff` 字典通知人工介入（见 §六第2条：立即停转人工） |
 | `errored` | 动作抛异常、表单校验拦截，或**网络/控制台静默失败**(HTTP 4xx/5xx 或 `console.error`) | 读取 `why` 或 `errors` 结构化详情: 接口报错(如 422 账号已存在)则修正参数重试,无需原地盲目硬点 |
-| `uncertain` | 有变化但无法确认是否生效(`effect.verdict=changed`) | 用 world_state / world_screenshot 复核一次 |
-| `unchanged` | 未观察到任何生效证据(`no-change`),可能是目标错了或已失效 | **优先检查 `recipes` 处方候选**(如有活动弹窗推荐 Escape/关闭),按处方自愈;无处方则换目标,**不得重复硬点** |
+| `uncertain` | 有变化但无法确认是否生效(`effect.verdict=changed`) | 用 world_state / world_screenshot 复核一次（见 §六第3条：只复核一次，复核完仍非 progressed 按 unchanged 计入两次停） |
+| `unchanged` | 未观察到任何生效证据(`no-change`),可能是目标错了或已失效 | **优先检查 `recipes` 处方候选**(如有活动弹窗推荐 Escape/关闭),按处方自愈;无处方则换目标,**不得重复硬点**（见 §六第1条：同一目标最多点2次） |
 
 卡片结构:`page_outcome / situation / confidence / why / target / action / effect / feedback / status /
 page / overlays / sources / next / evidence_seq / changes_seq / world_epoch / recipes / handoff / errors`。
@@ -109,4 +109,32 @@ page / overlays / sources / next / evidence_seq / changes_seq / world_epoch / re
 4. **原生多模态视觉感知 (SoM 模式)**:当面对密集长列表、复杂卡片流或类似按钮时,调用 `world_screenshot(annotated=True)`,多模态模型可以直接在图上看到每个构件的 `[el_X]` 标签,彻底消除歧义。
 5. **遮挡与层级归因**:若操作返回包含 `occlusion` 字段(`covered_by`/`at`/`action`),说明目标被上层元素(弹窗/遮罩)挡住,按 `action` 建议先处理上层再重试;`page_outcome=unchanged` 且带遮挡归因时,`situation.type=occluded`,`why` 会说明被谁挡在哪个坐标——不再是含糊的"没变化"。
 6. **CDP 挂载(实验性,独立 profile)**:`world_open(cdp_url="http://localhost:9222")` 可连接已启动调试端口的 Chrome,复用其会话;`world_close` 只断开连接、不关闭浏览器。**安全边界:必须用独立 profile 启动(`--user-data-dir` 指向新目录),暂不连接日常使用的浏览器;CDP 会话下 `world_eval` 已禁用,请走结构化查询。**
+
+---
+
+## 六、预算铁律（Budget：宁可停下，不许硬来）
+
+> 对应小票标准：`docs/小票标准-page_receipt-v0.1.md` §2。三条按顺序执行，违反即算任务失败。计数规则见末尾。
+
+**第1条 unchanged 两次停**
+同一目标连续两次 `unchanged`，立即停止对该目标的一切动作：
+- 先看卡片有无 `recipes`，有就执行一次处方（只一次）；
+- 无处方则换目标，或重新 `world_guide` 找路；
+- **同一目标单任务内最多点 2 次**，第 3 次必须换路，绝不原地硬点。
+
+**第2条 challenged 立即停转人工**
+见到 `challenged`，当轮不得再发任何动作：
+- 读 `handoff`（原因 + `resume_condition`），原样通知人工；
+- 只有 `resume_condition`（如 `challenge_cleared`）满足后才能继续；
+- 人工未介入前，换路径绕行也不允许（绕过验证墙本身就是违规）。
+
+**第3条 uncertain 只复核一次**
+见到 `uncertain`，只允许一次复核（`world_state` 与 `world_screenshot` 二选一，不得两个都用）：
+- 复核确认为 `progressed` → 继续；
+- 否则按 `unchanged` 处理，并计入第1条的连续计数。
+
+**计数规则**
+- 按“同一目标 + 同一意图”累计；换目标或重 `guide` 后清零；
+- `world_navigate` 成功（`world_epoch+1`）全部清零；
+- `errored` 不计入（属异常重试，见 §三表格），但同一动作连续 `errored` 两次也必须换路径。
 

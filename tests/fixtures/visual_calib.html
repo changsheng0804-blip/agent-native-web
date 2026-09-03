@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>视觉阈值校准页</title>
+<style>
+  .case { width: 220px; height: 90px; margin: 12px 0; line-height: 90px; text-align: center;
+          cursor: pointer; user-select: none; border: 1px solid #999; position: relative; }
+  #c-strong { background: #3498db; color: #fff; transition: background 0.3s; }
+  #c-strong.on { background: #e74c3c; }
+  #c-overlay { background: #eee; }
+  #c-overlay .panel { display: none; position: absolute; inset: 10px; background: #2ecc71; color: #fff; line-height: 70px; }
+  #c-overlay.on .panel { display: block; }
+  #c-subtle { background: #3498db; color: #fff; transition: background 0.3s; }
+  #c-subtle.on { background: #2f89c5; }
+  #c-dot { background: #eee; }
+  #c-dot .dot { display: none; position: absolute; right: 8px; top: 8px; width: 6px; height: 6px;
+                background: #e74c3c; border-radius: 50%; }
+  #c-dot.on .dot { display: block; }
+  #c-noop { background: #ccc; }
+  #c-jitter { background: #eee; }
+  #c-jitter .spin { display: inline-block; width: 18px; height: 18px; border: 3px solid #bbb;
+                    border-top-color: #333; border-radius: 50%; vertical-align: middle;
+                    animation: rot 0.6s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<h1>视觉阈值校准页</h1>
+<div class="case" id="c-strong" onclick="this.classList.toggle('on')">强变色整块翻红</div>
+<div class="case" id="c-overlay" onclick="this.classList.toggle('on')">浮层出现<span class="panel">浮层面板</span></div>
+<div class="case" id="c-subtle" onclick="this.classList.toggle('on')">轻微变色几乎看不出</div>
+<div class="case" id="c-dot" onclick="this.classList.toggle('on')">角落小红点<span class="dot"></span></div>
+<div class="case" id="c-noop">无变化对照块</div>
+<div class="case" id="c-jitter" onclick="void 0">转菊花但点击无效果 <span class="spin"></span></div>
+</body>
+</html>

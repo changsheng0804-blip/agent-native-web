@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>视觉阈值校准页 v2（DOM 静默正例 + 噪声距离梯度）</title>
+<style>
+  .case { width: 220px; height: 90px; margin: 12px 0; line-height: 90px; text-align: center;
+          cursor: pointer; user-select: none; border: 1px solid #999; position: relative; }
+  #c-canvas { background: #eee; height: 120px; line-height: normal; }
+  #c-canvas canvas { margin-top: 8px; }
+  #c-near { background: #ccc; }
+  #c-far { background: #ccc; }
+  .spin { display: inline-block; width: 18px; height: 18px; border: 3px solid #bbb;
+          border-top-color: #333; border-radius: 50%; vertical-align: middle;
+          animation: rot 0.6s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .spacer { height: 300px; }
+</style>
+</head>
+<body>
+<h1>视觉阈值校准页 v2</h1>
+<div class="case" id="c-canvas">点我重绘画布<canvas id="cv" width="180" height="50"></canvas></div>
+<div class="case" id="c-near">静态块·菊花在100px下</div>
+<div style="height:10px"></div>
+<div><span class="spin" id="sp1"></span> 转菊花(距上块约100px)</div>
+<div class="spacer"></div>
+<div class="case" id="c-far">静态块·菊花在400px下</div>
+<div style="height:310px"></div>
+<div><span class="spin" id="sp2"></span> 转菊花(距上块约400px)</div>
+<script>
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#3498db'; ctx.fillRect(0, 0, 180, 50);
+  let flip = false;
+  document.getElementById('c-canvas').addEventListener('click', () => {
+    flip = !flip; // 只重绘画布,不碰 DOM 结构/属性/类名
+    ctx.fillStyle = flip ? '#e74c3c' : '#3498db';
+    ctx.fillRect(0, 0, 180, 50);
+  });
+  document.getElementById('c-near').addEventListener('click', () => {});
+  document.getElementById('c-far').addEventListener('click', () => {});
+</script>
+</body>
+</html>

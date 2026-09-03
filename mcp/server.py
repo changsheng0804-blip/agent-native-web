@@ -53,6 +53,11 @@ sys.stdout.reconfigure(encoding="utf-8")
 ALL_IN_ONE = Path(__file__).parent.parent / "extension" / "all-in-one.js"
 SCREENSHOT_DIR = Path(__file__).parent / "screenshots"
 SCREENSHOT_DIR.mkdir(exist_ok=True)
+# P0-2 视觉阈值:区域前后帧 RMS 差异超过此值判 visual-effected。
+# 校准 v1(docs/视觉阈值校准报告.md):真静态 0.0 / 邻区动画渗入 ~2.1-2.3 /
+# canvas 重绘 ~24.2 / 整块变色 ~33.3,取 5.0(噪声上 2.2x,最弱正例下 1/5)。
+# 改动此值必须同步更新 test_visual_evidence.py 与 test_visual_calib.py 的断言。
+VISUAL_RMS_THRESHOLD = 5.0
 PROFILES_DIR = Path(__file__).parent / "profiles"
 PROFILES_DIR.mkdir(exist_ok=True)
 
@@ -642,9 +647,7 @@ def _status(wid):
     # 环境异常检测:稳定后,原生网页世界 vs 可见 DOM(阈值 35%,排除隐藏/装饰元素)
     visible_dom = frames[0].get("visible", 0) if frames else 0
     world_count = core.get("world", {}).get("elements", 0)
-    anomaly = False
-    if visible_dom > 50 and world_count < visible_dom * 0.35:
-        anomaly = True
+    anomaly = _anomaly_from_counts(visible_dom, world_count)
     try:
         page_state = core.get("page", {}).get("state", "unknown")
     except Exception:
@@ -1761,6 +1764,7 @@ def _build_page_outcome(wid, before_signal, after_signal, submit_trigger=False, 
     errored    表单错误信号(role=alert / aria-invalid,仅表单类动作后检测)→ 读错误修正重试
               或网络/控制台静默失败(HTTP 4xx/5xx / console.error)→ 即使 DOM 无变化也能精准归因
     uncertain  effect.verdict == changed(有变化但性质不明)→ 最多补一次 world_state
+    uncertain  effect.verdict == unknown(证据管线缺席,生效未知)→ 复核一次,绝不当失败
     unchanged  其余(没有有效变化)→ 按失败路径处理
 
     设计:合并在 server 端完成,agent 收到的不是四条独立信号而是预合成主标签。
@@ -1834,6 +1838,14 @@ def _build_page_outcome(wid, before_signal, after_signal, submit_trigger=False, 
             {"type": "none", "to_url": None},
             effect.get("confidence") or "medium",
             effect.get("why") or "有变化但无法确认是否生效",
+        )
+    if verdict == "unknown":
+        # P1:证据缺席→ uncertain(复核一次),绝不映射为 unchanged(未知不是失败)。
+        return (
+            "uncertain",
+            {"type": "none", "to_url": None},
+            effect.get("confidence") or "low",
+            effect.get("why") or "证据缺失,生效未知",
         )
 
     # 4. 静默失败气泡(借鉴 Chrome DevTools MCP):
@@ -2000,6 +2012,7 @@ CARD_SOURCE_RULES = {
     "next.suggested": SOURCE_INFERENCE,
     "recipes": SOURCE_INFERENCE,
     "handoff": SOURCE_INFERENCE,
+    "error": SOURCE_EVIDENCE,
 }
 
 
@@ -2017,6 +2030,41 @@ def _sources_for_card(card):
         if ok:
             out[path] = tag
     return out
+
+
+def _anomaly_from_counts(visible_dom, world_count):
+    """环境异常纯判定(与 _status 同口径):可见 DOM 远多于世界元素即异常。
+    阈值 35%/50 个沿用状态卡实战值(Booking.com 误报教训),改动须两处同步。"""
+    try:
+        return bool(visible_dom and visible_dom > 50 and (world_count or 0) < visible_dom * 0.35)
+    except Exception:
+        return False
+
+
+def _anomaly_check(wid):
+    """供小票 page.anomaly 的轻量检测:主 frame 可见元素 vs 世界元素数。
+    任何失败默认 False(宁可漏报,不误报)。每次动作约 +2 次 evaluate。"""
+    try:
+        w = _world(int(wid))
+        core = _evaluate(int(wid), "() => agentWorld.query.getStatus()") or {}
+        page = w["page"]
+        target = None
+        for f in page.frames:
+            try:
+                if f.url and not f.url.startswith("about:"):
+                    target = f
+                    break
+            except Exception:
+                continue
+        if target is None:
+            return False
+        visible = target.evaluate(
+            "[...document.querySelectorAll('*')].filter(e => { const t = e.tagName.toLowerCase(); if (['br','hr','script','style','link','meta','noscript','svg','path','g','defs','use'].includes(t)) return false; const s = getComputedStyle(e); const r = e.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) !== 0 && r.width > 3 && r.height > 3; }).length"
+        )
+        world_count = (core.get("world") or {}).get("elements", 0)
+        return _anomaly_from_counts(visible, world_count)
+    except Exception:
+        return False
 
 
 def _outcome_card(wid, action, args, ret, before_signal):
@@ -2044,6 +2092,13 @@ def _outcome_card(wid, action, args, ret, before_signal):
     new_overlays = ov_fb.get("new") or []
     gone_overlays = ov_fb.get("gone") or []
     effect = ret.get("effect") or {}
+    # P1:证据管线缺席兜底。快照缺失等竞态下 effect 为空,以往会一路掉进 unchanged(把未知判成失败);
+    # 现合成 unknown 证据,由 _build_page_outcome 映射为 uncertain(复核一次,而非当失败)。
+    if not isinstance(effect, dict) or not effect.get("verdict"):
+        effect = {"verdict": "unknown", "confidence": "low",
+                  "why": "证据管线未返回 effect(快照缺失或采集中断),生效未知",
+                  "observed": []}
+        ret["effect"] = effect
 
     # 疑似提交动作判定(challenged 检测的前置):click 目标为 form/submit;
     # press 仅 Enter 且目标在 form 内;其余动作不启用
@@ -2097,6 +2152,11 @@ def _outcome_card(wid, action, args, ret, before_signal):
 
     # 导览失效判定:全局事实变了,旧导览不可信
     guide_stale = bool(url_changed or new_overlays or gone_overlays or page_fb.get("title_changed"))
+    # P2a:page.anomaly 接真信号(与状态卡同口径的轻量检测),异常安全默认 False。
+    try:
+        _anomaly = _anomaly_check(int(wid))
+    except Exception:
+        _anomaly = False
 
     # 阶段 C: 自愈处方 (recipes) 与 人机交接 (handoff) 协议
     handoff = None
@@ -2154,7 +2214,7 @@ def _outcome_card(wid, action, args, ret, before_signal):
             "after_url": after.get("url") or before.get("url"),
             "url_changed": url_changed,
             "state": after.get("state", "unknown"),
-            "anomaly": False,
+            "anomaly": _anomaly,
         },
         "overlays": {"new": new_overlays[:8], "gone": gone_overlays[:8]},
         "next": {"guide_stale": guide_stale, "suggested": next_suggested, "candidates": []},
@@ -2189,10 +2249,20 @@ def _errored_card(wid, action, args, before_signal, exc):
     # P0-1:errored 卡也消耗一个序号。不 mint 的话,它的序号会与上一张成功卡重复,
     # world_outcome(since=上一序号) 将返回 none,把这张 errored 藏掉(对账黑洞)。
     try:
+        after = _page_signal_snapshot(int(wid))
+    except Exception:
+        after = {}
+    # P0-1 续:mint 序号(独立 try,与快照无关)。不 mint 则与上一张成功卡同号,对账黑洞。
+    try:
         w["evidence_seq"] = int(w.get("evidence_seq", 0)) + 1
     except Exception:
         pass
-    return _ok({
+    # P2b:异常真信号(与 _outcome_card 同口径),异常安全。
+    try:
+        _err_anomaly = _anomaly_check(int(wid))
+    except Exception:
+        _err_anomaly = False
+    _err_card = {
         "world_id": int(wid),
         "channel": "outcome",
         "page_outcome": "errored",
@@ -2201,13 +2271,16 @@ def _errored_card(wid, action, args, before_signal, exc):
         "why": "动作执行抛异常,未获得生效判定(可能已部分生效)",
         "target": {"id": args.get("id"), "name": None, "fingerprint": None},
         "action": {"kind": action.split("_", 1)[1] if action.startswith("world_") else action, "via": "self"},
-        "effect": {},
+        # P2b:errored 不是无证据,而是"未评估"。verdict 用 unevaluated(与 unknown/changed 并列第三态),
+        # 映射仍为 errored(异常本身即结论),效果字段诚实声明未评估而非留空。
+        "effect": {"verdict": "unevaluated", "confidence": "high",
+                   "why": "动作抛异常,效果未评估(见 error 字段)", "observed": []},
         "page": {
             "before_url": before.get("url"),
             "after_url": after.get("url") or before.get("url"),
             "url_changed": bool(before.get("url") and before.get("url") != (after.get("url") or before.get("url"))),
             "state": after.get("state", "unknown"),
-            "anomaly": False,
+            "anomaly": _err_anomaly,
         },
         "overlays": {"new": [], "gone": []},
         "sources": {},
@@ -2216,7 +2289,13 @@ def _errored_card(wid, action, args, before_signal, exc):
         "changes_seq": {"before": before.get("changes_seq", 0), "after": after.get("changes_seq", 0)},
         "world_epoch": int(w.get("epoch", 0)),
         "error": f"{type(exc).__name__}: {str(exc)[:300]}",
-    })
+    }
+    # P2b:空壳填实——对真卡打来源标记(error 字段已纳入白名单)。
+    try:
+        _err_card["sources"] = _sources_for_card(_err_card)
+    except Exception:
+        pass
+    return _ok(_err_card)
 
 
 def _region_snapshot_at(wid, x, y):
@@ -2262,6 +2341,42 @@ def _region_snapshot_at(wid, x, y):
     if not raw:
         return None
     return json.loads(raw)
+
+
+# L2 样式快照层:区域元素计算样式属性表。DOM 行 diff 与目标状态都哑火时,
+# 先比计算样式(结构化、可解释、免截图),再落到像素兜底(L4)。
+STYLE_DIFF_PROPS = ("backgroundColor", "color", "opacity", "visibility",
+                    "display", "transform", "borderTopColor")
+STYLE_SNAPSHOT_MAX = 40
+
+
+def _region_styles(wid, ids):
+    """取一批世界构件的计算样式快照 {id: {prop: value}}。失败返回 {}。"""
+    uniq = list(dict.fromkeys(ids))[:STYLE_SNAPSHOT_MAX]
+    if not uniq:
+        return {}
+    try:
+        raw = _evaluate(wid, """(payload) => {
+            const out = {};
+            for (const id of payload.ids) {
+                const e = agentWorld._runtime.world.elements.get(id);
+                if (!e || !e._el || !e._el.isConnected) continue;
+                try {
+                    const cs = getComputedStyle(e._el);
+                    const m = {};
+                    for (const p of payload.props) m[p] = cs[p];
+                    out[id] = m;
+                } catch (err) {}
+            }
+            return JSON.stringify(out);
+        }""", {"ids": uniq, "props": list(STYLE_DIFF_PROPS)})
+    except Exception:
+        return {}
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
 
 
 def _click_region_snapshot(wid, target_id, capture_frame=False):
@@ -2327,6 +2442,16 @@ def _click_region_snapshot(wid, target_id, capture_frame=False):
                 clip={"x": max(0, reg["x0"]), "y": max(0, reg["y0"]), "width": max(10, reg["x1"] - reg["x0"]), "height": max(10, reg["y1"] - reg["y0"])}
             )
             data["frame_path"] = frame_path
+            try:
+                data["scroll_y"] = _evaluate(wid, "() => window.scrollY") or 0
+            except Exception:
+                data["scroll_y"] = 0
+            # L2:同拍一张区域计算样式快照(目标优先,最多 STYLE_SNAPSHOT_MAX 个)
+            try:
+                _sids = [target_id] + [r[0] for r in (data.get("rows") or [])]
+                data["styles_before"] = _region_styles(wid, _sids)
+            except Exception:
+                data["styles_before"] = {}
         except Exception:
             pass
     return data
@@ -2575,23 +2700,88 @@ def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500, disappear
     # 视觉双轨兜底: 若 DOM 结构无变化(no-change), 取前后局部帧计算 RMS 像素差异, 捕捉纯 CSS 动效/浮层/颜色切换
     if effect.get("verdict") == "no-change" and snap_before.get("frame_path"):
         try:
-            b_path = snap_before["frame_path"]
-            a_path = SCREENSHOT_DIR / f"frame_after_{wid}_{int(time.time()*1000)}.png"
-            reg = snap_before["region"]
-            w["page"].screenshot(
-                path=str(a_path),
-                clip={"x": max(0, reg["x0"]), "y": max(0, reg["y0"]), "width": max(10, reg["x1"] - reg["x0"]), "height": max(10, reg["y1"] - reg["y0"])}
-            )
-            i1 = Image.open(b_path).convert("RGB")
-            i2 = Image.open(a_path).convert("RGB")
-            diff = ImageChops.difference(i1, i2)
-            stat = ImageStat.Stat(diff)
-            diff_rms = math.sqrt(sum(stat.sum2) / (i1.size[0] * i1.size[1] * 3))
-            if diff_rms > 1.5:
-                effect["verdict"] = "visual-effected"
-                effect["confidence"] = "high"
-                effect["why"] = f"检测到目标区域发生显著视觉状态或浮层变化 (RMS={round(diff_rms, 2)})"
-                effect["visual_diff_score"] = round(diff_rms, 2)
+            # L2 样式层:先比计算样式(结构化、可解释、免截图)。命中则直接生效,不走像素。
+            # 只比双端都在的元素;消失/新增归 DOM 侧管,这里跳过。
+            _styles_hit = False
+            _sb = snap_before.get("styles_before")
+            if _sb:
+                try:
+                    # 波动基线:转菊花这类持续动画每帧都变,必须先排除,
+                    # 否则任何含动画邻居的区域都会误报。after 连采两次,之间在变即噪声。
+                    _sa1 = _region_styles(wid, list(_sb.keys()))
+                    try:
+                        time.sleep(0.15)
+                    except Exception:
+                        pass
+                    _sa2 = _region_styles(wid, list(_sb.keys()))
+                    _volatile = set()
+                    for _sid in _sa1:
+                        _m1, _m2 = _sa1.get(_sid) or {}, _sa2.get(_sid) or {}
+                        for _p in _m1:
+                            if _m1.get(_p) != _m2.get(_p):
+                                _volatile.add((_sid, _p))
+                    _diffs = []
+                    for _sid, _bm in _sb.items():
+                        _am = _sa2.get(_sid)
+                        if not _am:
+                            continue
+                        for _p, _bv in _bm.items():
+                            if (_sid, _p) in _volatile:
+                                continue
+                            if _am.get(_p) != _bv:
+                                _diffs.append({"id": _sid, "prop": _p,
+                                               "before": str(_bv)[:120],
+                                               "after": str(_am.get(_p))[:120]})
+                            if len(_diffs) >= 8:
+                                break
+                        if len(_diffs) >= 8:
+                            break
+                    if _diffs:
+                        _first = _diffs[0]
+                        effect["verdict"] = "visual-effected"
+                        effect["confidence"] = "high"
+                        effect["why"] = (f"区域元素计算样式变化({len(_diffs)}处,"
+                                         f"如{_first['id']}.{_first['prop']}:"
+                                         f"{_first['before']}→{_first['after']})")
+                        effect["style_changes"] = _diffs
+                        effect["visual_path"] = "style-diff"
+                        _styles_hit = True
+                except Exception:
+                    pass
+            # P0-2 scroll-shift 护栏:点击导致页面滚动时,固定坐标区域前后帧必然错位,
+            # 此时 RMS 再大也不能判生效(实测滚动 216px 产生 RMS 28.9,淹没真信号)。
+            try:
+                y_now = _evaluate(wid, "() => window.scrollY") or 0
+            except Exception:
+                y_now = 0
+            y_before = snap_before.get("scroll_y", y_now)
+            if _styles_hit:
+                pass  # 已命中样式层,跳过像素兜底
+            elif abs((y_now or 0) - (y_before or 0)) > 2:
+                effect["visual_skipped"] = "scroll-shift"
+                effect["why"] = (effect.get("why") or "") + \
+                    "(动作前后页面发生滚动,区域前后帧错位,视觉比对作废)"
+            else:
+                b_path = snap_before["frame_path"]
+                a_path = SCREENSHOT_DIR / f"frame_after_{wid}_{int(time.time()*1000)}.png"
+                reg = snap_before["region"]
+                w["page"].screenshot(
+                    path=str(a_path),
+                    clip={"x": max(0, reg["x0"]), "y": max(0, reg["y0"]), "width": max(10, reg["x1"] - reg["x0"]), "height": max(10, reg["y1"] - reg["y0"])}
+                )
+                i1 = Image.open(b_path).convert("RGB")
+                i2 = Image.open(a_path).convert("RGB")
+                diff = ImageChops.difference(i1, i2)
+                stat = ImageStat.Stat(diff)
+                diff_rms = math.sqrt(sum(stat.sum2) / (i1.size[0] * i1.size[1] * 3))
+                # P0-2:原始分永远记录(阈值校准与审计用),判定走 VISUAL_RMS_THRESHOLD。
+                effect["visual_diff_raw"] = round(diff_rms, 2)
+                effect["visual_path"] = "pixel"
+                if diff_rms > VISUAL_RMS_THRESHOLD:
+                    effect["verdict"] = "visual-effected"
+                    effect["confidence"] = "high"
+                    effect["why"] = f"检测到目标区域发生显著视觉状态或浮层变化 (RMS={round(diff_rms, 2)})"
+                    effect["visual_diff_score"] = round(diff_rms, 2)
         except Exception:
             pass
 
@@ -2921,6 +3111,15 @@ def _t_world_batch_fill(args, before_signal=None):
         "changes_seq": {"before": before.get("changes_seq", 0), "after": after.get("changes_seq", 0)},
         "world_epoch": int(w.get("epoch", 0)),
     })
+    # P2a/P2b 同口径(本卡绕过 _outcome_card,在此补齐):异常真信号 + 来源标记填实。
+    try:
+        ret["page"]["anomaly"] = _anomaly_check(int(wid))
+    except Exception:
+        pass
+    try:
+        ret["sources"] = _sources_for_card(ret)
+    except Exception:
+        pass
     return _ok(ret)
 
 
