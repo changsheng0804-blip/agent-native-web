@@ -27,7 +27,9 @@ Agent World MCP Server
 运行:python server.py  (stdio 模式,由 MCP 客户端拉起)
 """
 import asyncio
+import atexit
 import base64
+import hashlib
 import json
 import math
 import os
@@ -35,6 +37,9 @@ import re
 import sys
 import time
 import traceback
+import threading
+import uuid
+from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageStat
@@ -46,6 +51,16 @@ from playwright.sync_api import sync_playwright
 
 # Playwright 同步 API 强依赖 greenlet 协程上下文，必须在单一固定 OS 工作线程内运行，杜绝多线程竞争切换
 _pw_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="playwright_worker")
+_pending_actions = {}
+_pending_actions_lock = threading.Lock()
+
+
+def _cleanup_pending_actions(max_age_s=600):
+    now = time.time()
+    with _pending_actions_lock:
+        stale = [k for k, v in _pending_actions.items() if now - float(v.get("created_at", now)) > max_age_s]
+        for key in stale:
+            _pending_actions.pop(key, None)
 
 
 sys.stdout.reconfigure(encoding="utf-8")
@@ -55,6 +70,10 @@ SCREENSHOT_DIR = Path(__file__).parent / "screenshots"
 SCREENSHOT_DIR.mkdir(exist_ok=True)
 PROFILES_DIR = Path(__file__).parent / "profiles"
 PROFILES_DIR.mkdir(exist_ok=True)
+# 本地导航记忆：仅当前机器使用，不跨用户共享；运行时文件由 .gitignore 排除。
+NAV_MEMORY_DIR = Path(__file__).parent / "memory"
+NAV_MEMORY_FILE = NAV_MEMORY_DIR / "navigation_graph.json"
+NAV_MEMORY_DIR.mkdir(exist_ok=True)
 
 if not ALL_IN_ONE.exists():
     raise SystemExit(f"all-in-one.js 不存在: {ALL_IN_ONE}")
@@ -69,6 +88,7 @@ server = Server("agent-world")
 _worlds = {}
 _next_world_id = 1
 _playwright = None
+_pooled_browsers = {}
 
 
 def _get_pw():
@@ -76,6 +96,33 @@ def _get_pw():
     if _playwright is None:
         _playwright = sync_playwright().start()
     return _playwright
+
+
+def _get_pooled_browser(headful=False):
+    key = bool(headful)
+    browser = _pooled_browsers.get(key)
+    if browser is not None:
+        try:
+            if browser.is_connected():
+                return browser
+        except Exception:
+            pass
+        _pooled_browsers.pop(key, None)
+    browser = _get_pw().chromium.launch(headless=not headful)
+    _pooled_browsers[key] = browser
+    return browser
+
+
+def _close_pooled_browsers():
+    for key, browser in list(_pooled_browsers.items()):
+        try:
+            browser.close()
+        except Exception:
+            pass
+        _pooled_browsers.pop(key, None)
+
+
+atexit.register(_close_pooled_browsers)
 
 
 def _world(world_id):
@@ -96,6 +143,53 @@ def _wait_world_ready(page, timeout_ms=15000):
             pass
         time.sleep(0.25)
     return False
+
+
+def _wait_world_stable(world_id, timeout_ms=10000):
+    started = time.perf_counter()
+    deadline = time.time() + max(0, int(timeout_ms)) / 1000
+    while True:
+        try:
+            _evaluate(world_id, "() => { agentWorld._runtime.refreshStatus(); return true; }")
+            status = _evaluate(world_id, "() => agentWorld.query.getStatus()") or {}
+            state = (status.get("page") or {}).get("state")
+            scan = status.get("scan") or {}
+            if state == "stable" and scan.get("fullScan", "ready") == "ready":
+                return {"state": "stable", "timed_out": False, "waited_ms": int((time.perf_counter() - started) * 1000)}
+        except Exception:
+            state = "unknown"
+        if time.time() >= deadline:
+            return {"state": state or "unknown", "timed_out": True, "waited_ms": int((time.perf_counter() - started) * 1000)}
+        time.sleep(0.25)
+
+
+def _attach_page_error_listeners(page, net_errors, console_errors):
+    def on_response(res):
+        try:
+            if res.status >= 400:
+                detail = ""
+                try: detail = res.text()[:200]
+                except Exception: pass
+                net_errors.append({"url": res.url, "status": res.status, "detail": detail, "time": time.time()})
+                if len(net_errors) > 50: net_errors.pop(0)
+        except Exception: pass
+    def on_console(msg):
+        try:
+            if msg.type == "error":
+                console_errors.append({"text": msg.text[:300], "time": time.time()})
+                if len(console_errors) > 50: console_errors.pop(0)
+        except Exception: pass
+    def on_pageerror(exc):
+        try:
+            console_errors.append({"text": f"Uncaught {type(exc).__name__}: {str(exc)[:300]}", "time": time.time()})
+            if len(console_errors) > 50: console_errors.pop(0)
+        except Exception: pass
+    try:
+        page.on("response", on_response)
+        page.on("console", on_console)
+        page.on("pageerror", on_pageerror)
+    except Exception:
+        pass
 
 
 def _evaluate(world_id, expr, arg=None):
@@ -131,6 +225,8 @@ async def list_tools():
                     "headful": {"type": "boolean", "description": "是否弹出可见窗口(登录/验证码/人工确认场景用)", "default": False},
                     "profile": {"type": "string", "description": "持久化登录态名称(如 login-taobao),同一名称复用 cookie/会话;留空则不持久化"},
                     "cdp_url": {"type": "string", "description": "连接已有 Chrome 的 CDP 调试地址(如 http://localhost:9222),复用日常已登录浏览器;与 profile/headless 互斥"},
+                    "browser_mode": {"type": "string", "enum": ["isolated", "pooled"], "description": "浏览器启动模式:isolated=每次独立启动(默认),pooled=复用已启动浏览器进程"},
+                    "ready_policy": {"type": "string", "enum": ["action", "terrain", "stable"], "description": "返回时机:action=达到可操作即返回(默认),terrain=任务区域可查询,stable=等待页面稳定"},
                 },
                 "required": ["url"],
             },
@@ -428,6 +524,7 @@ async def list_tools():
                     "role": {"type": "string", "description": "语义角色,如 button/link/input/combobox/heading"},
                     "text": {"type": "string", "description": "文本包含(子串匹配)"},
                     "name": {"type": "string", "description": "名字包含(如 round-trip 匹配 combobox.round-trip)"},
+                    "fingerprint": {"type": "string", "description": "稳定指纹精确匹配,用于快速验证历史入口"},
                     "interactive": {"type": "boolean", "description": "仅返回可交互构件"},
                     "in_viewport": {"type": "boolean", "description": "仅返回视口内构件"},
                     "max_results": {"type": "integer", "description": "最多返回条数", "default": 20},
@@ -450,6 +547,7 @@ async def list_tools():
                     "fields": {"type": "array", "description": "batch_fill 的字段列表 [{\"id\":\"el_6\",\"text\":\"...\"}]", "items": {"type": "object"}},
                     "type_delay_ms": {"type": "number", "description": "逐字打字延迟(触发联想下拉用)", "default": 0},
                     "visual_evidence": {"type": "boolean", "description": "是否截前后帧做视觉 diff 兜底", "default": False},
+                    "wait_policy": {"type": "string", "enum": ["confirmed", "receipt"], "description": "confirmed=等待最终后果卡(默认),receipt=动作发出后立即返回动作编号"},
                     "verbose": {"type": "boolean", "description": "true 时返回全量深诊断状态卡(frames/forms/world 明细);默认轻量(URL/稳定态/登录态/弹窗)", "default": False},
                     "steps": {"type": "array", "description": "聚合执行:多步动作序列 [{kind,id,text|key|fields,...}, ...],任一步 errored 即停", "items": {"type": "object"}},
                 },
@@ -465,6 +563,7 @@ async def list_tools():
                     "world_id": {"type": "integer"},
                     "since": {"type": "integer", "description": "仅当存在 evidence_seq 大于 since 的新卡时返回它", "default": 0},
                     "verbose": {"type": "boolean", "description": "true 时返回全量深诊断状态卡;默认轻量", "default": False},
+                    "action_id": {"type": "string", "description": "receipt 模式返回的动作编号;填写后查询该动作最终结果"},
                 },
                 "required": ["world_id"],
             },
@@ -488,7 +587,58 @@ async def list_tools():
 # ── 工具实现 ─────────────────────────────────────────────────
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+    arguments = arguments or {}
     try:
+        _cleanup_pending_actions()
+        # receipt 模式：把写动作放入 Playwright 专用队列后立即返回编号。
+        # world_outcome(action_id=...) 在事件循环中直接查看 future，避免被长动作反向阻塞。
+        if name == "world_outcome" and arguments.get("action_id"):
+            action_id = str(arguments.get("action_id"))
+            with _pending_actions_lock:
+                pending = _pending_actions.get(action_id)
+            if pending is None:
+                return _ok({"channel": "outcome", "page_outcome": "errored", "action_id": action_id,
+                            "confidence": "high", "why": "动作编号不存在或已过期"})
+            future = pending["future"]
+            if not future.done():
+                return _ok({"world_id": pending.get("world_id"), "channel": "outcome",
+                            "page_outcome": "pending", "action_id": action_id,
+                            "confidence": "high", "why": "动作已发出，最终页面结果尚未返回"})
+            try:
+                result = future.result()
+                with _pending_actions_lock:
+                    _pending_actions.pop(action_id, None)
+                # 在最终卡上补回动作编号，便于多动作并行时对账。
+                if result and isinstance(result[0], types.TextContent):
+                    try:
+                        payload = json.loads(result[0].text)
+                        payload["action_id"] = action_id
+                        result[0] = types.TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, indent=2))
+                    except Exception:
+                        pass
+                return result
+            except Exception as e:
+                with _pending_actions_lock:
+                    _pending_actions.pop(action_id, None)
+                return _ok({"world_id": pending.get("world_id"), "channel": "outcome",
+                            "page_outcome": "errored", "action_id": action_id,
+                            "confidence": "high", "why": f"动作执行异常: {e}"})
+
+        wait_policy = str(arguments.get("wait_policy") or "confirmed").strip().lower()
+        if wait_policy == "receipt" and (name in ACTION_NAMES or name == "world_act"):
+            world_id = arguments.get("world_id")
+            if world_id is None:
+                return _ok({"channel": "outcome", "page_outcome": "errored",
+                            "confidence": "high", "why": "receipt 模式必须提供 world_id"})
+            action_id = uuid.uuid4().hex
+            action_args = dict(arguments)
+            action_args.pop("wait_policy", None)
+            future = asyncio.get_event_loop().run_in_executor(_pw_executor, _impl_with_status, name, action_args)
+            with _pending_actions_lock:
+                _pending_actions[action_id] = {"future": future, "world_id": int(world_id), "created_at": time.time()}
+            return _ok({"world_id": int(world_id), "channel": "outcome", "page_outcome": "pending",
+                        "action_id": action_id, "accepted": True,
+                        "confidence": "high", "why": "动作已排入同一网页世界的有序执行队列"})
         # 全部在专用单一 executor 线程执行(Playwright 同步 API 强线程亲和)
         return await asyncio.get_event_loop().run_in_executor(_pw_executor, _impl_with_status, name, arguments)
     except Exception as e:
@@ -601,6 +751,7 @@ def _status_light(wid):
         "state": (core.get("page") or {}).get("state", "unknown"),
         "auth": _auth_status(wid),
         "dialogs": core.get("dialogs", []) or [],
+        "scan": core.get("scan", {}) or {},
         "changed": {},
     }
     last = w.get("last_status_light")
@@ -662,6 +813,7 @@ def _status(wid):
         "frames": frames,
         "forms": core.get("forms", []),
         "world": core.get("world", {}),
+        "scan": core.get("scan", {}),
     }
     last = w.get("last_status")
     w["last_status"] = cur
@@ -796,12 +948,22 @@ def _resolve_id(world_id, q):
 
 def _t_world_open(args):
     global _next_world_id
+    open_started = time.perf_counter()
     url = args["url"] or ""
     wait_ms = int(args.get("wait_ms", 3000))
     headful = bool(args.get("headful", False))
     profile = args.get("profile") or None
     cdp_url = args.get("cdp_url") or None
+    browser_mode = str(args.get("browser_mode") or "isolated").strip().lower()
+    ready_policy = str(args.get("ready_policy") or "action").strip().lower()
+    if browser_mode not in ("isolated", "pooled"):
+        raise ValueError("browser_mode 只能是 isolated 或 pooled")
+    if ready_policy not in ("action", "terrain", "stable"):
+        raise ValueError("ready_policy 只能是 action、terrain 或 stable")
+    if browser_mode == "pooled" and (profile or cdp_url):
+        raise ValueError("browser_mode=pooled 不能与 profile 或 cdp_url 同用")
     pw = _get_pw()
+    pooled = False
     if cdp_url:
         # CDP 挂载:连接已有 Chrome 的调试端口(复用日常登录态/已打开页面)。
         # 注意:这是连接而非启动,world_close 时只断开不关闭用户浏览器。
@@ -830,11 +992,21 @@ def _t_world_open(args):
                 print(f"[world] storage state 恢复失败: {e}")
         handle = context
         page = context.pages[0] if context.pages else context.new_page()
+    elif browser_mode == "pooled":
+        browser = _get_pooled_browser(headful)
+        context = browser.new_context(viewport={"width": 1440, "height": 900})
+        page = context.new_page()
+        handle = context
+        pooled = True
     else:
         browser = pw.chromium.launch(headless=not headful)
         context = browser.new_context(viewport={"width": 1440, "height": 900})
         page = context.new_page()
         handle = browser
+    # 在导航前注册监听,避免首屏网络/控制台错误丢失。
+    net_errors = []
+    console_errors = []
+    _attach_page_error_listeners(page, net_errors, console_errors)
     page.add_init_script(INJECT_JS)
     if cdp_url:
         # 已存在的页面 add_init_script 不会立即生效(只对后续导航生效),
@@ -864,59 +1036,6 @@ def _t_world_open(args):
     wid = _next_world_id
     _next_world_id += 1
 
-    # 轻量网络与控制台静默失败监听(借鉴 Chrome DevTools MCP)
-    net_errors = []
-    console_errors = []
-
-    def _on_response(res):
-        try:
-            if res.status >= 400:
-                snippet = ""
-                try:
-                    snippet = res.text()[:200]
-                except Exception:
-                    pass
-                net_errors.append({
-                    "url": res.url,
-                    "status": res.status,
-                    "detail": snippet,
-                    "time": time.time(),
-                })
-                if len(net_errors) > 50:
-                    net_errors.pop(0)
-        except Exception:
-            pass
-
-    def _on_console(msg):
-        try:
-            if msg.type == "error":
-                console_errors.append({
-                    "text": msg.text[:300],
-                    "time": time.time(),
-                })
-                if len(console_errors) > 50:
-                    console_errors.pop(0)
-        except Exception:
-            pass
-
-    def _on_pageerror(exc):
-        try:
-            console_errors.append({
-                "text": f"Uncaught {type(exc).__name__}: {str(exc)[:300]}",
-                "time": time.time(),
-            })
-            if len(console_errors) > 50:
-                console_errors.pop(0)
-        except Exception:
-            pass
-
-    try:
-        page.on("response", _on_response)
-        page.on("console", _on_console)
-        page.on("pageerror", _on_pageerror)
-    except Exception:
-        pass
-
     _worlds[wid] = {
         "handle": handle,
         "context": context,
@@ -925,6 +1044,8 @@ def _t_world_open(args):
         "opened_at": time.time(),
         "profile": profile,
         "cdp_url": cdp_url,
+        "browser_mode": "cdp" if cdp_url else ("pooled" if pooled else ("profile" if profile else "isolated")),
+        "pooled": pooled,
         # 操作证据信道只在当前网页世界内短暂保存,不落盘。
         "evidence_seq": 0,
         "evidence_log": [],
@@ -933,19 +1054,49 @@ def _t_world_open(args):
         "network_errors": net_errors,
         "console_errors": console_errors,
     }
-    # 等待世界稳定(分层加载:渐进渲染/懒加载,固定秒数不可靠,以状态卡 stable 为准)
     stabilize_ms = int(args.get("stabilize_ms", 10000))
-    deadline = time.time() + stabilize_ms / 1000
-    while time.time() < deadline:
-        try:
-            st = _evaluate(wid, "() => agentWorld.query.getStatus()")
-            if st.get("page", {}).get("state") == "stable":
+    stability = {"state": "loading", "timed_out": False, "waited_ms": 0}
+    if ready_policy == "stable":
+        stability = _wait_world_stable(wid, stabilize_ms)
+    elif ready_policy == "terrain":
+        # progressive runtime 的首屏扫描完成即满足 terrain;完整扫描继续后台进行。
+        terrain_started = time.perf_counter()
+        st = {}
+        deadline = time.time() + max(0, stabilize_ms) / 1000
+        while time.time() < deadline:
+            st = _evaluate(wid, "() => agentWorld.query.getStatus()") or {}
+            if (st.get("scan") or {}).get("terrainReady"):
                 break
-        except Exception:
-            pass
-        time.sleep(0.5)
+            time.sleep(0.05)
+        stability = {"state": (st.get("page") or {}).get("state", "loading"),
+                     "timed_out": not bool((st.get("scan") or {}).get("terrainReady")),
+                     "waited_ms": int((time.perf_counter() - terrain_started) * 1000)}
     summary = _evaluate(wid, "agentWorld.query.getPageSummary()")
-    return _ok({"world_id": wid, "url": page.url, "ready": True, "headful": headful, "profile": profile, "cdp_url": cdp_url, "summary": summary})
+    mode_name = "cdp" if cdp_url else ("pooled" if pooled else ("profile" if profile else "isolated"))
+    try:
+        final_status = _evaluate(wid, "() => agentWorld.query.getStatus()") or {}
+    except Exception:
+        final_status = {}
+    scan_status = final_status.get("scan") or {}
+    page_status = final_status.get("page") or {}
+    full_scan_state = scan_status.get("fullScan", "pending")
+    if full_scan_state != "ready" and stability.get("timed_out"):
+        full_scan_state = "timed_out"
+    return _ok({
+        "world_id": wid, "url": page.url, "ready": True,
+        "headful": headful, "profile": profile, "cdp_url": cdp_url,
+        "browser_mode": mode_name, "summary": summary,
+        "readiness": {
+            "action": True,
+            "terrain": "ready" if scan_status.get("terrainReady") else "partial",
+            "stable": stability.get("state") == "stable" and scan_status.get("fullScan", "ready") == "ready",
+            "full_scan": full_scan_state,
+            "scan_revision": scan_status.get("revision", 0),
+            "stability_timed_out": bool(stability.get("timed_out")),
+            "stabilize_waited_ms": stability.get("waited_ms", 0),
+        },
+        "timing": {"open_elapsed_ms": int((time.perf_counter() - open_started) * 1000)},
+    })
 
 
 def _t_world_entities(args):
@@ -1166,6 +1317,159 @@ def _result_payload(result):
     return {}
 
 
+def _url_pattern(url):
+    """把网址临时参数归一化，避免把每次编号都当成新页面节点。"""
+    try:
+        p = urlsplit(str(url or ""))
+        path = re.sub(r"/(?:\d{2,}|[0-9a-f]{8,})", "/:param", p.path or "/")
+        return f"{p.scheme}://{p.netloc}{path}"[:300]
+    except Exception:
+        return str(url or "")[:300]
+
+
+def _page_node_identity(signal):
+    """页面节点组合身份：网址模式 + 标题 + 关键区域 + 页面状态。"""
+    signal = signal or {}
+    overlays = []
+    for key in ("dialogs", "menus"):
+        for item in signal.get(key, []) or []:
+            overlays.append(str(item.get("name") or item.get("id") or "")[:80].lower())
+    basis = {
+        "url_pattern": _url_pattern(signal.get("url")),
+        "title": re.sub(r"\s+", " ", str(signal.get("title") or "").strip().lower())[:120],
+        "regions": sorted(overlays)[:8],
+        "state": signal.get("state") or "unknown",
+    }
+    raw = json.dumps(basis, ensure_ascii=False, sort_keys=True)
+    return "node_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16], basis
+
+
+def _load_navigation_memory():
+    try:
+        data = json.loads(NAV_MEMORY_FILE.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("worlds"), dict):
+            return data
+    except Exception:
+        pass
+    return {"version": 1, "updated_at": 0, "worlds": {}}
+
+
+def _save_navigation_memory(data):
+    data["updated_at"] = int(time.time() * 1000)
+    tmp = NAV_MEMORY_FILE.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(NAV_MEMORY_FILE)
+    except Exception:
+        try: tmp.unlink(missing_ok=True)
+        except Exception: pass
+
+
+def _record_navigation_memory(wid, action, args, before, after, payload):
+    """被动记录动作边；不保存填入的具体文本。"""
+    try:
+        w = _world(wid)
+        before_id, before_basis = _page_node_identity(before)
+        after_id, after_basis = _page_node_identity(after)
+        host = (urlsplit(str(after.get("url") or before.get("url") or "")).netloc or "local").lower()
+        target = payload.get("target") or {}
+        target_fp = target.get("fingerprint") if isinstance(target, dict) else None
+        target_name = target.get("name") if isinstance(target, dict) else None
+        if action == "world_batch_fill":
+            target_fp = None
+            target_name = "批量填表"
+        if action == "world_navigate":
+            target_name = str(args.get("url", ""))[:200]
+        graph = _load_navigation_memory()
+        site = graph.setdefault("worlds", {}).setdefault(host, {"nodes": {}, "edges": []})
+        site.setdefault("nodes", {})[before_id] = {**before_basis, "last_seen": int(time.time() * 1000)}
+        site.setdefault("nodes", {})[after_id] = {**after_basis, "last_seen": int(time.time() * 1000)}
+        kind = action.replace("world_", "", 1)
+        edge_key = json.dumps([before_id, kind, target_fp or target_name or ""], ensure_ascii=False)
+        edge = next((e for e in site["edges"] if e.get("key") == edge_key), None)
+        if edge is None:
+            edge = {"key": edge_key, "from": before_id, "to": after_id, "action": kind,
+                    "target_fingerprint": target_fp, "target_name": target_name,
+                    "precondition": {"state": before_basis.get("state"), "regions": before_basis.get("regions", [])},
+                    "observed_count": 0, "success_count": 0, "failure_count": 0,
+                    "stale": False}
+            site["edges"].append(edge)
+        edge["observed_count"] = int(edge.get("observed_count", 0)) + 1
+        outcome = payload.get("page_outcome")
+        if outcome == "progressed":
+            edge["success_count"] = int(edge.get("success_count", 0)) + 1
+            edge["stale"] = False
+            edge["to"] = after_id
+        elif outcome in ("errored", "unchanged", "challenged"):
+            edge["failure_count"] = int(edge.get("failure_count", 0)) + 1
+            if edge.get("success_count", 0) >= 2:
+                edge["stale"] = True
+        edge["last_seen"] = int(time.time() * 1000)
+        # 控制本地文件大小，保留最近边。
+        if len(site["edges"]) > 500:
+            site["edges"] = site["edges"][-500:]
+        _save_navigation_memory(graph)
+    except Exception:
+        pass
+
+
+def _route_hint(wid, task):
+    """只提供高置信度的历史建议，不自动执行。"""
+    if os.environ.get("AGENT_WORLD_DISABLE_ROUTE_HINT", "").strip().lower() in ("1", "true", "yes", "on"):
+        return {"source": "none", "confidence": "low", "validated": False, "stale": False, "steps": []}
+    had_stale = False
+    try:
+        w = _world(wid)
+        current = _page_signal_snapshot(wid)
+        current_id, current_basis = _page_node_identity(current)
+        host = (urlsplit(str(current.get("url") or "")).netloc or "local").lower()
+        graph = _load_navigation_memory()
+        site = (graph.get("worlds") or {}).get(host) or {}
+        # loading/stable 是瞬时状态，同一网址和关键区域应视为同一可复用节点。
+        compatible_ids = {current_id}
+        for node_id, node in (site.get("nodes") or {}).items():
+            if (node.get("url_pattern") == current_basis.get("url_pattern") and
+                    node.get("title") == current_basis.get("title") and
+                    node.get("regions") == current_basis.get("regions")):
+                compatible_ids.add(node_id)
+        terms = _guide_terms(task)
+        choices = []
+        stale_marked = False
+        had_stale = any(edge.get("from") in compatible_ids and edge.get("stale") for edge in site.get("edges", []))
+        for edge in site.get("edges", []):
+            if edge.get("from") not in compatible_ids or edge.get("stale"):
+                continue
+            if int(edge.get("success_count", 0)) < 2:
+                continue
+            hay = str(edge.get("target_name") or "").lower()
+            if terms and not any(t.lower() in hay for t in terms):
+                continue
+            validated = True
+            fp = edge.get("target_fingerprint")
+            if fp:
+                found = _evaluate(wid, "(fp) => agentWorld.query.findEntities({fingerprint: fp, maxResults: 2})", fp) or []
+                validated = bool(found)
+            if not validated:
+                edge["stale"] = True
+                stale_marked = True
+                had_stale = True
+                continue
+            choices.append({"action": edge.get("action"), "target_fingerprint": fp,
+                            "target_name": edge.get("target_name"), "to_node": edge.get("to"),
+                            "success_count": edge.get("success_count", 0)})
+        if choices:
+            if stale_marked:
+                _save_navigation_memory(graph)
+            return {"source": "history", "confidence": "high", "validated": True,
+                    "stale": False, "steps": choices[:6]}
+        if stale_marked:
+            _save_navigation_memory(graph)
+    except Exception:
+        pass
+    return {"source": "history" if had_stale else "none", "confidence": "low",
+            "validated": False, "stale": bool(had_stale), "steps": []}
+
+
 def _record_action_evidence(wid, action, args, before, result):
     """把动作前后的小状态摘要写入当前 world 的证据信道。
 
@@ -1222,6 +1526,7 @@ def _record_action_evidence(wid, action, args, before, result):
     log.append(entry)
     if len(log) > 100:
         del log[:-100]
+    _record_navigation_memory(wid, action, args, before, after, payload)
 
 
 def _t_world_evidence(args):
@@ -1338,7 +1643,10 @@ def _t_world_guide(args):
             },
         })
     terms = _guide_terms(task)
-    raw_candidates = _evaluate(
+    # 先验证历史边；高置信度命中时不再重复构建整页候选，避免“提示有了、探索成本没降”。
+    route_hint = _route_hint(wid, task)
+    history_ready = route_hint.get("source") == "history" and route_hint.get("validated") and route_hint.get("steps")
+    raw_candidates = [] if history_ready else _evaluate(
         wid,
         """(arg) => {
             const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]/g, '');
@@ -1452,7 +1760,10 @@ def _t_world_guide(args):
         }
         for c in candidates if c.get("href")
     ]
-    if candidates:
+    if history_ready:
+        first = route_hint["steps"][0]
+        next_action = f"历史路线已验证，可用指纹 {first.get('target_fingerprint')} 定位后执行 {first.get('action')}"
+    elif candidates:
         next_action = f"优先检查候选 {candidates[0].get('id')} 的详图,再决定是否执行动作"
     else:
         next_action = "当前页面没有找到直接匹配入口;不要猜测,先扩大到导航/菜单区域或提供更具体目标词"
@@ -1474,6 +1785,7 @@ def _t_world_guide(args):
         "relevant_regions": regions[:6],
         "candidates": candidates,
         "routes": direct_routes[:max_candidates],
+        "route_hint": route_hint,
         "next_action": next_action,
         "unknown": [
             "点击后的新页面结构尚未确认",
@@ -2711,7 +3023,10 @@ def _t_world_click(args, before_signal=None):
     if loc:
         try:
             # Playwright locator:自动等待可见/稳定/可点击,错误信息清晰
-            loc.click(timeout=10000)
+            click_options = {"timeout": 10000}
+            if ent.get("semantic") == "link" and (ent.get("attributes") or {}).get("href"):
+                click_options["no_wait_after"] = True
+            loc.click(**click_options)
             _refresh_core_status(wid)
             ret = {"world_id": wid, "clicked": target, "method": "locator"}
             _occlusion_attach(ret, occl_probe)
@@ -3262,6 +3577,8 @@ def _entity_match(e, filters):
         return False
     if "text" in filters and filters["text"] not in (e.get("text") or ""):
         return False
+    if "fingerprint" in filters and (e.get("fingerprint") or "") != filters["fingerprint"]:
+        return False
     if "interactive" in filters and bool(e.get("interactive")) != bool(filters["interactive"]):
         return False
     if "inViewport" in filters and bool(e.get("inViewport")) != bool(filters["inViewport"]):
@@ -3364,6 +3681,12 @@ def _t_world_close(args):
             except Exception:
                 pass
             return _ok({"world_id": wid, "closed": True, "cdp_disconnected": True})
+        if w.get("pooled"):
+            try:
+                w["context"].close()
+            except Exception:
+                pass
+            return _ok({"world_id": wid, "closed": True, "browser_mode": "pooled", "browser_reused": True})
         try:
             # 导出会话状态(session cookie 也保留),供同 profile 重开时恢复登录态
             if w.get("profile") and w.get("context"):

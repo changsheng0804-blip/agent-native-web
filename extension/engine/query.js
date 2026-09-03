@@ -193,6 +193,7 @@ window.AgentRuntime = window.AgentRuntime || {};
         dialogs: s.dialogs || [],
         page: s.page || {},
         forms: s.forms || [],
+        scan: s.scan || {},
         world: {
           elements: this.world.elements.size,
           changesSeq: s.changesSeq || 0,

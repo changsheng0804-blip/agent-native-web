@@ -251,5 +251,36 @@ window.AgentRuntime = window.AgentRuntime || {};
     return elements;
   }
 
-  global.AgentRuntime.scanner = { scanElement, scanAll, getStableId, generateName, computeFingerprint, isSemanticId, GRID_SIZE };
+  function scanViewport() {
+    const elements = [];
+    const selectors = 'html,body,header,nav,main,aside,form,[role],button,a,input,textarea,select,option,details,summary,[onclick],[tabindex]';
+    document.querySelectorAll(selectors).forEach(el => {
+      const rect = el.getBoundingClientRect();
+      const essential = ['HTML', 'BODY', 'HEADER', 'NAV', 'MAIN', 'ASIDE', 'FORM'].includes(el.tagName) || el.hasAttribute('role');
+      const inViewport = rect.bottom >= 0 && rect.right >= 0 && rect.top <= window.innerHeight && rect.left <= window.innerWidth;
+      if (!essential && !inViewport) return;
+      const node = scanElement(el);
+      if (node) elements.push(node);
+    });
+    return elements;
+  }
+
+  function scanAllAsync(onChunk, onDone, chunkSize = 160) {
+    const nodes = [...document.querySelectorAll('*')];
+    let index = 0;
+    const step = () => {
+      const chunk = [];
+      const end = Math.min(nodes.length, index + chunkSize);
+      for (; index < end; index++) {
+        const node = scanElement(nodes[index]);
+        if (node) chunk.push(node);
+      }
+      if (onChunk) onChunk(chunk, index >= nodes.length);
+      if (index < nodes.length) setTimeout(step, 0);
+      else if (onDone) onDone();
+    };
+    setTimeout(step, 0);
+  }
+
+  global.AgentRuntime.scanner = { scanElement, scanAll, scanViewport, scanAllAsync, getStableId, generateName, computeFingerprint, isSemanticId, GRID_SIZE };
 })(window);

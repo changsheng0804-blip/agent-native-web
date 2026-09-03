@@ -17,6 +17,9 @@ window.AgentRuntime = window.AgentRuntime || {};
       this.occupancyGrid = null;
       this.spatialQuery = null;
       this.updateCount = 0;
+      this._lastRelevantMutationAt = Date.now();
+      this._stableQuietMs = 350;
+      this._backgroundScanStarted = false;
       // 事件驱动等待器:world_wait 由 MutationObserver 驱动,不再 server 端轮询
       this._waiters = [];
       this.changelog = {
@@ -29,7 +32,8 @@ window.AgentRuntime = window.AgentRuntime || {};
         dialogs: [],
         page: { state: 'stable', scrollY: 0, totalHeight: 0 },
         forms: [],
-        changesSeq: 0
+        changesSeq: 0,
+        scan: { state: 'partial', revision: 0, terrainReady: false }
       };
     }
 
@@ -65,18 +69,27 @@ window.AgentRuntime = window.AgentRuntime || {};
       }
       this.world.status.dialogs = dialogs;
       this.world.status.forms = forms;
-      // 稳定性:元素数连续两次刷新一致才算 stable(渐进渲染/分层加载下避免误报就绪)
+      // 稳定性:文档完成且最近一段时间没有相关变化才算 stable。
       const curCount = elements.length;
-      const prevCount = this._statusCount || 0;
       this._statusCount = curCount;
       const ready = document.readyState === 'complete';
-      const stable = ready && (curCount === prevCount || Date.now() - (this.world.meta.initializedAt || 0) > 15000);
+      const now = Date.now();
+      const quietMs = Math.max(0, now - (this._lastRelevantMutationAt || now));
+      const stable = ready && quietMs >= this._stableQuietMs;
       this.world.status.page = {
         state: stable ? 'stable' : 'loading',
         scrollY: Math.round(window.scrollY),
-        totalHeight: document.body.scrollHeight
+        totalHeight: document.body.scrollHeight,
+        quietMs,
+        lastMutationAt: this._lastRelevantMutationAt || null
       };
       this.world.status.changesSeq = this.changelog.seq;
+      this.world.status.scan = {
+        state: this.world.meta && this.world.meta.scanState || 'unknown',
+        revision: this.world.meta && this.world.meta.scanRevision || 0,
+        terrainReady: !!(this.world.meta && this.world.meta.terrainReady),
+        fullScan: this.world.meta && this.world.meta.fullScan || 'pending'
+      };
     }
 
     /**
@@ -163,11 +176,14 @@ window.AgentRuntime = window.AgentRuntime || {};
     /**
      * 初始化：全量扫描 + 启动监听
      */
-    init() {
+    init(options = {}) {
       const startTime = performance.now();
+      const progressive = options.progressive !== false;
       
       // 1. 全量扫描
-      const elements = global.AgentRuntime.scanner.scanAll();
+      const elements = progressive && global.AgentRuntime.scanner.scanViewport
+        ? global.AgentRuntime.scanner.scanViewport()
+        : global.AgentRuntime.scanner.scanAll();
       elements.forEach(el => this.world.elements.set(el.id, el));
       
       // 2. 计算可见性
@@ -186,7 +202,11 @@ window.AgentRuntime = window.AgentRuntime || {};
         title: document.title,
         initializedAt: Date.now(),
         initTime: Math.round(performance.now() - startTime),
-        elementCount: this.world.elements.size
+        elementCount: this.world.elements.size,
+        scanState: progressive ? 'partial' : 'ready',
+        scanRevision: 1,
+        terrainReady: true,
+        fullScan: progressive ? 'pending' : 'ready'
       };
       
       // 名字去重（初始全量）
@@ -204,6 +224,38 @@ window.AgentRuntime = window.AgentRuntime || {};
       global.AgentRuntime.observer.startDOMObserver((mutations) => {
         this.handleMutation(mutations);
       });
+
+      if (progressive) this.startBackgroundScan();
+    }
+
+    startBackgroundScan() {
+      if (this._backgroundScanStarted || !global.AgentRuntime.scanner.scanAllAsync) return;
+      this._backgroundScanStarted = true;
+      this.world.meta.scanState = 'scanning';
+      global.AgentRuntime.scanner.scanAllAsync((chunk) => {
+        chunk.forEach(el => {
+          if (!this.world.elements.has(el.id)) this.world.elements.set(el.id, el);
+        });
+        this.world.meta.elementCount = this.world.elements.size;
+        this.world.meta.scanRevision = (this.world.meta.scanRevision || 0) + 1;
+        this.world.status.scan = {
+          state: this.world.meta.scanState,
+          revision: this.world.meta.scanRevision,
+          terrainReady: true,
+          fullScan: this.world.meta.fullScan || 'pending'
+        };
+      }, () => {
+        const allElements = [...this.world.elements.values()];
+        global.AgentRuntime.visibility.updateAllVisibility(allElements);
+        this.rebuildSpatialLayers();
+        global.AgentRuntime.semantics.dedupeNames(allElements);
+        this.world.meta.elementCount = this.world.elements.size;
+        this.world.meta.scanRevision = (this.world.meta.scanRevision || 0) + 1;
+        this.world.meta.scanState = 'ready';
+        this.world.meta.fullScan = 'ready';
+        this.refreshStatus();
+        this.checkWaiters();
+      });
     }
 
     /**
@@ -211,6 +263,7 @@ window.AgentRuntime = window.AgentRuntime || {};
      */
     handleMutation(mutations) {
       this.updateCount++;
+      if (mutations && mutations.length > 0) this._lastRelevantMutationAt = Date.now();
       const changedIds = new Set();
       const addedIds = new Set();
       const removedIds = new Set();
@@ -407,7 +460,8 @@ window.AgentRuntime = window.AgentRuntime || {};
      */
     forceRefresh() {
       this.world.elements.clear();
-      this.init();
+      this._backgroundScanStarted = false;
+      this.init({ progressive: false });
     }
   }
 
