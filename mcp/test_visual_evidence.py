@@ -72,8 +72,12 @@ async def main():
             eff = data.get("effect", {})
             assert eff.get("verdict") == "visual-effected", f"纯 CSS 变化应判 visual-effected,实际 {eff.get('verdict')}"
             assert eff.get("confidence") == "high"
-            assert eff.get("visual_diff_score", 0) > 1.5, f"diff score={eff.get('visual_diff_score')}"
-            print(f"3. 纯 CSS 变色 → visual-effected/high (RMS={eff.get('visual_diff_score')}) ✅")
+            # L2 样式层优先:类切换走 style-diff(结构化证据),像素分仅像素路径有。
+            # 两条路任一成立即算过, verdict 一致是底线。
+            _ok_path = (eff.get("visual_diff_score", 0) > 1.5) or bool(eff.get("style_changes"))
+            assert _ok_path, f"应有像素分或样式证据: score={eff.get('visual_diff_score')} styles={eff.get('style_changes')}"
+            print(f"3. 纯 CSS 变色 → visual-effected/high (路径={eff.get('visual_path')}, "
+                  f"RMS={eff.get('visual_diff_score')}, 样式证据数={len(eff.get('style_changes') or [])}) ✅")
 
             # ── 4. 负例:无副作用标题点击不应 visual-effected(同样开启视觉证据验证不误报) ──
             ents = json.loads((await call(session, "world_entities", {

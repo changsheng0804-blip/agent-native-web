@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>样式层验证页（WAAPI 无 DOM 变更）</title>
+<style>
+  .case { width: 220px; height: 90px; margin: 12px 0; line-height: 90px; text-align: center;
+          cursor: pointer; user-select: none; border: 1px solid #999; }
+  #c-anim { background: #3498db; color: #fff; }
+  #c-static { background: #ccc; }
+</style>
+</head>
+<body>
+<h1>样式层验证页</h1>
+<div class="case" id="c-anim">点我 WAAPI 变色（不动 DOM）</div>
+<div class="case" id="c-static">无变化对照块</div>
+<script>
+  // Web Animations API:只改渲染,不碰属性/类名/结构,DOM 行 diff 与目标状态全哑火
+  document.getElementById('c-anim').addEventListener('click', () => {
+    document.getElementById('c-anim').animate(
+      [{ backgroundColor: '#3498db' }, { backgroundColor: '#e74c3c' }],
+      { duration: 250, fill: 'forwards' });
+  });
+  document.getElementById('c-static').addEventListener('click', () => {});
+</script>
+</body>
+</html>

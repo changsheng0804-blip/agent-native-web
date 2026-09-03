@@ -42,6 +42,7 @@ TIMEOUT_OVERRIDES = {
     "test_map_real.py": 900,          # 六站地图体检
     "validate_closed_loop.py": 1200,  # 全量:真站 8 场景 + waitFor 专项
     "validate_closed_loop.py --local": 600,  # 本地 5 场景
+    "test_receipt_metrics.py": 300,  # R4 度量:固定电池 ×3 独立重复,约 200s
 }
 
 # 测试条目可带参数(如 "validate_closed_loop.py --local"),运行时按空格拆分
@@ -61,8 +62,12 @@ SCOPES = {
     "test_channels.py": ["channels"],
     "test_guide.py": ["channels", "guide"],
     "test_visual_evidence.py": ["visual", "screenshot"],
+    "test_visual_calib.py": ["visual", "judgment"],
+    "test_visual_style.py": ["visual", "judgment"],
     "test_form_names.py": ["fill", "identity"],
     "test_page_outcome.py": ["judgment", "challenge"],
+    "test_receipt.py": ["judgment", "receipt"],
+    "test_receipt_metrics.py": ["judgment", "receipt"],
     "test_occlusion.py": ["occlusion", "action", "judgment"],
     "test_silent_failure.py": ["network", "console", "silent_failure", "judgment"],
     "test_challenge_overlay.py": ["challenge"],
@@ -115,10 +120,14 @@ GROUPS = {
             "test_channels.py",          # 三条独立信道(状态/变化摘要/操作证据)
             "test_guide.py",             # 实时任务导览接入信道
             "test_visual_evidence.py",   # SoM 标注/ImageContent/视觉 diff 兜底(正/负例)
+            "test_visual_calib.py",      # P0-2 视觉阈值校准锁死(渗入/scroll-shift/回归)
+            "test_visual_style.py",      # L2 样式层:WAAPI无DOM变更→style-diff结构化生效
             "test_form_names.py",      # 表单字段 name 属性定位(幽灵字段防错位)
             "test_protocol.py",        # 阶段 B 收口:默认 6 词协议(find/act/outcome + LITE 模式)
             "test_occlusion.py",       # Phase 3 遮挡归因:covered_by/at/action + unchanged 归因
             "test_page_outcome.py",    # 统一后果卡:全动作 page_outcome 五态(阶段 A)
+            "test_receipt.py",         # 小票标准v0.1:全字段/sources/handoff/对账(R1)
+            "test_receipt_metrics.py", # R4:小票回答旧验证#九度量(FP/FN/定位与操作时间/恢复出口)
             "test_challenge_overlay.py",  # 挑战遮罩复刻(Step 1 的验收场景;page_outcome 已实现,守护不回归)
             "test_assumption_e_glass.py", # 玻璃罩按钮:不报假成功(预期通过)
             "test_assumption_r_cssvar.py",# CSS 变量藏字:IPI 过滤(预期通过)
@@ -315,7 +324,7 @@ def main():
         # 才同时扫 real 组——避免 --scope quick 误拉真站全量。
         offline_only_faces = {"fill", "forms", "action", "kernel", "observer", "visibility",
                               "shadow", "ipi", "judgment", "challenge", "channels", "guide",
-                              "visual", "screenshot"}
+                              "visual", "screenshot", "receipt"}
         wanted = set()
         for part in [p.strip() for p in args.scope.split(",") if p.strip()]:
             if part in SCOPE_ALIASES:
