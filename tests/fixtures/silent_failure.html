@@ -1,0 +1,47 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <title>静默失败与控制台错误测试夹具</title>
+</head>
+<body>
+    <h1>业务表单页</h1>
+    <div>
+        <label for="username">用户名</label>
+        <input id="username" value="guest_user" />
+    </div>
+
+    <!-- 1. 触发 422 网络失败但 DOM 无反应 -->
+    <button id="btn-api-fail" type="button">提交并触发接口422报错</button>
+
+    <!-- 2. 触发前端控制台 console.error 但 DOM 无反应 -->
+    <button id="btn-console-fail" type="button">提交并触发前端Console报错</button>
+
+    <!-- 3. 正常操作: 弹出确认成功弹窗 (强生效证据) -->
+    <button id="btn-success" type="button">正常提交</button>
+
+    <script>
+        document.getElementById('btn-api-fail').addEventListener('click', async () => {
+            try {
+                await fetch('/api/submit-account', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name: 'guest'})
+                });
+            } catch (e) {}
+        });
+
+        document.getElementById('btn-console-fail').addEventListener('click', () => {
+            console.error('前端校验拦截: 用户名属于系统保留字，禁止注册');
+        });
+
+        document.getElementById('btn-success').addEventListener('click', () => {
+            const dlg = document.createElement('dialog');
+            dlg.id = 'dlg-success';
+            dlg.setAttribute('open', '');
+            dlg.innerText = '提交成功，已创建账户';
+            document.body.appendChild(dlg);
+        });
+    </script>
+</body>
+</html>

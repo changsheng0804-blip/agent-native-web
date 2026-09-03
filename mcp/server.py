@@ -863,6 +863,60 @@ def _t_world_open(args):
         raise ValueError(f"世界注入失败(页面可能拦截了脚本): {url or '(CDP 当前页)'}")
     wid = _next_world_id
     _next_world_id += 1
+
+    # 轻量网络与控制台静默失败监听(借鉴 Chrome DevTools MCP)
+    net_errors = []
+    console_errors = []
+
+    def _on_response(res):
+        try:
+            if res.status >= 400:
+                snippet = ""
+                try:
+                    snippet = res.text()[:200]
+                except Exception:
+                    pass
+                net_errors.append({
+                    "url": res.url,
+                    "status": res.status,
+                    "detail": snippet,
+                    "time": time.time(),
+                })
+                if len(net_errors) > 50:
+                    net_errors.pop(0)
+        except Exception:
+            pass
+
+    def _on_console(msg):
+        try:
+            if msg.type == "error":
+                console_errors.append({
+                    "text": msg.text[:300],
+                    "time": time.time(),
+                })
+                if len(console_errors) > 50:
+                    console_errors.pop(0)
+        except Exception:
+            pass
+
+    def _on_pageerror(exc):
+        try:
+            console_errors.append({
+                "text": f"Uncaught {type(exc).__name__}: {str(exc)[:300]}",
+                "time": time.time(),
+            })
+            if len(console_errors) > 50:
+                console_errors.pop(0)
+        except Exception:
+            pass
+
+    try:
+        page.on("response", _on_response)
+        page.on("console", _on_console)
+        page.on("pageerror", _on_pageerror)
+    except Exception:
+        pass
+
     _worlds[wid] = {
         "handle": handle,
         "context": context,
@@ -876,6 +930,8 @@ def _t_world_open(args):
         "evidence_log": [],
         # 世界纪元:world_navigate 成功导航 +1;跨纪元旧 el_N 全部失效
         "epoch": 0,
+        "network_errors": net_errors,
+        "console_errors": console_errors,
     }
     # 等待世界稳定(分层加载:渐进渲染/懒加载,固定秒数不可靠,以状态卡 stable 为准)
     stabilize_ms = int(args.get("stabilize_ms", 10000))
@@ -1569,6 +1625,9 @@ def _page_signal_snapshot(wid):
         title = ""
     page_state = core.get("page", {}) or {}
     world_state = core.get("world", {}) or {}
+    # 静默失败监听游标:记录动作前后错误列表长度,用于差分
+    net_errors = w.get("network_errors") or []
+    console_errors = w.get("console_errors") or []
     return {
         "url": w["page"].url[:300],
         "title": title,
@@ -1576,6 +1635,8 @@ def _page_signal_snapshot(wid):
         "changes_seq": world_state.get("changesSeq", 0),
         "dialogs": overlays.get("dialogs", []) or core.get("dialogs", []) or [],
         "menus": overlays.get("menus", []) or [],
+        "_net_err_cursor": len(net_errors),
+        "_console_err_cursor": len(console_errors),
     }
 
 
@@ -1698,6 +1759,7 @@ def _build_page_outcome(wid, before_signal, after_signal, submit_trigger=False, 
     progressed  effect.verdict ∈ {effected, visual-effected}(导航/弹窗/状态翻转/填表验证/视觉)
     challenged 疑似提交动作后出现 fixed 全屏遮罩+iframe(CAPTCHA/二次验证)→ 停止上报人工
     errored    表单错误信号(role=alert / aria-invalid,仅表单类动作后检测)→ 读错误修正重试
+              或网络/控制台静默失败(HTTP 4xx/5xx / console.error)→ 即使 DOM 无变化也能精准归因
     uncertain  effect.verdict == changed(有变化但性质不明)→ 最多补一次 world_state
     unchanged  其余(没有有效变化)→ 按失败路径处理
 
@@ -1773,12 +1835,59 @@ def _build_page_outcome(wid, before_signal, after_signal, submit_trigger=False, 
             effect.get("confidence") or "medium",
             effect.get("why") or "有变化但无法确认是否生效",
         )
+
+    # 4. 静默失败气泡(借鉴 Chrome DevTools MCP):
+    #    DOM 无变化 → 但如果动作窗口内捕获到了 HTTP 4xx/5xx 或 console.error,
+    #    升级为 errored 并注入真实报错原因,彻底消灭"不明 unchanged"盲目重试死循环。
+    try:
+        w = _world(wid)
+        net_list = w.get("network_errors") or []
+        con_list = w.get("console_errors") or []
+        before_net = before_signal.get("_net_err_cursor", len(net_list))
+        before_con = before_signal.get("_console_err_cursor", len(con_list))
+        new_net = net_list[before_net:]
+        new_con = con_list[before_con:]
+
+        if new_net:
+            err = new_net[0]
+            detail = err.get("detail") or ""
+            detail_str = detail[:120] if detail else ""
+            why_str = f"操作引发后端接口报错: HTTP {err['status']} {err.get('url', '')}"
+            if detail_str:
+                why_str += f" — {detail_str}"
+            return (
+                "errored",
+                {
+                    "type": "network_error",
+                    "to_url": None,
+                    "errors": [{"url": e["url"], "status": e["status"], "detail": (e.get("detail") or "")[:120]}
+                               for e in new_net[:5]],
+                },
+                "high",
+                why_str,
+            )
+        if new_con:
+            texts = [c["text"] for c in new_con[:3]]
+            return (
+                "errored",
+                {
+                    "type": "console_error",
+                    "to_url": None,
+                    "errors": [{"text": c["text"]} for c in new_con[:5]],
+                },
+                "medium",
+                f"操作引发前端控制台异常: {texts[0][:120]}",
+            )
+    except Exception:
+        pass
+
     return (
         "unchanged",
         {"type": "none", "to_url": None},
         effect.get("confidence") or "high",
         effect.get("why") or "未观察到任何生效证据",
     )
+
 
 
 def _finalize_click_result(wid, ret, before_signal, after_signal=None):
@@ -2019,7 +2128,15 @@ def _outcome_card(wid, action, args, ret, before_signal):
             ]
             next_suggested = f"检测到存在活动弹窗({d_name}),当前操作未生效可能受其阻挡,建议按 Escape 或先关闭弹窗"
         else:
-            next_suggested = "重新调用 world_guide" if guide_stale else None
+            # R4:纯 unchanged 也必须给机器可读恢复出口(换目标/重导览),不得留空
+            next_suggested = ("重新调用 world_guide" if guide_stale
+                              else "当前操作未生效,换目标或重新调用 world_guide(同一目标不得重复硬点)")
+    elif page_outcome == "errored" and situation.get("type") == "network_error":
+        err_info = (situation.get("errors") or [{}])[0]
+        status_code = err_info.get("status", "")
+        next_suggested = f"操作引发后端接口报错(HTTP {status_code}),请根据报错修正参数或换路径,无需原地盲目重复提交"
+    elif page_outcome == "errored" and situation.get("type") == "console_error":
+        next_suggested = "操作引发前端控制台异常,请检查输入合法性或重新导览"
     else:
         next_suggested = "重新调用 world_guide" if guide_stale else None
 
@@ -2045,6 +2162,8 @@ def _outcome_card(wid, action, args, ret, before_signal):
         "changes_seq": {"before": before.get("changes_seq", 0), "after": after.get("changes_seq", 0)},
         "world_epoch": int(w.get("epoch", 0)),
     }
+    if situation.get("type") in ("network_error", "console_error") and "errors" in situation:
+        card_data["errors"] = situation["errors"]
     if handoff:
         card_data["handoff"] = handoff
     if recipes:
@@ -2067,6 +2186,12 @@ def _errored_card(wid, action, args, before_signal, exc):
         after = _page_signal_snapshot(int(wid))
     except Exception:
         after = {}
+    # P0-1:errored 卡也消耗一个序号。不 mint 的话,它的序号会与上一张成功卡重复,
+    # world_outcome(since=上一序号) 将返回 none,把这张 errored 藏掉(对账黑洞)。
+    try:
+        w["evidence_seq"] = int(w.get("evidence_seq", 0)) + 1
+    except Exception:
+        pass
     return _ok({
         "world_id": int(wid),
         "channel": "outcome",
@@ -3174,6 +3299,17 @@ def _t_world_act(args, before_signal=None):
         last["step_count"] = len(cards)
         last["action"] = {"kind": "act-sequence", "via": "self"}
         last["channel"] = "outcome"
+        # P0-1:整单语义。主标签 = 末步卡(任一步 errored 即停,故 errored 必为末步);
+        # 另附聚合记账,长任务 FP/FN 以此为准,不再只看末步。
+        _outcomes = [c.get("page_outcome") for c in cards]
+        _first_bad = next((i for i, o in enumerate(_outcomes) if o != "progressed"), None)
+        _seqs = [c.get("evidence_seq") for c in cards
+                 if isinstance(c.get("evidence_seq"), int)]
+        last["step_outcomes"] = _outcomes
+        last["all_progressed"] = _first_bad is None
+        last["first_failure_idx"] = _first_bad
+        if _seqs:
+            last["seq_range"] = {"first": _seqs[0], "last": _seqs[-1]}
         return _ok(last)
 
     kind = args.get("kind") or "click"

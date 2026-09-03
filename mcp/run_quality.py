@@ -64,6 +64,7 @@ SCOPES = {
     "test_form_names.py": ["fill", "identity"],
     "test_page_outcome.py": ["judgment", "challenge"],
     "test_occlusion.py": ["occlusion", "action", "judgment"],
+    "test_silent_failure.py": ["network", "console", "silent_failure", "judgment"],
     "test_challenge_overlay.py": ["challenge"],
     "test_assumption_e_glass.py": ["action", "judgment"],
     "test_assumption_r_cssvar.py": ["visibility", "ipi"],
@@ -124,6 +125,7 @@ GROUPS = {
             "test_assumption_b_shadow.py",# Shadow DOM 穿透修复后:静态可见(预期通过,防回归)
             "test_shadow_dynamic.py", # Shadow DOM 动态感知(运行期新增/点击,预期通过)
             "test_fill_clear_and_text.py", # fill 清空语义 + 纯文本变更感知(弱模型验证发现的两个缺陷)
+            "test_silent_failure.py",  # 网络与控制台静默失败监听(借鉴 Chrome DevTools MCP:422/500/console.error)
         ],
     },
     "real": {
