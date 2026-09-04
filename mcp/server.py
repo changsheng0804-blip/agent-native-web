@@ -16,6 +16,8 @@ Agent World MCP Server
   world_state    页面状态信道(读取最新整体状态)
   world_change_digest 变化摘要信道(读取压缩后的变化)
   world_evidence 操作证据信道(读取动作前后证据)
+  world_trace    任务轨迹信道(读取脱敏轨迹)
+  world_graph    候选任务运行时图(从轨迹即时生成)
   world_guide   结合三条信道生成任务导览
   world_click    编号驱动点击 + 页面整体反馈
   world_fill     编号驱动填表
@@ -43,6 +45,11 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 import mcp.types as types
 from playwright.sync_api import sync_playwright
+
+try:
+    from task_runtime import build_graph, build_trace_entry, new_id
+except ImportError:  # 允许从仓库根目录以模块方式加载
+    from mcp.task_runtime import build_graph, build_trace_entry, new_id
 
 # Playwright 同步 API 强依赖 greenlet 协程上下文，必须在单一固定 OS 工作线程内运行，杜绝多线程竞争切换
 _pw_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="playwright_worker")
@@ -136,6 +143,8 @@ async def list_tools():
                     "headful": {"type": "boolean", "description": "是否弹出可见窗口(登录/验证码/人工确认场景用)", "default": False},
                     "profile": {"type": "string", "description": "持久化登录态名称(如 login-taobao),同一名称复用 cookie/会话;留空则不持久化"},
                     "cdp_url": {"type": "string", "description": "连接已有 Chrome 的 CDP 调试地址(如 http://localhost:9222),复用日常已登录浏览器;与 profile/headless 互斥"},
+                    "task_id": {"type": "string", "description": "可选任务实例编号;不填写时自动生成,同一网页世界内的动作会继承它"},
+                    "task_goal": {"type": "string", "description": "可选任务目标,用于轨迹和候选图说明,不作为网页指令执行"},
                 },
                 "required": ["url"],
             },
@@ -255,6 +264,28 @@ async def list_tools():
                     "since": {"type": "integer", "description": "上次读到的证据序号", "default": 0},
                     "limit": {"type": "integer", "description": "最多返回条数", "default": 20},
                 },
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_trace",
+            description="任务轨迹信道:读取当前网页世界中已脱敏的动作前后状态、操作结果和证据引用;不保存填写文本原文。用于构建和审计任务运行时图。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "since": {"type": "integer", "description": "上次读到的轨迹步骤序号", "default": 0},
+                    "limit": {"type": "integer", "description": "最多返回轨迹条数", "default": 50},
+                },
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_graph",
+            description="候选任务运行时图:从已记录轨迹生成状态节点和迁移边。候选图只表示观测到的行为,不代表完整业务规则,也不把出现次数解释成概率。",
+            inputSchema={
+                "type": "object",
+                "properties": {"world_id": {"type": "integer"}},
                 "required": ["world_id"],
             },
         ),
@@ -457,6 +488,10 @@ async def list_tools():
                     "visual_evidence": {"type": "boolean", "description": "是否截前后帧做视觉 diff 兜底", "default": False},
                     "verbose": {"type": "boolean", "description": "true 时返回全量深诊断状态卡(frames/forms/world 明细);默认轻量(URL/稳定态/登录态/弹窗)", "default": False},
                     "steps": {"type": "array", "description": "聚合执行:多步动作序列 [{kind,id,text|key|fields,...}, ...],任一步 errored 即停", "items": {"type": "object"}},
+                    "operation": {"type": "string", "description": "可选业务操作名,例如填写资料或提交;不填写时使用低层动作名"},
+                    "operation_id": {"type": "string", "description": "可选操作编号,用于把相邻步骤绑定到同一业务操作"},
+                    "executor": {"type": "string", "description": "可选执行器标记,例如 world_act、webmcp 或授权接口"},
+                    "task_id": {"type": "string", "description": "可选任务实例编号,不填写时继承 world_open 的任务编号"},
                 },
                 "required": ["world_id"],
             },
@@ -541,7 +576,7 @@ def _impl_with_status(name, args):
         except Exception:
             pass
     # 独立信道工具(world_state/digest/evidence/guide)自带信道结构,不再附加大 status
-    if name in {"world_state", "world_change_digest", "world_evidence", "world_guide"}:
+    if name in {"world_state", "world_change_digest", "world_evidence", "world_trace", "world_graph", "world_guide"}:
         return result
     # 瘦身演进:默认协议工具(world_act, world_find, world_outcome)默认轻量 status;
     # 失败/存疑态(unchanged/uncertain/challenged/errored)或显式 verbose=true 时自动全量深诊断;
@@ -746,6 +781,10 @@ def _impl(name, args, before_signal=None):
         return _t_world_change_digest(args)
     if name == "world_evidence":
         return _t_world_evidence(args)
+    if name == "world_trace":
+        return _t_world_trace(args)
+    if name == "world_graph":
+        return _t_world_graph(args)
     if name == "world_guide":
         return _t_world_guide(args)
     if name == "world_click":
@@ -922,6 +961,10 @@ def _t_world_open(args):
     except Exception:
         pass
 
+    task_id = str(args.get("task_id") or new_id("task"))[:120]
+    task_goal = str(args.get("task_goal") or "")[:300]
+    trace_id = new_id("trace")
+
     _worlds[wid] = {
         "handle": handle,
         "context": context,
@@ -933,6 +976,12 @@ def _t_world_open(args):
         # 操作证据信道只在当前网页世界内短暂保存,不落盘。
         "evidence_seq": 0,
         "evidence_log": [],
+        # 第一阶段任务运行时轨迹:只在当前网页世界内保存,由 world_trace/world_graph 读取。
+        "task_id": task_id,
+        "task_goal": task_goal,
+        "trace_id": trace_id,
+        "trace_log": [],
+        "trace_step_seq": 0,
         # 世界纪元:world_navigate 成功导航 +1;跨纪元旧 el_N 全部失效
         "epoch": 0,
         "network_errors": net_errors,
@@ -950,7 +999,8 @@ def _t_world_open(args):
             pass
         time.sleep(0.5)
     summary = _evaluate(wid, "agentWorld.query.getPageSummary()")
-    return _ok({"world_id": wid, "url": page.url, "ready": True, "headful": headful, "profile": profile, "cdp_url": cdp_url, "summary": summary})
+    return _ok({"world_id": wid, "url": page.url, "ready": True, "headful": headful, "profile": profile, "cdp_url": cdp_url, "summary": summary,
+                "task_id": task_id, "trace_id": trace_id})
 
 
 def _t_world_entities(args):
@@ -1210,6 +1260,28 @@ def _record_action_evidence(wid, action, args, before, result):
             verdict, confidence = "no-change", "high"
             why = "未观察到页面整体导航或新的弹窗/菜单"
     w["evidence_seq"] = int(w.get("evidence_seq", 0)) + 1
+    if args.get("task_id"):
+        w["task_id"] = str(args.get("task_id"))[:120]
+    w["trace_step_seq"] = int(w.get("trace_step_seq", 0)) + 1
+    try:
+        trace_entry = build_trace_entry(
+            trace_id=str(w.get("trace_id") or new_id("trace")),
+            task_id=str(w.get("task_id") or new_id("task")),
+            step_index=int(w["trace_step_seq"]),
+            action=action,
+            args=args,
+            before=before,
+            after=after,
+            payload=payload,
+            evidence_seq=int(w["evidence_seq"]),
+            world_epoch=int(w.get("epoch", 0)),
+        )
+        w.setdefault("trace_log", []).append(trace_entry)
+        if len(w["trace_log"]) > 200:
+            del w["trace_log"][:-200]
+    except Exception:
+        # 轨迹是附加信道，不能影响既有操作证据的记录和返回。
+        pass
     entry = {
         "evidence_seq": w["evidence_seq"],
         "channel": "operation-evidence",
@@ -1222,6 +1294,9 @@ def _record_action_evidence(wid, action, args, before, result):
         "verdict": verdict,
         "confidence": confidence,
         "why": why,
+        "task_id": w.get("task_id"),
+        "trace_id": w.get("trace_id"),
+        "trace_step": int(w["trace_step_seq"]),
     }
     log = w.setdefault("evidence_log", [])
     log.append(entry)
@@ -1246,6 +1321,63 @@ def _t_world_evidence(args):
         "latest": int(w.get("evidence_seq", 0)),
         "has_more": len(all_items) > len(items),
         "evidence": items,
+    })
+
+
+def _t_world_trace(args):
+    """读取当前世界的脱敏任务轨迹。"""
+    wid = int(args["world_id"])
+    since = max(0, int(args.get("since", 0)))
+    limit = max(1, min(int(args.get("limit", 50)), 200))
+    w = _world(wid)
+    all_items = [
+        item for item in w.get("trace_log", [])
+        if int(item.get("step_index", 0)) > since
+    ]
+    items = all_items[:limit]
+    next_since = int(items[-1].get("step_index", since)) if items else since
+    latest = max(
+        (int(item.get("step_index", 0)) for item in w.get("trace_log", [])),
+        default=0,
+    )
+    return _ok({
+        "world_id": wid,
+        "channel": "task-trace",
+        "schema_version": "0.1",
+        "task_id": w.get("task_id"),
+        "trace_id": w.get("trace_id"),
+        "task_goal": w.get("task_goal") or None,
+        "from": since,
+        "to": next_since,
+        "latest": latest,
+        "has_more": len(all_items) > len(items),
+        "traces": items,
+        "security": {
+            "input_values": "已省略",
+            "input_digest": "仅保存单向 SHA-256 摘要前缀",
+            "page_free_text": "不参与状态身份判断",
+        },
+    })
+
+
+def _t_world_graph(args):
+    """从当前世界轨迹即时生成候选任务运行时图。"""
+    wid = int(args["world_id"])
+    w = _world(wid)
+    graph = build_graph(
+        list(w.get("trace_log", [])),
+        task_id=str(w.get("task_id") or ""),
+        goal=str(w.get("task_goal") or ""),
+    )
+    return _ok({
+        "world_id": wid,
+        "channel": "task-runtime-graph",
+        "graph": graph,
+        "source": {
+            "trace_id": w.get("trace_id"),
+            "evidence_latest": int(w.get("evidence_seq", 0)),
+            "world_epoch": int(w.get("epoch", 0)),
+        },
     })
 
 
@@ -1615,7 +1747,7 @@ def _page_signal_snapshot(wid):
             """() => {
                 const pick = (role) => agentWorld.query.findEntities({
                     role, inViewport: true, maxResults: 8
-                }).map(e => ({ id: e.id, name: e.name, text: e.text }));
+                }).map(e => ({ id: e.id, name: e.name, text: e.text, role }));
                 return {
                     dialogs: pick('dialog').concat(pick('alertdialog')),
                     menus: pick('menu')
@@ -1624,6 +1756,25 @@ def _page_signal_snapshot(wid):
         ) or {}
     except Exception:
         overlays = {}
+    try:
+        form_fields = _evaluate(
+            wid,
+            """() => [...document.querySelectorAll('input, textarea, [contenteditable=\"true\"]')]
+                .map((node, index) => {
+                    const el = agentWorld._runtime.world.elements.get(node);
+                    const value = node.value !== undefined ? String(node.value || '') : String(node.textContent || '');
+                    return {
+                        id: el ? el.id : (node.id || ''),
+                        name: node.getAttribute('name') || '',
+                        type: node.getAttribute('type') || node.tagName.toLowerCase(),
+                        role: node.getAttribute('role') || '',
+                        placeholder: node.getAttribute('placeholder') || '',
+                        filled: value.length > 0
+                    };
+                }).slice(0, 30)""",
+        ) or []
+    except Exception:
+        form_fields = []
     try:
         title = w["page"].title()[:200]
     except Exception:
@@ -1640,6 +1791,7 @@ def _page_signal_snapshot(wid):
         "changes_seq": world_state.get("changesSeq", 0),
         "dialogs": overlays.get("dialogs", []) or core.get("dialogs", []) or [],
         "menus": overlays.get("menus", []) or [],
+        "form_fields": form_fields,
         "_net_err_cursor": len(net_errors),
         "_console_err_cursor": len(console_errors),
     }
@@ -2299,6 +2451,27 @@ def _errored_card(wid, action, args, before_signal, exc):
     # P2b:空壳填实——对真卡打来源标记(error 字段已纳入白名单)。
     try:
         _err_card["sources"] = _sources_for_card(_err_card)
+    except Exception:
+        pass
+    # 异常动作也必须进入轨迹,否则失败分支会从任务图中消失。
+    try:
+        if args.get("task_id"):
+            w["task_id"] = str(args.get("task_id"))[:120]
+        w["trace_step_seq"] = int(w.get("trace_step_seq", 0)) + 1
+        w.setdefault("trace_log", []).append(build_trace_entry(
+            trace_id=str(w.get("trace_id") or new_id("trace")),
+            task_id=str(w.get("task_id") or new_id("task")),
+            step_index=int(w["trace_step_seq"]),
+            action=action,
+            args=args,
+            before=before,
+            after=after,
+            payload=_err_card,
+            evidence_seq=int(w.get("evidence_seq", 0)),
+            world_epoch=int(w.get("epoch", 0)),
+        ))
+        if len(w["trace_log"]) > 200:
+            del w["trace_log"][:-200]
     except Exception:
         pass
     return _ok(_err_card)
@@ -3506,6 +3679,12 @@ def _t_world_act(args, before_signal=None):
             raise ValueError("world_act 的 steps 必须是非空列表")
         cards = []
         for idx, step in enumerate(steps):
+            # 聚合动作的任务身份沿用外层；每一步仍可单独声明 operation，避免把
+            # “填写”和“提交”错误合并成一个业务操作。
+            step = dict(step)
+            for metadata_key in ("task_id", "executor"):
+                if metadata_key not in step and args.get(metadata_key) is not None:
+                    step[metadata_key] = args[metadata_key]
             try:
                 before = _page_signal_snapshot(wid)
             except Exception:
