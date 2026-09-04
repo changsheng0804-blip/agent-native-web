@@ -20,6 +20,7 @@ from task_runtime import (
     plan_graph,
     sanitize_action,
     stable_route,
+    validate_replay_step,
 )
 
 
@@ -206,6 +207,41 @@ class TaskRuntimeTests(unittest.TestCase):
         self.assertEqual(verified["status"], "ready")
         self.assertTrue(verified["all_verified"])
         self.assertTrue(verified["publishable"])
+
+    def test_replay_check_compares_structure_and_outcome(self):
+        before = normalize_page_state({
+            "url": "https://example.test/profile",
+            "state": "stable",
+            "form_fields": [{"name": "email", "type": "email", "filled": False}],
+        })
+        after = normalize_page_state({
+            "url": "https://example.test/profile",
+            "state": "stable",
+            "form_fields": [{"name": "email", "type": "email", "filled": True}],
+        })
+        trace = build_trace_entry(
+            trace_id="trace-replay", task_id="task-replay", step_index=1,
+            action="world_fill", args={"kind": "fill", "operation": "填写资料"},
+            before=before, after=after,
+            payload={
+                "page_outcome": "progressed",
+                "situation": {"type": "form"},
+                "effect": {"verdict": "effected", "confidence": "high"},
+            }, evidence_seq=1, world_epoch=0,
+        )
+        edge = {
+            "edge_id": "edge-replay",
+            "from": trace["before"]["state_key"],
+            "to": trace["after"]["state_key"],
+            "operation": "填写资料",
+            "outcomes": ["progressed"],
+        }
+        passed = validate_replay_step(trace, edge)
+        self.assertEqual(passed["status"], "passed")
+        self.assertTrue(passed["checks"]["to_state"]["ok"])
+        mismatch = validate_replay_step(trace, {**edge, "operation": "提交资料"})
+        self.assertEqual(mismatch["status"], "failed")
+        self.assertFalse(mismatch["checks"]["operation"]["ok"])
 
 
 if __name__ == "__main__":

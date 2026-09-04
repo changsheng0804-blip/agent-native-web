@@ -35,25 +35,31 @@ async def main():
                     "url": FORM_URI,
                     "wait_ms": 500,
                     "task_goal": "填写资料并提交",
-                    "workflow_id": "profile-submit",
-                    "site_version": "fixture-v1",
                     "role": "普通用户",
                     "permission_scope": "profile.write",
-                    "business_state_rules": [
-                        {"id": "profile.empty", "when": {"form_state": "empty", "outcome_hint": None}},
-                        {"id": "profile.partial", "when": {"form_state": "partial", "outcome_hint": None}},
-                        {"id": "profile.complete", "when": {"form_state": "complete", "outcome_hint": None}},
-                    ],
-                    "operation_contracts": [
-                        {"name": "填写资料", "preconditions": ["profile.empty", "profile.partial"],
-                         "outputs": [{"name": "资料", "ref": "profile.form"}]},
-                        {"name": "提交资料", "preconditions": ["profile.complete"],
-                         "inputs": [{"from": "填写资料.资料", "to": "提交资料.资料"}],
-                         "outputs": [{"name": "提交结果", "ref": "profile.result"}]},
-                    ],
+                    "site_adapter": {
+                        "adapter_id": "profile-adapter",
+                        "adapter_version": "1",
+                        "workflow_id": "profile-submit",
+                        "site_version": "fixture-v1",
+                        "state_rules": [
+                            {"id": "profile.empty", "when": {"form_state": "empty", "outcome_hint": None}},
+                            {"id": "profile.partial", "when": {"form_state": "partial", "outcome_hint": None}},
+                            {"id": "profile.complete", "when": {"form_state": "complete", "outcome_hint": None}},
+                        ],
+                        "operations": [
+                            {"name": "填写资料", "preconditions": ["profile.empty", "profile.partial"],
+                             "outputs": [{"name": "资料", "ref": "profile.form"}]},
+                            {"name": "提交资料", "preconditions": ["profile.complete"],
+                             "inputs": [{"from": "填写资料.资料", "to": "提交资料.资料"}],
+                             "outputs": [{"name": "提交结果", "ref": "profile.result"}]},
+                        ],
+                    },
                 })
                 assert opened["ready"] is True
                 assert opened["trace_persistence_enabled"] is True
+                assert opened["site_adapter_id"] == "profile-adapter"
+                assert opened["site_adapter_version"] == "1"
                 wid = opened["world_id"]
                 task_id = opened["task_id"]
 
@@ -111,6 +117,13 @@ async def main():
                 assert graph["edges"][0]["operation"] == "填写资料"
                 assert graph["edges"][0]["dataflow"]["outputs"][0]["ref"] == "profile.form"
                 assert graph["source_context"]["site_version"] == "fixture-v1"
+                replay_check = await call(session, "world_graph_replay_check", {
+                    "world_id": wid,
+                    "edge_id": graph["edges"][0]["edge_id"],
+                    "trace_step": 1,
+                })
+                assert replay_check["replay"]["status"] == "passed"
+                assert replay_check["executed"] is False
 
                 assessment = await call(session, "world_graph_assess", {
                     "world_id": wid,

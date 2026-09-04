@@ -82,6 +82,32 @@ def normalize_operation_contracts(contracts: object) -> list[dict]:
     return normalized
 
 
+def normalize_site_adapter(adapter: object) -> dict:
+    """把站点业务适配器收束为可复用的显式配置。
+
+    适配器只声明业务语义，不执行网络请求，也不从页面自由文本推断规则。
+    旧的 business_state_rules/operation_contracts 参数仍可继续单独使用。
+    """
+    if not isinstance(adapter, dict):
+        return {}
+    state_rules = adapter.get("state_rules")
+    if state_rules is None:
+        state_rules = adapter.get("business_state_rules")
+    contracts = adapter.get("operations")
+    if contracts is None:
+        contracts = adapter.get("operation_contracts")
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "adapter_id": _text(adapter.get("adapter_id") or adapter.get("id"), 120),
+        "adapter_version": _text(adapter.get("adapter_version") or adapter.get("version"), 80),
+        "workflow_id": _text(adapter.get("workflow_id"), 120),
+        "site_version": _text(adapter.get("site_version"), 160),
+        "state_rules": normalize_state_rules(state_rules),
+        "operation_contracts": normalize_operation_contracts(contracts),
+        "description": _text(adapter.get("description"), 240),
+    }
+
+
 def _match_condition(runtime_state: dict, key: str, expected: object) -> bool:
     if key == "has_overlay":
         return any(item.get("kind") == expected for item in runtime_state.get("overlays", []))

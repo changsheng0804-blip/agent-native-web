@@ -279,7 +279,8 @@ def build_trace_entry(
         },
         "runtime_context": {
             key: _clip(context.get(key), 160)
-            for key in ("workflow_id", "site_version", "role", "permission_scope")
+            for key in ("workflow_id", "site_version", "role", "permission_scope",
+                        "site_adapter_id", "site_adapter_version")
             if isinstance(context, dict) and context.get(key) is not None
         },
         "evidence_ref": {
@@ -301,7 +302,8 @@ class TaskRuntimeGraph:
         self.goal = _clip(goal, 300)
         self.context = {
             key: _clip(context.get(key), 160)
-            for key in ("workflow_id", "site_version", "role", "permission_scope")
+            for key in ("workflow_id", "site_version", "role", "permission_scope",
+                        "site_adapter_id", "site_adapter_version")
             if isinstance(context, dict) and context.get(key) is not None
         }
         self.states: dict[str, dict] = {}
@@ -642,4 +644,61 @@ def plan_graph(
         "status": "blocked",
         "reason": "图中没有满足当前安全级别、步数上限和目标状态的路径",
         "examined_edges": examined,
+    }
+
+
+def validate_replay_step(trace: dict, edge: dict) -> dict:
+    """核对一条新轨迹是否符合任务图中的指定迁移边。
+
+    回放核对只比较结构事实：起点、终点、操作名和页面结果；不比较输入原文，
+    也不把“看起来差不多”升级为通过。缺少任一必要事实时直接判定失败。
+    """
+    trace = trace if isinstance(trace, dict) else {}
+    edge = edge if isinstance(edge, dict) else {}
+    if not trace:
+        return {"status": "no_trace", "passed": False, "reason": "没有可核对的实际轨迹"}
+    if not edge:
+        return {"status": "no_edge", "passed": False, "reason": "没有找到指定的任务图迁移边"}
+
+    before = trace.get("before") or {}
+    after = trace.get("after") or {}
+    effect = trace.get("effect") or {}
+    observed_operation = str(trace.get("operation") or "")
+    expected_operation = str(edge.get("operation") or "")
+    observed_outcome = str(effect.get("page_outcome") or "")
+    expected_outcomes = [str(item) for item in edge.get("outcomes", []) if str(item)]
+    expected_from = str(edge.get("from") or "")
+    expected_to = str(edge.get("to") or "")
+    observed_from = str(before.get("state_key") or "")
+    observed_to = str(after.get("state_key") or "")
+    checks = {
+        "from_state": {
+            "ok": bool(expected_from and observed_from == expected_from),
+            "expected": expected_from or None,
+            "observed": observed_from or None,
+        },
+        "operation": {
+            "ok": bool(expected_operation and observed_operation == expected_operation),
+            "expected": expected_operation or None,
+            "observed": observed_operation or None,
+        },
+        "to_state": {
+            "ok": bool(expected_to and observed_to == expected_to),
+            "expected": expected_to or None,
+            "observed": observed_to or None,
+        },
+        "page_outcome": {
+            "ok": bool(expected_outcomes and observed_outcome in expected_outcomes),
+            "expected": expected_outcomes,
+            "observed": observed_outcome or None,
+        },
+    }
+    passed = all(item["ok"] for item in checks.values())
+    return {
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "edge_id": edge.get("edge_id"),
+        "trace_id": trace.get("trace_id"),
+        "checks": checks,
+        "reason": "实际轨迹符合指定迁移边" if passed else "实际轨迹与指定迁移边不一致",
     }
