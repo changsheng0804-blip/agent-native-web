@@ -74,6 +74,11 @@ except ImportError:
     )
 
 try:
+    from site_adapter import compare_site_adapters, load_site_adapter_file
+except ImportError:
+    from mcp.site_adapter import compare_site_adapters, load_site_adapter_file
+
+try:
     from task_runtime import (
         TraceStore,
         build_graph,
@@ -211,6 +216,7 @@ async def list_tools():
                     "business_state_rules": {"type": "array", "description": "可选显式业务状态规则;未知或多规则命中时不会猜测", "items": {"type": "object"}},
                     "operation_contracts": {"type": "array", "description": "可选业务操作契约,包含前置状态、逻辑输入输出、所需角色、授权范围和适用网站版本", "items": {"type": "object"}},
                     "site_adapter": {"type": "object", "description": "可选站点业务适配器;集中声明状态规则、操作契约、任务类型和网站版本", "additionalProperties": True},
+                    "site_adapter_file": {"type": "string", "description": "可选站点适配器 JSON 文件名;只能读取 mcp/site_adapters 受控目录,不能与 site_adapter 同时使用"},
                     "enforce_contracts": {"type": "boolean", "description": "是否在 world_act 执行前强制检查业务操作契约;开启后,带 operation 的动作不满足前置条件时会被拦截", "default": False},
                 },
                 "required": ["url"],
@@ -384,6 +390,18 @@ async def list_tools():
                     "min_replays": {"type": "integer", "description": "构图时使用的独立回放次数阈值,默认 2"},
                 },
                 "required": ["world_id", "edge_id"],
+            },
+        ),
+        types.Tool(
+            name="world_adapter_compare",
+            description="站点适配器兼容性检查:比较两个受控目录中的适配器版本,识别状态规则、操作契约、流程编号和网站版本变化;只读取文件,不执行网页动作。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "base_file": {"type": "string", "description": "基准适配器 JSON 文件名"},
+                    "candidate_file": {"type": "string", "description": "待检查适配器 JSON 文件名"},
+                },
+                "required": ["base_file", "candidate_file"],
             },
         ),
         types.Tool(
@@ -758,7 +776,7 @@ def _impl_with_status(name, args):
         except Exception:
             pass
     # 独立信道工具(world_state/digest/evidence/guide)自带信道结构,不再附加大 status
-    if name in {"world_state", "world_business_state", "world_operation_check", "world_task_plan", "world_graph_replay_check", "world_change_digest", "world_evidence", "world_trace", "world_graph", "world_trace_archive", "world_graph_archive", "world_graph_assess", "world_graph_bundle", "world_guide"}:
+    if name in {"world_state", "world_business_state", "world_operation_check", "world_task_plan", "world_graph_replay_check", "world_adapter_compare", "world_change_digest", "world_evidence", "world_trace", "world_graph", "world_trace_archive", "world_graph_archive", "world_graph_assess", "world_graph_bundle", "world_guide"}:
         return result
     # 瘦身演进:默认协议工具(world_act, world_find, world_outcome)默认轻量 status;
     # 失败/存疑态(unchanged/uncertain/challenged/errored)或显式 verbose=true 时自动全量深诊断;
@@ -967,6 +985,8 @@ def _impl(name, args, before_signal=None):
         return _t_world_task_plan(args)
     if name == "world_graph_replay_check":
         return _t_world_graph_replay_check(args)
+    if name == "world_adapter_compare":
+        return _t_world_adapter_compare(args)
     if name == "world_change_digest":
         return _t_world_change_digest(args)
     if name == "world_evidence":
@@ -1043,6 +1063,14 @@ def _t_world_open(args):
     headful = bool(args.get("headful", False))
     profile = args.get("profile") or None
     cdp_url = args.get("cdp_url") or None
+    site_adapter_file = str(args.get("site_adapter_file") or "").strip()
+    if site_adapter_file and args.get("site_adapter") is not None:
+        raise ValueError("site_adapter_file 与 site_adapter 只能二选一")
+    site_adapter = (
+        load_site_adapter_file(site_adapter_file)
+        if site_adapter_file
+        else normalize_site_adapter(args.get("site_adapter"))
+    )
     pw = _get_pw()
     if cdp_url:
         # CDP 挂载:连接已有 Chrome 的调试端口(复用日常登录态/已打开页面)。
@@ -1162,7 +1190,6 @@ def _t_world_open(args):
     task_id = str(args.get("task_id") or new_id("task"))[:120]
     task_goal = str(args.get("task_goal") or "")[:300]
     trace_id = new_id("trace")
-    site_adapter = normalize_site_adapter(args.get("site_adapter"))
     workflow_id = str(args.get("workflow_id") or site_adapter.get("workflow_id") or "")[:120]
     site_version = str(args.get("site_version") or site_adapter.get("site_version") or "")[:160]
     role = str(args.get("role") or "")[:120]
@@ -1207,6 +1234,7 @@ def _t_world_open(args):
         "business_state_rules": business_state_rules,
         "operation_contracts": operation_contracts,
         "site_adapter": site_adapter,
+        "site_adapter_file": site_adapter_file or None,
         "site_adapter_id": site_adapter.get("adapter_id"),
         "site_adapter_version": site_adapter.get("adapter_version"),
         "enforce_contracts": enforce_contracts,
@@ -1235,6 +1263,7 @@ def _t_world_open(args):
                 "graph_valid_until": graph_valid_until,
                 "site_adapter_id": site_adapter.get("adapter_id") or None,
                 "site_adapter_version": site_adapter.get("adapter_version") or None,
+                "site_adapter_file": site_adapter_file or None,
                 "business_state_rule_count": len(business_state_rules),
                 "operation_contract_count": len(operation_contracts),
                 "enforce_contracts": enforce_contracts})
@@ -1600,6 +1629,33 @@ def _t_world_graph_replay_check(args):
         "trace": trace,
         "executed": False,
         "source": {**source, "graph": "当前世界内存轨迹及调用方明确指定的归档轨迹"},
+    })
+
+
+def _t_world_adapter_compare(args):
+    """比较两个受控目录中的站点业务适配器,只读文件不操作网页。"""
+    base_file = str(args.get("base_file") or "").strip()
+    candidate_file = str(args.get("candidate_file") or "").strip()
+    if not base_file or not candidate_file:
+        raise ValueError("base_file 和 candidate_file 都不能为空")
+    base = load_site_adapter_file(base_file)
+    candidate = load_site_adapter_file(candidate_file)
+    return _ok({
+        "channel": "site-adapter-compatibility",
+        "base_file": base_file,
+        "candidate_file": candidate_file,
+        "base_adapter": {
+            "adapter_id": base.get("adapter_id"),
+            "adapter_version": base.get("adapter_version") or None,
+            "signature": base.get("signature"),
+        },
+        "candidate_adapter": {
+            "adapter_id": candidate.get("adapter_id"),
+            "adapter_version": candidate.get("adapter_version") or None,
+            "signature": candidate.get("signature"),
+        },
+        "comparison": compare_site_adapters(base, candidate),
+        "executed": False,
     })
 
 

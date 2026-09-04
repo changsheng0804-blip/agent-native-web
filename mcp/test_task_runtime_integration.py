@@ -37,29 +37,18 @@ async def main():
                     "task_goal": "填写资料并提交",
                     "role": "普通用户",
                     "permission_scope": "profile.write",
-                    "site_adapter": {
-                        "adapter_id": "profile-adapter",
-                        "adapter_version": "1",
-                        "workflow_id": "profile-submit",
-                        "site_version": "fixture-v1",
-                        "state_rules": [
-                            {"id": "profile.empty", "when": {"form_state": "empty", "outcome_hint": None}},
-                            {"id": "profile.partial", "when": {"form_state": "partial", "outcome_hint": None}},
-                            {"id": "profile.complete", "when": {"form_state": "complete", "outcome_hint": None}},
-                        ],
-                        "operations": [
-                            {"name": "填写资料", "preconditions": ["profile.empty", "profile.partial"],
-                             "outputs": [{"name": "资料", "ref": "profile.form"}]},
-                            {"name": "提交资料", "preconditions": ["profile.complete"],
-                             "inputs": [{"from": "填写资料.资料", "to": "提交资料.资料"}],
-                             "outputs": [{"name": "提交结果", "ref": "profile.result"}]},
-                        ],
-                    },
+                    "site_adapter_file": "资料提交 profile-adapter-v1.json",
                 })
                 assert opened["ready"] is True
                 assert opened["trace_persistence_enabled"] is True
                 assert opened["site_adapter_id"] == "profile-adapter"
                 assert opened["site_adapter_version"] == "1"
+                compatibility = await call(session, "world_adapter_compare", {
+                    "base_file": "资料提交 profile-adapter-v1.json",
+                    "candidate_file": "资料提交 profile-adapter-v2.json",
+                })
+                assert compatibility["comparison"]["status"] == "incompatible"
+                assert compatibility["executed"] is False
                 wid = opened["world_id"]
                 task_id = opened["task_id"]
 

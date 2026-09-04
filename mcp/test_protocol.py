@@ -61,7 +61,7 @@ async def main():
             print("\n[1] list_tools 收口")
             tools = await session.list_tools()
             names = [t.name for t in tools.tools]
-            check("总工具数 35", len(names) == 35, str(len(names)))
+            check("总工具数 36", len(names) == 36, str(len(names)))
             check("前 6 个是规范词", names[:6] == CANONICAL, str(names[:6]))
             check("旧工具描述带 [内部/调试]", all(t.description.startswith("[内部/调试]") for t in tools.tools if t.name not in CANONICAL))
             check("规范词不带前缀", all(not t.description.startswith("[内部/调试]") for t in tools.tools if t.name in CANONICAL))

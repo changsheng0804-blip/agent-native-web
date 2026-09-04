@@ -49,3 +49,17 @@ python test_global_feedback.py
 python test_channels.py
 python test_guide.py
 ```
+
+## 任务运行时图
+
+任务图相关信道把页面动作提升为可审计的业务运行时记录：
+
+```text
+world_business_state       业务状态投影
+world_operation_check      操作前置条件检查
+world_task_plan            当前或历史轨迹上的路径规划
+world_graph_replay_check   实际轨迹与任务图边的回放核对
+world_adapter_compare      站点适配器版本兼容性检查
+```
+
+站点适配器 JSON 只能从 `site_adapters/` 受控目录加载。它是显式业务配置，包含状态规则、操作契约和适用版本，不会自动读取或推断网站后端逻辑。

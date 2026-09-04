@@ -10,13 +10,14 @@ Agent-Native Web（智能体原生网页）让智能体可以在网页世界中�
 
 **默认协议只有 6 个词(弱模型友好):** `open → guide → find → act → outcome → close`。
 每次 `world_act` 都返回同一张统一后果卡(`page_outcome` 五态:progressed/challenged/errored/uncertain/unchanged),
-弱模型不再需要自行合并多条信道。旧 `world_*` 工具(22 个)全部保留并标记为 `[内部/调试]`,
+弱模型不再需要自行合并多条信道。其余 `world_*` 工具全部保留并标记为 `[内部/调试]`,
 可用 `AGENT_WORLD_LITE=1` 启动只暴露 6 词的精简模式。
 
 ## 快速入口
 
 - [完整项目指南](docs/项目指南与架构.md)
 - [MCP 服务器](mcp/server.py)
+- [站点业务适配器](mcp/site_adapters/)
 - [浏览器扩展内核](extension/)
 - [智能体技能包](skills/agent-world/SKILL.md)
 - [测试夹具](tests/fixtures/)
