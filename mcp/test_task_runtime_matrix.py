@@ -137,7 +137,9 @@ async def main():
                 for edge in graph["edges"]
             }
             assert {"progressed", "errored", "challenged"}.issubset(outcomes), outcomes
-            assert graph["status"] == "candidate"
+            # 填写资料边在三个独立场景中都出现，达到回放阈值；提交分支
+            # 各只出现一次，因此整图只能是 replayed，不能直接 verified。
+            assert graph["status"] == "replayed"
             assert graph["trace_count"] == len(CASES) * 2
 
             submit_edges = [edge for edge in graph["edges"] if edge["operation"] == "提交资料"]
@@ -167,4 +169,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

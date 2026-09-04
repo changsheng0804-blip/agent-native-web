@@ -35,6 +35,10 @@ async def main():
                     "url": FORM_URI,
                     "wait_ms": 500,
                     "task_goal": "填写资料并提交",
+                    "workflow_id": "profile-submit",
+                    "site_version": "fixture-v1",
+                    "role": "普通用户",
+                    "permission_scope": "profile.write",
                 })
                 assert opened["ready"] is True
                 assert opened["trace_persistence_enabled"] is True
@@ -71,14 +75,36 @@ async def main():
                 assert len(graph["edges"]) == 1
                 assert graph["edges"][0]["operation"] == "填写资料"
                 assert graph["edges"][0]["dataflow"]["outputs"][0]["ref"] == "profile.form"
+                assert graph["source_context"]["site_version"] == "fixture-v1"
+
+                assessment = await call(session, "world_graph_assess", {
+                    "world_id": wid,
+                    "expected_outcomes": ["progressed"],
+                    "min_replays": 2,
+                })
+                assert assessment["graph_status"] == "candidate"
+                assert assessment["lifecycle"]["missing_outcomes"] == []
 
                 await call(session, "world_close", {"world_id": wid})
                 archived = await call(session, "world_trace_archive", {"task_id": task_id})
                 assert archived["enabled"] is True
                 assert len(archived["traces"]) == 1
-                archived_graph = await call(session, "world_graph_archive", {"task_id": task_id})
+                archived_graph = await call(session, "world_graph_archive", {
+                    "task_id": task_id,
+                    "expected_outcomes": ["progressed"],
+                    "min_replays": 2,
+                })
                 assert archived_graph["enabled"] is True
                 assert archived_graph["graph"]["trace_count"] == 1
+                bundle = await call(session, "world_graph_bundle", {
+                    "task_ids": [task_id],
+                    "goal": "填写资料并提交",
+                    "expected_outcomes": ["progressed"],
+                    "min_replays": 2,
+                })
+                assert bundle["enabled"] is True
+                assert bundle["source"]["task_count"] == 1
+                assert bundle["graph"]["status"] == "candidate"
 
     print("任务运行时浏览器闭环测试通过")
 

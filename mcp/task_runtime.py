@@ -16,6 +16,7 @@ import hashlib
 import json
 import os
 import re
+import time
 import uuid
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -245,6 +246,7 @@ def build_trace_entry(
     payload: dict,
     evidence_seq: int,
     world_epoch: int,
+    context: dict | None = None,
 ) -> dict:
     effect = payload.get("effect") or {}
     situation = payload.get("situation") or {}
@@ -274,6 +276,11 @@ def build_trace_entry(
             "inputs": safe_action.get("input_bindings", []),
             "outputs": safe_action.get("output_bindings", []),
         },
+        "runtime_context": {
+            key: _clip(context.get(key), 160)
+            for key in ("workflow_id", "site_version", "role", "permission_scope")
+            if isinstance(context, dict) and context.get(key) is not None
+        },
         "evidence_ref": {
             "evidence_seq": int(evidence_seq),
             "changes_seq": {
@@ -288,9 +295,14 @@ def build_trace_entry(
 class TaskRuntimeGraph:
     """从已记录轨迹构建候选状态迁移图。"""
 
-    def __init__(self, task_id: str = "", goal: str = ""):
+    def __init__(self, task_id: str = "", goal: str = "", context: dict | None = None):
         self.task_id = task_id
         self.goal = _clip(goal, 300)
+        self.context = {
+            key: _clip(context.get(key), 160)
+            for key in ("workflow_id", "site_version", "role", "permission_scope")
+            if isinstance(context, dict) and context.get(key) is not None
+        }
         self.states: dict[str, dict] = {}
         self.edges: dict[str, dict] = {}
         self.trace_count = 0
@@ -327,12 +339,20 @@ class TaskRuntimeGraph:
             "effects": {"state_key": to_key},
             "dataflow": {"inputs": [], "outputs": []},
             "outcomes": [],
+            "confidences": [],
             "observations": 0,
+            "trace_ids": [],
             "evidence_refs": [],
         })
         edge["observations"] += 1
         if outcome not in edge["outcomes"]:
             edge["outcomes"].append(outcome)
+        confidence = _clip(effect.get("confidence"), 30)
+        if confidence and confidence not in edge["confidences"]:
+            edge["confidences"].append(confidence)
+        trace_id = _clip(trace.get("trace_id"), 100)
+        if trace_id and trace_id not in edge["trace_ids"]:
+            edge["trace_ids"].append(trace_id)
         flow = trace.get("dataflow") or {}
         for direction in ("inputs", "outputs"):
             for binding in flow.get(direction, []) or []:
@@ -350,6 +370,7 @@ class TaskRuntimeGraph:
             "schema_version": GRAPH_SCHEMA_VERSION,
             "task_id": self.task_id,
             "goal": self.goal,
+            "source_context": self.context,
             "status": "candidate",
             "trace_count": self.trace_count,
             "states": [self.states[key] for key in sorted(self.states)],
@@ -362,12 +383,100 @@ class TaskRuntimeGraph:
         }
 
 
-def build_graph(traces: list[dict], task_id: str = "", goal: str = "") -> dict:
-    graph = TaskRuntimeGraph(task_id=task_id, goal=goal)
+def build_graph(
+    traces: list[dict],
+    task_id: str = "",
+    goal: str = "",
+    *,
+    expected_outcomes: list[str] | None = None,
+    min_replays: int = 2,
+    valid_until: int | None = None,
+    context: dict | None = None,
+) -> dict:
+    if context is None:
+        context = next(
+            (trace.get("runtime_context") for trace in traces or []
+             if isinstance(trace, dict) and trace.get("runtime_context")),
+            None,
+        )
+    graph = TaskRuntimeGraph(task_id=task_id, goal=goal, context=context)
     for trace in traces or []:
         if isinstance(trace, dict):
             graph.add(trace)
-    return graph.to_dict()
+    return assess_graph(
+        graph.to_dict(),
+        expected_outcomes=expected_outcomes,
+        min_replays=min_replays,
+        valid_until=valid_until,
+    )
+
+
+def assess_graph(
+    graph: dict,
+    *,
+    expected_outcomes: list[str] | None = None,
+    min_replays: int = 2,
+    valid_until: int | None = None,
+) -> dict:
+    """根据明确的回放阈值评估图生命周期，不自动改变外部发布状态。"""
+    graph = dict(graph or {})
+    min_replays = max(1, int(min_replays))
+    expected = [str(item) for item in (expected_outcomes or []) if str(item)]
+    now = int(time.time())
+    expired = valid_until is not None and now >= int(valid_until)
+    observed_outcomes = sorted({
+        outcome
+        for edge in graph.get("edges", [])
+        for outcome in edge.get("outcomes", [])
+    })
+    missing_outcomes = [item for item in expected if item not in observed_outcomes]
+    edge_statuses = []
+    all_edge_verified = bool(graph.get("edges"))
+    any_replayed = False
+    for edge in graph.get("edges", []):
+        trace_ids = sorted(set(edge.get("trace_ids", [])))
+        replay_count = len(trace_ids)
+        has_uncertain = "uncertain" in (edge.get("outcomes") or [])
+        has_low_confidence = "low" in (edge.get("confidences") or [])
+        if expired:
+            status = "expired"
+        elif replay_count >= min_replays and expected and not has_uncertain and not has_low_confidence:
+            status = "verified"
+        elif replay_count >= min_replays:
+            status = "replayed"
+        else:
+            status = "candidate"
+        edge["verification"] = {
+            "status": status,
+            "independent_runs": replay_count,
+            "required_replays": min_replays,
+            "has_uncertain_outcome": has_uncertain,
+            "has_low_confidence": has_low_confidence,
+        }
+        edge_statuses.append(status)
+        any_replayed = any_replayed or status in ("replayed", "verified")
+        all_edge_verified = all_edge_verified and status == "verified"
+
+    if expired:
+        status = "expired"
+    elif expected and not missing_outcomes and all_edge_verified:
+        status = "verified"
+    elif any_replayed:
+        status = "replayed"
+    else:
+        status = "candidate"
+    graph["status"] = status
+    graph["lifecycle"] = {
+        "status": status,
+        "checked_at": now,
+        "required_replays": min_replays,
+        "expected_outcomes": expected,
+        "observed_outcomes": observed_outcomes,
+        "missing_outcomes": missing_outcomes,
+        "expires_at": int(valid_until) if valid_until is not None else None,
+        "promotion_rule": "必须提供预期分支,所有边达到回放阈值且不存在 uncertain 才能标记 verified",
+    }
+    return graph
 
 
 def validate_transition(current_state: dict, edge: dict) -> dict:

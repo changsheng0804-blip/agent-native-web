@@ -13,6 +13,7 @@ import unittest
 from task_runtime import (
     TaskRuntimeGraph,
     TraceStore,
+    assess_graph,
     build_graph,
     build_trace_entry,
     normalize_page_state,
@@ -138,6 +139,32 @@ class TaskRuntimeTests(unittest.TestCase):
             store.append("task-store", trace)
             self.assertEqual(store.read("task-store"), [trace])
             self.assertFalse(store.path_for("用户目标").name.endswith("用户目标.jsonl"))
+
+    def test_lifecycle_requires_replays_and_expected_branches(self):
+        def make_trace(trace_id, outcome):
+            return build_trace_entry(
+                trace_id=trace_id, task_id="task-life", step_index=1,
+                action="world_click", args={"kind": "click", "operation": "提交"},
+                before={"url": "https://example.test/form", "state": "stable"},
+                after={"url": "https://example.test/result", "state": "stable"},
+                payload={
+                    "page_outcome": outcome,
+                    "situation": {"type": "navigation"},
+                    "effect": {"verdict": "effected", "confidence": "high"},
+                }, evidence_seq=1, world_epoch=0,
+            )
+
+        graph = build_graph([
+            make_trace("run-1", "progressed"),
+            make_trace("run-2", "progressed"),
+        ], expected_outcomes=["progressed", "errored"], min_replays=2)
+        self.assertEqual(graph["status"], "replayed")
+        self.assertEqual(graph["lifecycle"]["missing_outcomes"], ["errored"])
+        self.assertEqual(graph["edges"][0]["verification"]["status"], "verified")
+
+        expired = assess_graph(graph, expected_outcomes=["progressed"], valid_until=1)
+        self.assertEqual(expired["status"], "expired")
+        self.assertEqual(expired["edges"][0]["verification"]["status"], "expired")
 
 
 if __name__ == "__main__":

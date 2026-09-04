@@ -20,6 +20,8 @@ Agent World MCP Server
   world_graph    候选任务运行时图(从轨迹即时生成)
   world_trace_archive 读取已归档任务轨迹
   world_graph_archive 由已归档轨迹生成候选图
+  world_graph_assess 评估图的回放与生命周期状态
+  world_graph_bundle 合并多个任务实例进行跨会话评估
   world_guide   结合三条信道生成任务导览
   world_click    编号驱动点击 + 页面整体反馈
   world_fill     编号驱动填表
@@ -112,6 +114,15 @@ def _world(world_id):
     return w
 
 
+def _runtime_context(w):
+    """返回轨迹和候选图共用的来源上下文；未知字段保持为空。"""
+    return {
+        key: w.get(key)
+        for key in ("workflow_id", "site_version", "role", "permission_scope")
+        if w.get(key)
+    }
+
+
 def _wait_world_ready(page, timeout_ms=15000):
     deadline = time.time() + timeout_ms / 1000
     while time.time() < deadline:
@@ -160,6 +171,11 @@ async def list_tools():
                     "cdp_url": {"type": "string", "description": "连接已有 Chrome 的 CDP 调试地址(如 http://localhost:9222),复用日常已登录浏览器;与 profile/headless 互斥"},
                     "task_id": {"type": "string", "description": "可选任务实例编号;不填写时自动生成,同一网页世界内的动作会继承它"},
                     "task_goal": {"type": "string", "description": "可选任务目标,用于轨迹和候选图说明,不作为网页指令执行"},
+                    "workflow_id": {"type": "string", "description": "可选任务类型编号,用于把多次独立运行归入同一任务族"},
+                    "site_version": {"type": "string", "description": "可选网站版本或发布标记,未知时不要猜测"},
+                    "role": {"type": "string", "description": "可选账号角色,例如管理员或普通用户"},
+                    "permission_scope": {"type": "string", "description": "可选用户授权范围,只保存范围名称不保存凭据"},
+                    "graph_valid_until": {"type": "integer", "description": "可选候选图有效截止时间,Unix 时间戳;到期后图标记为 expired"},
                 },
                 "required": ["url"],
             },
@@ -300,7 +316,11 @@ async def list_tools():
             description="候选任务运行时图:从已记录轨迹生成状态节点和迁移边。候选图只表示观测到的行为,不代表完整业务规则,也不把出现次数解释成概率。",
             inputSchema={
                 "type": "object",
-                "properties": {"world_id": {"type": "integer"}},
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "expected_outcomes": {"type": "array", "description": "可选预期结果分支,用于生命周期评估", "items": {"type": "string"}},
+                    "min_replays": {"type": "integer", "description": "可选独立回放次数阈值,默认 2", "default": 2},
+                },
                 "required": ["world_id"],
             },
         ),
@@ -325,8 +345,39 @@ async def list_tools():
                 "properties": {
                     "task_id": {"type": "string", "description": "world_open 返回的任务实例编号"},
                     "goal": {"type": "string", "description": "可选任务目标说明"},
+                    "expected_outcomes": {"type": "array", "description": "可选预期结果分支", "items": {"type": "string"}},
+                    "min_replays": {"type": "integer", "description": "可选独立回放次数阈值,默认 2", "default": 2},
+                    "valid_until": {"type": "integer", "description": "可选有效截止时间,Unix 时间戳"},
                 },
                 "required": ["task_id"],
+            },
+        ),
+        types.Tool(
+            name="world_graph_assess",
+            description="评估候选图生命周期:检查独立回放次数、预期结果分支和有效期,只返回评估结果,不会自动发布图。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "expected_outcomes": {"type": "array", "description": "预期必须覆盖的页面结果,例如 progressed、errored、challenged", "items": {"type": "string"}},
+                    "min_replays": {"type": "integer", "description": "每条边至少需要多少条独立轨迹,默认 2", "default": 2},
+                },
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_graph_bundle",
+            description="合并多个已归档任务实例生成候选图并评估,用于跨会话回放;任务编号必须由调用方明确提供。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_ids": {"type": "array", "description": "要合并的任务实例编号列表", "items": {"type": "string"}},
+                    "goal": {"type": "string", "description": "可选任务目标说明"},
+                    "expected_outcomes": {"type": "array", "description": "预期必须覆盖的页面结果", "items": {"type": "string"}},
+                    "min_replays": {"type": "integer", "description": "每条边至少需要多少条独立轨迹,默认 2", "default": 2},
+                    "valid_until": {"type": "integer", "description": "可选有效截止时间,Unix 时间戳"},
+                },
+                "required": ["task_ids"],
             },
         ),
         types.Tool(
@@ -618,7 +669,7 @@ def _impl_with_status(name, args):
         except Exception:
             pass
     # 独立信道工具(world_state/digest/evidence/guide)自带信道结构,不再附加大 status
-    if name in {"world_state", "world_change_digest", "world_evidence", "world_trace", "world_graph", "world_trace_archive", "world_graph_archive", "world_guide"}:
+    if name in {"world_state", "world_change_digest", "world_evidence", "world_trace", "world_graph", "world_trace_archive", "world_graph_archive", "world_graph_assess", "world_graph_bundle", "world_guide"}:
         return result
     # 瘦身演进:默认协议工具(world_act, world_find, world_outcome)默认轻量 status;
     # 失败/存疑态(unchanged/uncertain/challenged/errored)或显式 verbose=true 时自动全量深诊断;
@@ -831,6 +882,10 @@ def _impl(name, args, before_signal=None):
         return _t_world_trace_archive(args)
     if name == "world_graph_archive":
         return _t_world_graph_archive(args)
+    if name == "world_graph_assess":
+        return _t_world_graph_assess(args)
+    if name == "world_graph_bundle":
+        return _t_world_graph_bundle(args)
     if name == "world_guide":
         return _t_world_guide(args)
     if name == "world_click":
@@ -1010,6 +1065,14 @@ def _t_world_open(args):
     task_id = str(args.get("task_id") or new_id("task"))[:120]
     task_goal = str(args.get("task_goal") or "")[:300]
     trace_id = new_id("trace")
+    workflow_id = str(args.get("workflow_id") or "")[:120]
+    site_version = str(args.get("site_version") or "")[:160]
+    role = str(args.get("role") or "")[:120]
+    permission_scope = str(args.get("permission_scope") or "")[:200]
+    try:
+        graph_valid_until = int(args["graph_valid_until"]) if args.get("graph_valid_until") is not None else None
+    except (TypeError, ValueError):
+        graph_valid_until = None
 
     _worlds[wid] = {
         "handle": handle,
@@ -1029,6 +1092,11 @@ def _t_world_open(args):
         "trace_log": [],
         "trace_step_seq": 0,
         "trace_persistence_enabled": persistence_enabled(),
+        "workflow_id": workflow_id,
+        "site_version": site_version,
+        "role": role,
+        "permission_scope": permission_scope,
+        "graph_valid_until": graph_valid_until,
         # 世界纪元:world_navigate 成功导航 +1;跨纪元旧 el_N 全部失效
         "epoch": 0,
         "network_errors": net_errors,
@@ -1048,7 +1116,10 @@ def _t_world_open(args):
     summary = _evaluate(wid, "agentWorld.query.getPageSummary()")
     return _ok({"world_id": wid, "url": page.url, "ready": True, "headful": headful, "profile": profile, "cdp_url": cdp_url, "summary": summary,
                 "task_id": task_id, "trace_id": trace_id,
-                "trace_persistence_enabled": persistence_enabled()})
+                "trace_persistence_enabled": persistence_enabled(),
+                "workflow_id": workflow_id, "site_version": site_version,
+                "role": role, "permission_scope": permission_scope,
+                "graph_valid_until": graph_valid_until})
 
 
 def _t_world_entities(args):
@@ -1311,6 +1382,7 @@ def _record_action_evidence(wid, action, args, before, result):
     if args.get("task_id"):
         w["task_id"] = str(args.get("task_id"))[:120]
     w["trace_step_seq"] = int(w.get("trace_step_seq", 0)) + 1
+    trace_entry = None
     try:
         trace_entry = build_trace_entry(
             trace_id=str(w.get("trace_id") or new_id("trace")),
@@ -1323,6 +1395,7 @@ def _record_action_evidence(wid, action, args, before, result):
             payload=payload,
             evidence_seq=int(w["evidence_seq"]),
             world_epoch=int(w.get("epoch", 0)),
+            context=_runtime_context(w),
         )
         w.setdefault("trace_log", []).append(trace_entry)
         if len(w["trace_log"]) > 200:
@@ -1330,7 +1403,7 @@ def _record_action_evidence(wid, action, args, before, result):
     except Exception:
         # 轨迹是附加信道，不能影响既有操作证据的记录和返回。
         pass
-    if persistence_enabled():
+    if persistence_enabled() and trace_entry is not None:
         try:
             _trace_store.append(str(w.get("task_id") or ""), trace_entry)
         except Exception:
@@ -1402,6 +1475,8 @@ def _t_world_trace(args):
         "trace_id": w.get("trace_id"),
         "task_goal": w.get("task_goal") or None,
         "persistence_enabled": persistence_enabled(),
+        "runtime_context": _runtime_context(w),
+        "graph_valid_until": w.get("graph_valid_until"),
         "from": since,
         "to": next_since,
         "latest": latest,
@@ -1423,6 +1498,10 @@ def _t_world_graph(args):
         list(w.get("trace_log", [])),
         task_id=str(w.get("task_id") or ""),
         goal=str(w.get("task_goal") or ""),
+        expected_outcomes=args.get("expected_outcomes"),
+        min_replays=int(args.get("min_replays", 2)),
+        valid_until=w.get("graph_valid_until"),
+        context=_runtime_context(w),
     )
     return _ok({
         "world_id": wid,
@@ -1478,7 +1557,10 @@ def _t_world_graph_archive(args):
             "channel": "task-runtime-graph-archive",
             "enabled": False,
             "task_id": task_id,
-            "graph": build_graph([], task_id=task_id, goal=str(args.get("goal") or "")),
+            "graph": build_graph([], task_id=task_id, goal=str(args.get("goal") or ""),
+                                 expected_outcomes=args.get("expected_outcomes"),
+                                 min_replays=int(args.get("min_replays", 2)),
+                                 valid_until=args.get("valid_until")),
             "why": "本地轨迹归档默认关闭;请明确设置 AGENT_TASK_RUNTIME_PERSIST=1",
         })
     traces = _trace_store.read(task_id, limit=1000)
@@ -1490,8 +1572,84 @@ def _t_world_graph_archive(args):
             traces,
             task_id=task_id,
             goal=str(args.get("goal") or ""),
+            expected_outcomes=args.get("expected_outcomes"),
+            min_replays=int(args.get("min_replays", 2)),
+            valid_until=args.get("valid_until"),
         ),
         "source": {"trace_count": len(traces), "storage": "本地 JSONL 追加式归档"},
+    })
+
+
+def _t_world_graph_assess(args):
+    """评估当前网页世界的候选图,不执行动作也不发布图。"""
+    wid = int(args["world_id"])
+    w = _world(wid)
+    graph = build_graph(
+        list(w.get("trace_log", [])),
+        task_id=str(w.get("task_id") or ""),
+        goal=str(w.get("task_goal") or ""),
+        expected_outcomes=args.get("expected_outcomes"),
+        min_replays=int(args.get("min_replays", 2)),
+        valid_until=w.get("graph_valid_until"),
+        context=_runtime_context(w),
+    )
+    return _ok({
+        "world_id": wid,
+        "channel": "task-runtime-graph-assessment",
+        "graph_status": graph.get("status"),
+        "lifecycle": graph.get("lifecycle"),
+        "graph": graph,
+        "publishable": False,
+        "why": "评估接口只生成审查结果,不会自动发布候选图",
+    })
+
+
+def _t_world_graph_bundle(args):
+    """合并多个已归档任务实例,用于跨会话回放评估。"""
+    raw_ids = args.get("task_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise ValueError("task_ids 必须是非空列表")
+    task_ids = []
+    for item in raw_ids[:50]:
+        task_id = str(item or "")[:120]
+        if task_id and task_id not in task_ids:
+            task_ids.append(task_id)
+    if not task_ids:
+        raise ValueError("task_ids 不能全部为空")
+    if not persistence_enabled():
+        return _ok({
+            "channel": "task-runtime-graph-bundle",
+            "enabled": False,
+            "task_ids": task_ids,
+            "graph": build_graph([], task_id="bundle", goal=str(args.get("goal") or ""),
+                                 expected_outcomes=args.get("expected_outcomes"),
+                                 min_replays=int(args.get("min_replays", 2)),
+                                 valid_until=args.get("valid_until")),
+            "why": "本地轨迹归档默认关闭;请明确设置 AGENT_TASK_RUNTIME_PERSIST=1",
+        })
+    traces = []
+    missing = []
+    for task_id in task_ids:
+        rows = _trace_store.read(task_id, limit=1000)
+        if not rows:
+            missing.append(task_id)
+        traces.extend(rows)
+    graph = build_graph(
+        traces,
+        task_id="bundle",
+        goal=str(args.get("goal") or ""),
+        expected_outcomes=args.get("expected_outcomes"),
+        min_replays=int(args.get("min_replays", 2)),
+        valid_until=args.get("valid_until"),
+    )
+    return _ok({
+        "channel": "task-runtime-graph-bundle",
+        "enabled": True,
+        "task_ids": task_ids,
+        "missing_task_ids": missing,
+        "graph": graph,
+        "source": {"task_count": len(task_ids), "trace_count": len(traces)},
+        "publishable": False,
     })
 
 
@@ -2568,11 +2726,12 @@ def _errored_card(wid, action, args, before_signal, exc):
     except Exception:
         pass
     # 异常动作也必须进入轨迹,否则失败分支会从任务图中消失。
+    error_trace = None
     try:
         if args.get("task_id"):
             w["task_id"] = str(args.get("task_id"))[:120]
         w["trace_step_seq"] = int(w.get("trace_step_seq", 0)) + 1
-        w.setdefault("trace_log", []).append(build_trace_entry(
+        error_trace = build_trace_entry(
             trace_id=str(w.get("trace_id") or new_id("trace")),
             task_id=str(w.get("task_id") or new_id("task")),
             step_index=int(w["trace_step_seq"]),
@@ -2583,14 +2742,16 @@ def _errored_card(wid, action, args, before_signal, exc):
             payload=_err_card,
             evidence_seq=int(w.get("evidence_seq", 0)),
             world_epoch=int(w.get("epoch", 0)),
-        ))
+            context=_runtime_context(w),
+        )
+        w.setdefault("trace_log", []).append(error_trace)
         if len(w["trace_log"]) > 200:
             del w["trace_log"][:-200]
     except Exception:
         pass
-    if persistence_enabled():
+    if persistence_enabled() and error_trace is not None:
         try:
-            _trace_store.append(str(w.get("task_id") or ""), w["trace_log"][-1])
+            _trace_store.append(str(w.get("task_id") or ""), error_trace)
         except Exception:
             pass
     return _ok(_err_card)
