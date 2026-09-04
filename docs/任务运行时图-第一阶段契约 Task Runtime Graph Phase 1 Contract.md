@@ -160,3 +160,29 @@
 `world_graph_assess` 只生成评估结果，不会自动发布图。独立运行以不同 `trace_id`（轨迹编号）计数，不能用同一次运行内的重复动作冒充回放。
 
 `world_graph_bundle` 可把多个已归档任务实例合并后评估，适合验证同一任务在不同会话、不同业务对象下是否保持一致。
+
+## 业务状态投影
+
+页面运行时状态和业务状态必须分开。调用方可以在 `world_open` 时提供显式规则：
+
+```json
+[
+  {"id": "profile.empty", "when": {"form_state": "empty"}},
+  {"id": "profile.complete", "when": {"form_state": "complete"}}
+]
+```
+
+`world_business_state` 会返回匹配结果。没有匹配时为 `unknown`（未知），多条规则同时匹配时为 `ambiguous`（有歧义）。两种情况都不能执行依赖业务状态的操作。
+
+操作契约可以声明：
+
+```json
+{
+  "name": "提交资料",
+  "preconditions": ["profile.complete"],
+  "inputs": [{"from": "填写资料.资料", "to": "提交资料.资料"}],
+  "outputs": [{"name": "提交结果", "ref": "profile.result"}]
+}
+```
+
+`world_operation_check` 只检查前置条件，不执行操作。只有业务状态匹配且前置条件满足时，结果才会返回 `allowed: true`。

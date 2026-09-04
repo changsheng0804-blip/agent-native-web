@@ -39,11 +39,30 @@ async def main():
                     "site_version": "fixture-v1",
                     "role": "普通用户",
                     "permission_scope": "profile.write",
+                    "business_state_rules": [
+                        {"id": "profile.empty", "when": {"form_state": "empty", "outcome_hint": None}},
+                        {"id": "profile.partial", "when": {"form_state": "partial", "outcome_hint": None}},
+                        {"id": "profile.complete", "when": {"form_state": "complete", "outcome_hint": None}},
+                    ],
+                    "operation_contracts": [
+                        {"name": "填写资料", "preconditions": ["profile.empty", "profile.partial"],
+                         "outputs": [{"name": "资料", "ref": "profile.form"}]},
+                        {"name": "提交资料", "preconditions": ["profile.complete"],
+                         "inputs": [{"from": "填写资料.资料", "to": "提交资料.资料"}],
+                         "outputs": [{"name": "提交结果", "ref": "profile.result"}]},
+                    ],
                 })
                 assert opened["ready"] is True
                 assert opened["trace_persistence_enabled"] is True
                 wid = opened["world_id"]
                 task_id = opened["task_id"]
+
+                initial_business = await call(session, "world_business_state", {"world_id": wid})
+                assert initial_business["business_state"]["state_id"] == "profile.empty"
+                allowed = await call(session, "world_operation_check", {
+                    "world_id": wid, "operation": "填写资料",
+                })
+                assert allowed["check"]["allowed"] is True
 
                 found = await call(session, "world_find", {"world_id": wid, "q": "用户名"})
                 target = next(item["id"] for item in found["matches"] if item.get("interactive"))
@@ -57,6 +76,13 @@ async def main():
                 })
                 assert card["page_outcome"] == "progressed"
 
+                partial_business = await call(session, "world_business_state", {"world_id": wid})
+                assert partial_business["business_state"]["state_id"] == "profile.partial"
+                denied = await call(session, "world_operation_check", {
+                    "world_id": wid, "operation": "提交资料",
+                })
+                assert denied["check"]["status"] == "precondition_failed"
+
                 trace = await call(session, "world_trace", {"world_id": wid})
                 assert trace["task_goal"] == "填写资料并提交"
                 assert len(trace["traces"]) == 1
@@ -64,6 +90,8 @@ async def main():
                 assert item["operation"] == "填写资料"
                 assert item["before"]["form_state"] == "empty"
                 assert item["after"]["form_state"] == "partial"
+                assert item["business_before"]["state_id"] == "profile.empty"
+                assert item["business_after"]["state_id"] == "profile.partial"
                 assert item["dataflow"]["outputs"][0]["ref"] == "profile.form"
                 assert "secret-value-that-must-not-be-recorded" not in json.dumps(trace, ensure_ascii=False)
 

@@ -337,6 +337,8 @@ class TaskRuntimeGraph:
             "status": "candidate",
             "preconditions": {"state_key": from_key},
             "effects": {"state_key": to_key},
+            "business": {"from": [], "to": [], "statuses": []},
+            "operation_contract": None,
             "dataflow": {"inputs": [], "outputs": []},
             "outcomes": [],
             "confidences": [],
@@ -358,6 +360,16 @@ class TaskRuntimeGraph:
             for binding in flow.get(direction, []) or []:
                 if binding not in edge["dataflow"][direction]:
                     edge["dataflow"][direction].append(binding)
+        for side, business_key in (("from", "business_before"), ("to", "business_after")):
+            business = trace.get(business_key) or {}
+            state_id = business.get("state_id")
+            if state_id and state_id not in edge["business"][side]:
+                edge["business"][side].append(state_id)
+            status_value = business.get("status")
+            if status_value and status_value not in edge["business"]["statuses"]:
+                edge["business"]["statuses"].append(status_value)
+        if trace.get("operation_contract"):
+            edge["operation_contract"] = trace["operation_contract"]
         ref = trace.get("evidence_ref") or {}
         if ref and ref not in edge["evidence_refs"]:
             edge["evidence_refs"].append(ref)
@@ -438,9 +450,14 @@ def assess_graph(
         replay_count = len(trace_ids)
         has_uncertain = "uncertain" in (edge.get("outcomes") or [])
         has_low_confidence = "low" in (edge.get("confidences") or [])
+        business_statuses = edge.get("business", {}).get("statuses", [])
+        has_unknown_business = bool(business_statuses) and any(
+            value != "matched" for value in business_statuses
+        )
         if expired:
             status = "expired"
-        elif replay_count >= min_replays and expected and not has_uncertain and not has_low_confidence:
+        elif (replay_count >= min_replays and expected and not has_uncertain
+              and not has_low_confidence and not has_unknown_business):
             status = "verified"
         elif replay_count >= min_replays:
             status = "replayed"
@@ -452,6 +469,7 @@ def assess_graph(
             "required_replays": min_replays,
             "has_uncertain_outcome": has_uncertain,
             "has_low_confidence": has_low_confidence,
+            "has_unknown_business_state": has_unknown_business,
         }
         edge_statuses.append(status)
         any_replayed = any_replayed or status in ("replayed", "verified")

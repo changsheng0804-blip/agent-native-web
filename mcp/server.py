@@ -14,6 +14,8 @@ Agent World MCP Server
   world_resolve  弱 ID 解析(名字/强 ID/页面原生 id)
   world_changes  变更流(增量续读,游标)
   world_state    页面状态信道(读取最新整体状态)
+  world_business_state 业务状态信道(由显式规则投影)
+  world_operation_check 业务操作前置检查(只检查不执行)
   world_change_digest 变化摘要信道(读取压缩后的变化)
   world_evidence 操作证据信道(读取动作前后证据)
   world_trace    任务轨迹信道(读取脱敏轨迹)
@@ -51,11 +53,29 @@ import mcp.types as types
 from playwright.sync_api import sync_playwright
 
 try:
+    from business_runtime import (
+        attach_business_runtime,
+        check_operation,
+        normalize_operation_contracts,
+        normalize_state_rules,
+        project_business_state,
+    )
+except ImportError:
+    from mcp.business_runtime import (
+        attach_business_runtime,
+        check_operation,
+        normalize_operation_contracts,
+        normalize_state_rules,
+        project_business_state,
+    )
+
+try:
     from task_runtime import (
         TraceStore,
         build_graph,
         build_trace_entry,
         new_id,
+        normalize_page_state,
         persistence_enabled,
     )
 except ImportError:  # 允许从仓库根目录以模块方式加载
@@ -64,6 +84,7 @@ except ImportError:  # 允许从仓库根目录以模块方式加载
         build_graph,
         build_trace_entry,
         new_id,
+        normalize_page_state,
         persistence_enabled,
     )
 
@@ -176,6 +197,8 @@ async def list_tools():
                     "role": {"type": "string", "description": "可选账号角色,例如管理员或普通用户"},
                     "permission_scope": {"type": "string", "description": "可选用户授权范围,只保存范围名称不保存凭据"},
                     "graph_valid_until": {"type": "integer", "description": "可选候选图有效截止时间,Unix 时间戳;到期后图标记为 expired"},
+                    "business_state_rules": {"type": "array", "description": "可选显式业务状态规则;未知或多规则命中时不会猜测", "items": {"type": "object"}},
+                    "operation_contracts": {"type": "array", "description": "可选业务操作契约,包含前置状态和逻辑输入输出引用", "items": {"type": "object"}},
                 },
                 "required": ["url"],
             },
@@ -296,6 +319,27 @@ async def list_tools():
                     "limit": {"type": "integer", "description": "最多返回条数", "default": 20},
                 },
                 "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_business_state",
+            description="业务状态信道:用调用方声明的显式规则,把当前页面运行时状态投影为业务状态;没有规则或规则冲突时返回 unknown/ambiguous,不会猜测。",
+            inputSchema={
+                "type": "object",
+                "properties": {"world_id": {"type": "integer"}},
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_operation_check",
+            description="业务操作前置检查:判断当前业务状态是否满足某个操作契约;检查失败只返回原因,不执行动作。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "operation": {"type": "string", "description": "业务操作名,例如提交资料"},
+                },
+                "required": ["world_id", "operation"],
             },
         ),
         types.Tool(
@@ -669,7 +713,7 @@ def _impl_with_status(name, args):
         except Exception:
             pass
     # 独立信道工具(world_state/digest/evidence/guide)自带信道结构,不再附加大 status
-    if name in {"world_state", "world_change_digest", "world_evidence", "world_trace", "world_graph", "world_trace_archive", "world_graph_archive", "world_graph_assess", "world_graph_bundle", "world_guide"}:
+    if name in {"world_state", "world_business_state", "world_operation_check", "world_change_digest", "world_evidence", "world_trace", "world_graph", "world_trace_archive", "world_graph_archive", "world_graph_assess", "world_graph_bundle", "world_guide"}:
         return result
     # 瘦身演进:默认协议工具(world_act, world_find, world_outcome)默认轻量 status;
     # 失败/存疑态(unchanged/uncertain/challenged/errored)或显式 verbose=true 时自动全量深诊断;
@@ -870,6 +914,10 @@ def _impl(name, args, before_signal=None):
         return _t_world_changes(args)
     if name == "world_state":
         return _t_world_state(args)
+    if name == "world_business_state":
+        return _t_world_business_state(args)
+    if name == "world_operation_check":
+        return _t_world_operation_check(args)
     if name == "world_change_digest":
         return _t_world_change_digest(args)
     if name == "world_evidence":
@@ -1073,6 +1121,8 @@ def _t_world_open(args):
         graph_valid_until = int(args["graph_valid_until"]) if args.get("graph_valid_until") is not None else None
     except (TypeError, ValueError):
         graph_valid_until = None
+    business_state_rules = normalize_state_rules(args.get("business_state_rules"))
+    operation_contracts = normalize_operation_contracts(args.get("operation_contracts"))
 
     _worlds[wid] = {
         "handle": handle,
@@ -1097,6 +1147,8 @@ def _t_world_open(args):
         "role": role,
         "permission_scope": permission_scope,
         "graph_valid_until": graph_valid_until,
+        "business_state_rules": business_state_rules,
+        "operation_contracts": operation_contracts,
         # 世界纪元:world_navigate 成功导航 +1;跨纪元旧 el_N 全部失效
         "epoch": 0,
         "network_errors": net_errors,
@@ -1119,7 +1171,9 @@ def _t_world_open(args):
                 "trace_persistence_enabled": persistence_enabled(),
                 "workflow_id": workflow_id, "site_version": site_version,
                 "role": role, "permission_scope": permission_scope,
-                "graph_valid_until": graph_valid_until})
+                "graph_valid_until": graph_valid_until,
+                "business_state_rule_count": len(business_state_rules),
+                "operation_contract_count": len(operation_contracts)})
 
 
 def _t_world_entities(args):
@@ -1294,6 +1348,47 @@ def _t_world_state(args):
     })
 
 
+def _business_state_snapshot(wid):
+    w = _world(wid)
+    page_signal = _page_signal_snapshot(wid)
+    runtime_state = normalize_page_state(page_signal)
+    business = project_business_state(runtime_state, w.get("business_state_rules"))
+    return runtime_state, business
+
+
+def _t_world_business_state(args):
+    """读取当前页面状态对应的显式业务状态。"""
+    wid = int(args["world_id"])
+    w = _world(wid)
+    runtime_state, business = _business_state_snapshot(wid)
+    return _ok({
+        "world_id": wid,
+        "channel": "business-state",
+        "runtime_state": runtime_state,
+        "business_state": business,
+        "rule_count": len(w.get("business_state_rules") or []),
+        "source": "declared-rule",
+    })
+
+
+def _t_world_operation_check(args):
+    """只检查操作契约，不执行操作。"""
+    wid = int(args["world_id"])
+    operation = str(args.get("operation") or "").strip()
+    if not operation:
+        raise ValueError("operation 不能为空")
+    runtime_state, business = _business_state_snapshot(wid)
+    result = check_operation(_world(wid).get("operation_contracts"), operation, business)
+    return _ok({
+        "world_id": wid,
+        "channel": "operation-precondition-check",
+        "runtime_state": runtime_state,
+        "business_state": business,
+        "check": result,
+        "executed": False,
+    })
+
+
 def _t_world_change_digest(args):
     """变化摘要信道:读取变化但不把原始事件列表发给智能体。"""
     wid = args["world_id"]
@@ -1396,6 +1491,11 @@ def _record_action_evidence(wid, action, args, before, result):
             evidence_seq=int(w["evidence_seq"]),
             world_epoch=int(w.get("epoch", 0)),
             context=_runtime_context(w),
+        )
+        attach_business_runtime(
+            trace_entry,
+            w.get("business_state_rules"),
+            w.get("operation_contracts"),
         )
         w.setdefault("trace_log", []).append(trace_entry)
         if len(w["trace_log"]) > 200:
@@ -2743,6 +2843,11 @@ def _errored_card(wid, action, args, before_signal, exc):
             evidence_seq=int(w.get("evidence_seq", 0)),
             world_epoch=int(w.get("epoch", 0)),
             context=_runtime_context(w),
+        )
+        attach_business_runtime(
+            error_trace,
+            w.get("business_state_rules"),
+            w.get("operation_contracts"),
         )
         w.setdefault("trace_log", []).append(error_trace)
         if len(w["trace_log"]) > 200:
