@@ -540,6 +540,9 @@ def _impl_with_status(name, args):
                 _world(int(wid))["last_outcome_card"] = payload
         except Exception:
             pass
+    # 独立信道工具(world_state/digest/evidence/guide)自带信道结构,不再附加大 status
+    if name in {"world_state", "world_change_digest", "world_evidence", "world_guide"}:
+        return result
     # 瘦身演进:默认协议工具(world_act, world_find, world_outcome)默认轻量 status;
     # 失败/存疑态(unchanged/uncertain/challenged/errored)或显式 verbose=true 时自动全量深诊断;
     # 传统动作工具(world_click/fill/batch_fill等)保持既有契约兼容(含 forms 回显)
