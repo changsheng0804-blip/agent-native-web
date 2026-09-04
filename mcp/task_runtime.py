@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """任务运行时图的第一阶段基础类型。
 
-本模块只做三件事：
+本模块只做四件事：
 1. 把页面动作转换成脱敏的任务轨迹；
 2. 把动作前后的小状态转换成稳定的状态快照；
-3. 从轨迹建立“候选”状态迁移图。
+3. 从轨迹建立“候选”状态迁移图；
+4. 在明确开启时，将脱敏轨迹追加归档到本地 JSONL 文件。
 
 这里的图是观测结果，不是网站源码的逆向还原。边的出现次数只表示
 观测次数，不自动把频率解释成业务规则，也不删除只出现过一次的分支。
@@ -13,8 +14,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import uuid
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -133,6 +136,67 @@ def _value_meta(value: object) -> dict:
     return {"present": bool(text), "length": len(text), "sha256": _digest(text)}
 
 
+def persistence_enabled() -> bool:
+    """轨迹归档默认关闭，只有明确设置环境变量才写入本地。"""
+    return os.environ.get("AGENT_TASK_RUNTIME_PERSIST", "").strip().lower() in (
+        "1", "true", "yes", "on"
+    )
+
+
+class TraceStore:
+    """脱敏轨迹的本地追加式归档器(JSONL：每行一条 JSON 记录)。"""
+
+    def __init__(self, base_dir: str | Path | None = None):
+        configured = base_dir or os.environ.get("AGENT_TASK_RUNTIME_STORE_DIR")
+        self.base_dir = Path(configured) if configured else Path(__file__).parent / "runtime_traces"
+
+    def path_for(self, task_id: str) -> Path:
+        # 文件名不暴露任务目标或账号名，任务编号只作为内容查询条件。
+        return self.base_dir / f"task-{_digest(task_id)}.jsonl"
+
+    def append(self, task_id: str, trace: dict) -> None:
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        path = self.path_for(task_id)
+        with path.open("a", encoding="utf-8", newline="\n") as handle:
+            handle.write(json.dumps(trace, ensure_ascii=False, separators=(",", ":")) + "\n")
+
+    def read(self, task_id: str, limit: int = 200) -> list[dict]:
+        path = self.path_for(task_id)
+        if not path.exists():
+            return []
+        rows = []
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    item = json.loads(line)
+                except (TypeError, ValueError):
+                    continue
+                if isinstance(item, dict):
+                    rows.append(item)
+        return rows[-max(1, min(int(limit), 1000)):]
+
+
+def sanitize_bindings(value: object) -> list[dict]:
+    """只保存逻辑字段引用，不保存字段实际值。"""
+    if not isinstance(value, list):
+        return []
+    bindings = []
+    allowed = ("name", "ref", "from", "to", "source", "target", "required")
+    for item in value:
+        if isinstance(item, str):
+            bindings.append({"ref": _clip(item, 160)})
+            continue
+        if not isinstance(item, dict):
+            continue
+        binding = {}
+        for key in allowed:
+            if item.get(key) is not None:
+                binding[key] = bool(item[key]) if key == "required" else _clip(item[key], 160)
+        if binding:
+            bindings.append(binding)
+    return bindings
+
+
 def sanitize_action(action: str, args: dict | None) -> dict:
     """保存动作结构，但把文本输入替换为长度和摘要，避免轨迹变成凭据仓库。"""
     args = args if isinstance(args, dict) else {}
@@ -154,6 +218,9 @@ def sanitize_action(action: str, args: dict | None) -> dict:
             for item in args["fields"]
             if isinstance(item, dict)
         ]
+    for key in ("input_bindings", "output_bindings"):
+        if key in args:
+            safe[key] = sanitize_bindings(args.get(key))
     if isinstance(args.get("steps"), list):
         safe["steps"] = [
             sanitize_action("world_act.step", step)
@@ -185,6 +252,7 @@ def build_trace_entry(
     before_state = normalize_page_state(before)
     after_state = normalize_page_state(after, page_outcome)
     operation = _clip(args.get("operation") or action, 120)
+    safe_action = sanitize_action(action, args)
     return {
         "schema_version": TRACE_SCHEMA_VERSION,
         "trace_id": trace_id,
@@ -192,7 +260,7 @@ def build_trace_entry(
         "step_index": int(step_index),
         "operation_id": _clip(args.get("operation_id") or new_id("op"), 80),
         "operation": operation,
-        "action": sanitize_action(action, args),
+        "action": safe_action,
         "executor": _clip(args.get("executor") or "world_act", 80),
         "before": before_state,
         "after": after_state,
@@ -201,6 +269,10 @@ def build_trace_entry(
             "situation": _clip(situation.get("type"), 80) or None,
             "verdict": _clip(effect.get("verdict"), 80) or None,
             "confidence": _clip(effect.get("confidence"), 30) or None,
+        },
+        "dataflow": {
+            "inputs": safe_action.get("input_bindings", []),
+            "outputs": safe_action.get("output_bindings", []),
         },
         "evidence_ref": {
             "evidence_seq": int(evidence_seq),
@@ -253,7 +325,7 @@ class TaskRuntimeGraph:
             "status": "candidate",
             "preconditions": {"state_key": from_key},
             "effects": {"state_key": to_key},
-            "dataflow": [],
+            "dataflow": {"inputs": [], "outputs": []},
             "outcomes": [],
             "observations": 0,
             "evidence_refs": [],
@@ -261,6 +333,11 @@ class TaskRuntimeGraph:
         edge["observations"] += 1
         if outcome not in edge["outcomes"]:
             edge["outcomes"].append(outcome)
+        flow = trace.get("dataflow") or {}
+        for direction in ("inputs", "outputs"):
+            for binding in flow.get(direction, []) or []:
+                if binding not in edge["dataflow"][direction]:
+                    edge["dataflow"][direction].append(binding)
         ref = trace.get("evidence_ref") or {}
         if ref and ref not in edge["evidence_refs"]:
             edge["evidence_refs"].append(ref)
@@ -280,7 +357,7 @@ class TaskRuntimeGraph:
             "notes": [
                 "候选图只表示已观测迁移,不代表完整业务规则",
                 "observations 只记录出现次数,不是执行概率",
-                "dataflow 需要后续由明确输入输出契约补充",
+                "dataflow 只接受明确的逻辑输入输出引用,不自动猜测真实值",
             ],
         }
 

@@ -18,6 +18,8 @@ Agent World MCP Server
   world_evidence 操作证据信道(读取动作前后证据)
   world_trace    任务轨迹信道(读取脱敏轨迹)
   world_graph    候选任务运行时图(从轨迹即时生成)
+  world_trace_archive 读取已归档任务轨迹
+  world_graph_archive 由已归档轨迹生成候选图
   world_guide   结合三条信道生成任务导览
   world_click    编号驱动点击 + 页面整体反馈
   world_fill     编号驱动填表
@@ -47,9 +49,21 @@ import mcp.types as types
 from playwright.sync_api import sync_playwright
 
 try:
-    from task_runtime import build_graph, build_trace_entry, new_id
+    from task_runtime import (
+        TraceStore,
+        build_graph,
+        build_trace_entry,
+        new_id,
+        persistence_enabled,
+    )
 except ImportError:  # 允许从仓库根目录以模块方式加载
-    from mcp.task_runtime import build_graph, build_trace_entry, new_id
+    from mcp.task_runtime import (
+        TraceStore,
+        build_graph,
+        build_trace_entry,
+        new_id,
+        persistence_enabled,
+    )
 
 # Playwright 同步 API 强依赖 greenlet 协程上下文，必须在单一固定 OS 工作线程内运行，杜绝多线程竞争切换
 _pw_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="playwright_worker")
@@ -81,6 +95,7 @@ server = Server("agent-world")
 _worlds = {}
 _next_world_id = 1
 _playwright = None
+_trace_store = TraceStore()
 
 
 def _get_pw():
@@ -290,6 +305,31 @@ async def list_tools():
             },
         ),
         types.Tool(
+            name="world_trace_archive",
+            description="读取已归档任务轨迹:仅在明确开启本地轨迹归档后可用;按任务编号读取脱敏 JSONL 记录,可在网页世界关闭后审计。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "world_open 返回的任务实例编号"},
+                    "since": {"type": "integer", "description": "上次读到的轨迹步骤序号", "default": 0},
+                    "limit": {"type": "integer", "description": "最多返回轨迹条数", "default": 200},
+                },
+                "required": ["task_id"],
+            },
+        ),
+        types.Tool(
+            name="world_graph_archive",
+            description="从已归档任务轨迹生成候选图:用于网页世界关闭后的审计;不会把候选图自动升级为已验证图。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "world_open 返回的任务实例编号"},
+                    "goal": {"type": "string", "description": "可选任务目标说明"},
+                },
+                "required": ["task_id"],
+            },
+        ),
+        types.Tool(
             name="world_guide",
             description="实时任务导览:把页面状态、变化摘要和最近操作证据组合成一份面向当前任务的短导览;只返回相关区域、少量候选入口和下一步,不返回整页地图。",
             inputSchema={
@@ -492,6 +532,8 @@ async def list_tools():
                     "operation_id": {"type": "string", "description": "可选操作编号,用于把相邻步骤绑定到同一业务操作"},
                     "executor": {"type": "string", "description": "可选执行器标记,例如 world_act、webmcp 或授权接口"},
                     "task_id": {"type": "string", "description": "可选任务实例编号,不填写时继承 world_open 的任务编号"},
+                    "input_bindings": {"type": "array", "description": "可选输入数据绑定,只填写逻辑引用,例如 [{\"from\":\"填写资料.资料\",\"to\":\"提交资料.资料\"}]", "items": {"type": "object"}},
+                    "output_bindings": {"type": "array", "description": "可选输出数据绑定,只填写逻辑引用,不填写真实值,例如 [{\"name\":\"资料\",\"ref\":\"profile\"}]", "items": {"type": "object"}},
                 },
                 "required": ["world_id"],
             },
@@ -576,7 +618,7 @@ def _impl_with_status(name, args):
         except Exception:
             pass
     # 独立信道工具(world_state/digest/evidence/guide)自带信道结构,不再附加大 status
-    if name in {"world_state", "world_change_digest", "world_evidence", "world_trace", "world_graph", "world_guide"}:
+    if name in {"world_state", "world_change_digest", "world_evidence", "world_trace", "world_graph", "world_trace_archive", "world_graph_archive", "world_guide"}:
         return result
     # 瘦身演进:默认协议工具(world_act, world_find, world_outcome)默认轻量 status;
     # 失败/存疑态(unchanged/uncertain/challenged/errored)或显式 verbose=true 时自动全量深诊断;
@@ -785,6 +827,10 @@ def _impl(name, args, before_signal=None):
         return _t_world_trace(args)
     if name == "world_graph":
         return _t_world_graph(args)
+    if name == "world_trace_archive":
+        return _t_world_trace_archive(args)
+    if name == "world_graph_archive":
+        return _t_world_graph_archive(args)
     if name == "world_guide":
         return _t_world_guide(args)
     if name == "world_click":
@@ -982,6 +1028,7 @@ def _t_world_open(args):
         "trace_id": trace_id,
         "trace_log": [],
         "trace_step_seq": 0,
+        "trace_persistence_enabled": persistence_enabled(),
         # 世界纪元:world_navigate 成功导航 +1;跨纪元旧 el_N 全部失效
         "epoch": 0,
         "network_errors": net_errors,
@@ -1000,7 +1047,8 @@ def _t_world_open(args):
         time.sleep(0.5)
     summary = _evaluate(wid, "agentWorld.query.getPageSummary()")
     return _ok({"world_id": wid, "url": page.url, "ready": True, "headful": headful, "profile": profile, "cdp_url": cdp_url, "summary": summary,
-                "task_id": task_id, "trace_id": trace_id})
+                "task_id": task_id, "trace_id": trace_id,
+                "trace_persistence_enabled": persistence_enabled()})
 
 
 def _t_world_entities(args):
@@ -1282,6 +1330,12 @@ def _record_action_evidence(wid, action, args, before, result):
     except Exception:
         # 轨迹是附加信道，不能影响既有操作证据的记录和返回。
         pass
+    if persistence_enabled():
+        try:
+            _trace_store.append(str(w.get("task_id") or ""), trace_entry)
+        except Exception:
+            # 本地归档失败不能阻断当前动作；world_trace 仍可读取内存轨迹。
+            pass
     entry = {
         "evidence_seq": w["evidence_seq"],
         "channel": "operation-evidence",
@@ -1347,6 +1401,7 @@ def _t_world_trace(args):
         "task_id": w.get("task_id"),
         "trace_id": w.get("trace_id"),
         "task_goal": w.get("task_goal") or None,
+        "persistence_enabled": persistence_enabled(),
         "from": since,
         "to": next_since,
         "latest": latest,
@@ -1378,6 +1433,65 @@ def _t_world_graph(args):
             "evidence_latest": int(w.get("evidence_seq", 0)),
             "world_epoch": int(w.get("epoch", 0)),
         },
+    })
+
+
+def _t_world_trace_archive(args):
+    """读取关闭网页世界后仍可访问的脱敏轨迹。"""
+    task_id = str(args.get("task_id") or "")[:120]
+    if not task_id:
+        raise ValueError("task_id 不能为空")
+    if not persistence_enabled():
+        return _ok({
+            "channel": "task-trace-archive",
+            "enabled": False,
+            "task_id": task_id,
+            "traces": [],
+            "why": "本地轨迹归档默认关闭;请明确设置 AGENT_TASK_RUNTIME_PERSIST=1",
+        })
+    since = max(0, int(args.get("since", 0)))
+    limit = max(1, min(int(args.get("limit", 200)), 1000))
+    rows = [
+        item for item in _trace_store.read(task_id, limit=limit)
+        if int(item.get("step_index", 0)) > since
+    ]
+    next_since = int(rows[-1].get("step_index", since)) if rows else since
+    return _ok({
+        "channel": "task-trace-archive",
+        "schema_version": "0.1",
+        "enabled": True,
+        "task_id": task_id,
+        "from": since,
+        "to": next_since,
+        "traces": rows,
+        "storage": "本地 JSONL 追加式归档",
+    })
+
+
+def _t_world_graph_archive(args):
+    """从已归档轨迹生成关闭网页世界后的候选图。"""
+    task_id = str(args.get("task_id") or "")[:120]
+    if not task_id:
+        raise ValueError("task_id 不能为空")
+    if not persistence_enabled():
+        return _ok({
+            "channel": "task-runtime-graph-archive",
+            "enabled": False,
+            "task_id": task_id,
+            "graph": build_graph([], task_id=task_id, goal=str(args.get("goal") or "")),
+            "why": "本地轨迹归档默认关闭;请明确设置 AGENT_TASK_RUNTIME_PERSIST=1",
+        })
+    traces = _trace_store.read(task_id, limit=1000)
+    return _ok({
+        "channel": "task-runtime-graph-archive",
+        "enabled": True,
+        "task_id": task_id,
+        "graph": build_graph(
+            traces,
+            task_id=task_id,
+            goal=str(args.get("goal") or ""),
+        ),
+        "source": {"trace_count": len(traces), "storage": "本地 JSONL 追加式归档"},
     })
 
 
@@ -2474,6 +2588,11 @@ def _errored_card(wid, action, args, before_signal, exc):
             del w["trace_log"][:-200]
     except Exception:
         pass
+    if persistence_enabled():
+        try:
+            _trace_store.append(str(w.get("task_id") or ""), w["trace_log"][-1])
+        except Exception:
+            pass
     return _ok(_err_card)
 
 

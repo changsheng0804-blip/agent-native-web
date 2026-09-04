@@ -137,3 +137,13 @@
 
 达到条件后，状态只能从“候选”升级为“已验证”，不能直接称为网站完整业务模型。
 
+## 当前实现入口
+
+- `world_trace`：读取当前网页世界的脱敏轨迹；
+- `world_graph`：从当前网页世界轨迹即时生成候选图；
+- `world_trace_archive`：读取已归档的脱敏轨迹；
+- `world_graph_archive`：从已归档轨迹生成候选图；
+- `AGENT_TASK_RUNTIME_PERSIST=1`：明确开启本地轨迹归档；
+- `AGENT_TASK_RUNTIME_STORE_DIR`：可选归档目录，未设置时使用 `mcp/runtime_traces/`。
+
+归档开关默认关闭。即使开启，归档内容也只包含状态摘要、逻辑字段引用和证据编号，不包含填写文本原文。

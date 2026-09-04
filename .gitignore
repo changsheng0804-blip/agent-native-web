@@ -1,6 +1,7 @@
 # 运行时产物(不入库)
 mcp/profiles/
 mcp/screenshots/
+mcp/runtime_traces/
 __pycache__/
 *.pyc
 

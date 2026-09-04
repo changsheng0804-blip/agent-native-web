@@ -7,10 +7,12 @@
 3. 候选图保留观测到的成功与失败分支。
 """
 import json
+import tempfile
 import unittest
 
 from task_runtime import (
     TaskRuntimeGraph,
+    TraceStore,
     build_graph,
     build_trace_entry,
     normalize_page_state,
@@ -105,7 +107,38 @@ class TaskRuntimeTests(unittest.TestCase):
         self.assertIn("progressed", outcomes)
         self.assertIn("errored", outcomes)
 
+    def test_explicit_dataflow_is_preserved_without_values(self):
+        trace = build_trace_entry(
+            trace_id="trace-flow", task_id="task-flow", step_index=1,
+            action="world_act",
+            args={
+                "kind": "click",
+                "operation": "提交资料",
+                "input_bindings": [{"from": "填写资料.资料", "to": "提交资料.资料"}],
+                "output_bindings": [{"name": "提交结果", "ref": "submission.result"}],
+            },
+            before={"url": "https://example.test/form", "state": "stable"},
+            after={"url": "https://example.test/form", "state": "stable"},
+            payload={
+                "page_outcome": "progressed",
+                "situation": {"type": "form"},
+                "effect": {"verdict": "effected", "confidence": "high"},
+            }, evidence_seq=1, world_epoch=0,
+        )
+        graph = build_graph([trace], task_id="task-flow")
+        flow = graph["edges"][0]["dataflow"]
+        self.assertEqual(flow["inputs"][0]["from"], "填写资料.资料")
+        self.assertEqual(flow["outputs"][0]["ref"], "submission.result")
+        self.assertNotIn("真实值", json.dumps(trace, ensure_ascii=False))
+
+    def test_trace_store_round_trip(self):
+        trace = {"schema_version": "0.1", "task_id": "task-store", "step_index": 1}
+        with tempfile.TemporaryDirectory() as directory:
+            store = TraceStore(directory)
+            store.append("task-store", trace)
+            self.assertEqual(store.read("task-store"), [trace])
+            self.assertFalse(store.path_for("用户目标").name.endswith("用户目标.jsonl"))
+
 
 if __name__ == "__main__":
     unittest.main()
-
