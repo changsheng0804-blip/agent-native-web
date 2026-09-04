@@ -291,3 +291,18 @@ def build_graph(traces: list[dict], task_id: str = "", goal: str = "") -> dict:
         if isinstance(trace, dict):
             graph.add(trace)
     return graph.to_dict()
+
+
+def validate_transition(current_state: dict, edge: dict) -> dict:
+    """验证一条候选边的最小前置条件：当前状态必须匹配边的起点。"""
+    current_key = (current_state or {}).get("state_key")
+    if not current_key:
+        current_key = state_key(current_state or {})
+    required_key = ((edge or {}).get("preconditions") or {}).get("state_key")
+    allowed = bool(required_key and current_key == required_key)
+    return {
+        "allowed": allowed,
+        "current_state_key": current_key,
+        "required_state_key": required_key,
+        "reason": "当前状态满足迁移起点" if allowed else "当前状态不满足迁移前置条件",
+    }
