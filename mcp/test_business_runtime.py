@@ -60,6 +60,30 @@ class BusinessRuntimeTests(unittest.TestCase):
         self.assertEqual(denied["status"], "precondition_failed")
         self.assertEqual(unknown["status"], "unknown_contract")
 
+    def test_operation_check_rejects_role_scope_and_site_version(self):
+        contracts = normalize_operation_contracts([{
+            "name": "发布资料",
+            "preconditions": ["profile.complete"],
+            "required_roles": ["管理员"],
+            "required_scopes": ["profile.publish"],
+            "site_versions": ["v2"],
+        }])
+        business = project_business_state(state("complete"), RULES)
+        base = {"role": "管理员", "permission_scope": "profile.publish", "site_version": "v2"}
+        self.assertTrue(check_operation(contracts, "发布资料", business, base)["allowed"])
+        self.assertEqual(
+            check_operation(contracts, "发布资料", business, {**base, "role": "普通用户"})["status"],
+            "permission_denied",
+        )
+        self.assertEqual(
+            check_operation(contracts, "发布资料", business, {**base, "permission_scope": "profile.read"})["status"],
+            "permission_denied",
+        )
+        self.assertEqual(
+            check_operation(contracts, "发布资料", business, {**base, "site_version": "v1"})["status"],
+            "site_version_denied",
+        )
+
     def test_attach_adds_business_state_and_contract_dataflow(self):
         trace = build_trace_entry(
             trace_id="trace-business", task_id="task-business", step_index=1,
@@ -78,4 +102,3 @@ class BusinessRuntimeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

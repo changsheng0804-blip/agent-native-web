@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import re
+
 try:
     from task_runtime import sanitize_bindings, state_key
 except ImportError:
@@ -18,6 +20,14 @@ SCHEMA_VERSION = "0.1"
 
 def _text(value: object, limit: int = 160) -> str:
     return str(value or "")[:limit]
+
+
+def _text_list(value: object, limit: int = 120) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [_text(item, limit) for item in value if str(item)]
 
 
 def normalize_state_rules(rules: object) -> list[dict]:
@@ -59,16 +69,13 @@ def normalize_operation_contracts(contracts: object) -> list[dict]:
         seen.add(name)
         normalized.append({
             "name": name,
-            "preconditions": [
-                _text(item, 120) for item in (contract.get("preconditions") or [])
-                if str(item)
-            ],
+            "preconditions": _text_list(contract.get("preconditions")),
             "inputs": sanitize_bindings(contract.get("inputs")),
             "outputs": sanitize_bindings(contract.get("outputs")),
-            "effects": [
-                _text(item, 120) for item in (contract.get("effects") or [])
-                if str(item)
-            ],
+            "effects": _text_list(contract.get("effects")),
+            "required_roles": _text_list(contract.get("required_roles")),
+            "required_scopes": _text_list(contract.get("required_scopes")),
+            "site_versions": _text_list(contract.get("site_versions"), 160),
             "executor": _text(contract.get("executor"), 80) or "world_act",
             "description": _text(contract.get("description"), 200),
         })
@@ -132,6 +139,7 @@ def check_operation(
     contracts: object,
     operation: str,
     business_state: dict,
+    runtime_context: dict | None = None,
 ) -> dict:
     contract = operation_contract(contracts, operation)
     if not contract:
@@ -161,6 +169,52 @@ def check_operation(
             "current_state": state_id,
             "required_states": required,
             "reason": "当前业务状态不满足操作前置条件",
+        }
+    runtime_context = runtime_context if isinstance(runtime_context, dict) else {}
+    role = _text(runtime_context.get("role"), 120)
+    required_roles = contract.get("required_roles") or []
+    if required_roles and role not in required_roles:
+        return {
+            "allowed": False,
+            "status": "permission_denied",
+            "operation": contract["name"],
+            "contract": contract,
+            "current_role": role or None,
+            "required_roles": required_roles,
+            "reason": "当前账号角色不满足操作权限要求",
+        }
+    raw_scope = runtime_context.get("permission_scope")
+    if isinstance(raw_scope, list):
+        scopes = {_text(item, 160) for item in raw_scope if str(item)}
+    else:
+        scopes = {
+            item for item in re.split(r"[,\s]+", _text(raw_scope, 500))
+            if item
+        }
+    required_scopes = contract.get("required_scopes") or []
+    missing_scopes = [item for item in required_scopes if item not in scopes]
+    if missing_scopes:
+        return {
+            "allowed": False,
+            "status": "permission_denied",
+            "operation": contract["name"],
+            "contract": contract,
+            "current_scopes": sorted(scopes),
+            "required_scopes": required_scopes,
+            "missing_scopes": missing_scopes,
+            "reason": "当前授权范围不满足操作权限要求",
+        }
+    site_version = _text(runtime_context.get("site_version"), 160)
+    allowed_versions = contract.get("site_versions") or []
+    if allowed_versions and site_version not in allowed_versions:
+        return {
+            "allowed": False,
+            "status": "site_version_denied",
+            "operation": contract["name"],
+            "contract": contract,
+            "current_site_version": site_version or None,
+            "required_site_versions": allowed_versions,
+            "reason": "当前网站版本不在操作契约适用范围内",
         }
     return {
         "allowed": True,
@@ -196,4 +250,3 @@ def attach_business_runtime(trace: dict, rules: object, contracts: object) -> di
         if not trace.get("dataflow", {}).get("outputs"):
             trace.setdefault("dataflow", {})["outputs"] = contract.get("outputs", [])
     return trace
-

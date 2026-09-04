@@ -203,7 +203,7 @@ async def list_tools():
                     "permission_scope": {"type": "string", "description": "可选用户授权范围,只保存范围名称不保存凭据"},
                     "graph_valid_until": {"type": "integer", "description": "可选候选图有效截止时间,Unix 时间戳;到期后图标记为 expired"},
                     "business_state_rules": {"type": "array", "description": "可选显式业务状态规则;未知或多规则命中时不会猜测", "items": {"type": "object"}},
-                    "operation_contracts": {"type": "array", "description": "可选业务操作契约,包含前置状态和逻辑输入输出引用", "items": {"type": "object"}},
+                    "operation_contracts": {"type": "array", "description": "可选业务操作契约,包含前置状态、逻辑输入输出、所需角色、授权范围和适用网站版本", "items": {"type": "object"}},
                     "enforce_contracts": {"type": "boolean", "description": "是否在 world_act 执行前强制检查业务操作契约;开启后,带 operation 的动作不满足前置条件时会被拦截", "default": False},
                 },
                 "required": ["url"],
@@ -1411,12 +1411,18 @@ def _t_world_operation_check(args):
     if not operation:
         raise ValueError("operation 不能为空")
     runtime_state, business = _business_state_snapshot(wid)
-    result = check_operation(_world(wid).get("operation_contracts"), operation, business)
+    result = check_operation(
+        _world(wid).get("operation_contracts"),
+        operation,
+        business,
+        runtime_context=_runtime_context(_world(wid)),
+    )
     return _ok({
         "world_id": wid,
         "channel": "operation-precondition-check",
         "runtime_state": runtime_state,
         "business_state": business,
+        "runtime_context": _runtime_context(_world(wid)),
         "check": result,
         "executed": False,
     })
@@ -4081,7 +4087,12 @@ def _contract_gate(wid, action_args, before_signal=None):
     if not operation:
         return None
     _, business = _business_state_snapshot(wid)
-    check = check_operation(w.get("operation_contracts"), operation, business)
+    check = check_operation(
+        w.get("operation_contracts"),
+        operation,
+        business,
+        runtime_context=_runtime_context(w),
+    )
     if check.get("allowed"):
         return None
     reason = f"业务操作 {operation} 未通过前置检查: {check.get('reason', '未知原因')}"
