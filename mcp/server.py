@@ -540,13 +540,18 @@ def _impl_with_status(name, args):
                 _world(int(wid))["last_outcome_card"] = payload
         except Exception:
             pass
-    if name in {"world_state", "world_change_digest", "world_evidence", "world_guide"}:
-        return result
-    # 瘦身演进:动作类工具 (ACTION_NAMES + world_act) 与查找/查询工具默认采用轻量 status
-    # 只有显式 verbose=true 时才附带全量 frames/forms/world 深度诊断,大幅降低 Token 占用
-    light = name in ACTION_NAMES or name in ("world_act", "world_find", "world_outcome")
-    if light and args.get("verbose"):
-        light = False
+    # 瘦身演进:默认协议工具(world_act, world_find, world_outcome)默认轻量 status;
+    # 失败/存疑态(unchanged/uncertain/challenged/errored)或显式 verbose=true 时自动全量深诊断;
+    # 传统动作工具(world_click/fill/batch_fill等)保持既有契约兼容(含 forms 回显)
+    light = name in ("world_act", "world_find", "world_outcome")
+    if light:
+        try:
+            payload = _result_payload(result)
+            po = (payload or {}).get("page_outcome")
+            if args.get("verbose") or po in ("unchanged", "uncertain", "challenged", "errored"):
+                light = False
+        except Exception:
+            light = False
     return _inject_status(result, wid, light=light)
 
 
