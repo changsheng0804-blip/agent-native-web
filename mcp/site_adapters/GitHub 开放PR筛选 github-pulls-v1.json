@@ -1,0 +1,55 @@
+{
+  "schema_version": "0.1",
+  "adapter_id": "github-git-pulls",
+  "adapter_version": "1",
+  "workflow_id": "github-pull-request-read",
+  "description": "GitHub git/git 仓库公开拉取请求筛选流程的真实站点适配器",
+  "state_probes": [
+    {"id": "pull_requests_link", "role": "link", "text": "Pull requests"},
+    {"id": "pulls_list", "role": "group", "name": "group.issues"},
+    {"id": "no_results", "text": "No results"}
+  ],
+  "state_rules": [
+    {
+      "id": "github.repo",
+      "when": {"route": "https://github.com/git/git", "probes.pull_requests_link": true},
+      "description": "git/git 仓库首页"
+    },
+    {
+      "id": "github.pulls",
+      "when": {"route": "https://github.com/git/git/pulls", "probes.pulls_list": true, "probes.no_results": false},
+      "description": "拉取请求列表有结果"
+    },
+    {
+      "id": "github.pulls.empty",
+      "when": {"route_prefix": "https://github.com/git/git/pulls", "probes.no_results": true},
+      "description": "拉取请求筛选无结果"
+    }
+  ],
+  "operations": [
+    {
+      "name": "打开拉取请求列表",
+      "preconditions": ["github.repo"],
+      "outputs": [{"name": "拉取请求列表", "ref": "github.pulls"}],
+      "executor": "world_act"
+    },
+    {
+      "name": "筛选开放拉取请求",
+      "preconditions": ["github.pulls"],
+      "outputs": [{"name": "筛选结果", "ref": "github.pulls"}],
+      "executor": "world_act"
+    },
+    {
+      "name": "筛选不存在的拉取请求",
+      "preconditions": ["github.pulls"],
+      "outputs": [{"name": "空结果", "ref": "github.pulls.empty"}],
+      "executor": "world_act"
+    },
+    {
+      "name": "查看拉取请求列表",
+      "preconditions": ["github.pulls"],
+      "outputs": [{"name": "列表", "ref": "github.pulls"}],
+      "executor": "world_act"
+    }
+  ]
+}

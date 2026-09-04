@@ -242,6 +242,21 @@ class TaskRuntimeTests(unittest.TestCase):
         mismatch = validate_replay_step(trace, {**edge, "operation": "提交资料"})
         self.assertEqual(mismatch["status"], "failed")
         self.assertFalse(mismatch["checks"]["operation"]["ok"])
+        business_trace = {
+            **trace,
+            "business_before": {"status": "matched", "state_id": "profile.empty"},
+            "business_after": {"status": "matched", "state_id": "profile.partial"},
+        }
+        business_edge = {
+            **edge,
+            "from": "state-from-another-session",
+            "to": "state-to-another-session",
+            "business": {"from": ["profile.empty"], "to": ["profile.partial"]},
+        }
+        fallback = validate_replay_step(business_trace, business_edge)
+        self.assertEqual(fallback["status"], "passed")
+        self.assertEqual(fallback["checks"]["from_state"]["match_mode"], "business")
+        self.assertEqual(fallback["checks"]["to_state"]["match_mode"], "business")
 
 
 if __name__ == "__main__":

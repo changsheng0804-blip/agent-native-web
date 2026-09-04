@@ -51,6 +51,21 @@ class BusinessRuntimeTests(unittest.TestCase):
         self.assertEqual(result["status"], "ambiguous")
         self.assertIsNone(result["state_id"])
 
+    def test_nested_probe_and_route_prefix_can_project_state(self):
+        runtime_state = normalize_page_state({
+            "url": "https://github.com/git/git/pulls/some-filter",
+            "state": "stable",
+            "probes": {"no_results": True},
+        })
+        result = project_business_state(runtime_state, [{
+            "id": "github.pulls.empty",
+            "when": {
+                "route_prefix": "https://github.com/git/git/pulls",
+                "probes.no_results": True,
+            },
+        }])
+        self.assertEqual(result["state_id"], "github.pulls.empty")
+
     def test_operation_check_requires_declared_precondition(self):
         contracts = normalize_operation_contracts(CONTRACTS)
         allowed = check_operation(contracts, "提交资料", project_business_state(state("complete"), RULES))

@@ -1494,7 +1494,7 @@ def _t_world_operation_check(args):
 
 
 def _graph_trace_source(w, args):
-    """收集当前世界及调用方明确指定的归档轨迹,并去除重复轨迹编号。"""
+    """收集当前世界及调用方明确指定的归档轨迹,按任务和步骤去除重复记录。"""
     traces = list(w.get("trace_log", []))
     requested_task_ids = []
     for item in args.get("task_ids") or []:
@@ -1503,10 +1503,14 @@ def _graph_trace_source(w, args):
             requested_task_ids.append(task_id)
     missing_task_ids = []
     archived_trace_count = 0
-    known_trace_ids = {
-        str(trace.get("trace_id"))
+    known_trace_keys = {
+        (
+            str(trace.get("task_id") or ""),
+            str(trace.get("step_index") or ""),
+            str(trace.get("trace_id") or ""),
+        )
         for trace in traces
-        if isinstance(trace, dict) and trace.get("trace_id")
+        if isinstance(trace, dict) and (trace.get("task_id") or trace.get("trace_id"))
     }
     if requested_task_ids:
         if persistence_enabled():
@@ -1516,12 +1520,15 @@ def _graph_trace_source(w, args):
                     missing_task_ids.append(task_id)
                     continue
                 for row in rows:
-                    trace_id = str(row.get("trace_id") or "")
-                    if trace_id and trace_id in known_trace_ids:
+                    trace_key = (
+                        str(row.get("task_id") or task_id),
+                        str(row.get("step_index") or ""),
+                        str(row.get("trace_id") or ""),
+                    )
+                    if trace_key in known_trace_keys:
                         continue
                     traces.append(row)
-                    if trace_id:
-                        known_trace_ids.add(trace_id)
+                    known_trace_keys.add(trace_key)
                     archived_trace_count += 1
         else:
             missing_task_ids = list(requested_task_ids)
@@ -1553,6 +1560,7 @@ def _t_world_task_plan(args):
         str(args.get("goal_state") or ""),
         max_steps=int(args.get("max_steps", 8)),
         allow_candidate=bool(args.get("allow_candidate", False)),
+        current_business_state=business.get("state_id"),
     )
     return _ok({
         "world_id": wid,
@@ -2417,6 +2425,27 @@ def _page_signal_snapshot(wid):
         ) or []
     except Exception:
         form_fields = []
+    probes = {}
+    for spec in (w.get("site_adapter") or {}).get("state_probes", []) or []:
+        if not isinstance(spec, dict):
+            continue
+        probe_id = spec.get("id")
+        query = dict(spec.get("query") or {})
+        if not probe_id or not query:
+            continue
+        if "in_viewport" in query:
+            query["inViewport"] = query.pop("in_viewport")
+        try:
+            matches = _evaluate(
+                wid,
+                "(f) => agentWorld.query.findEntities(f)",
+                query,
+            ) or []
+            probes[str(probe_id)[:120]] = (
+                len(matches) if spec.get("mode") == "count" else bool(matches)
+            )
+        except Exception:
+            probes[str(probe_id)[:120]] = False
     try:
         title = w["page"].title()[:200]
     except Exception:
@@ -2434,6 +2463,7 @@ def _page_signal_snapshot(wid):
         "dialogs": overlays.get("dialogs", []) or core.get("dialogs", []) or [],
         "menus": overlays.get("menus", []) or [],
         "form_fields": form_fields,
+        "probes": probes,
         "_net_err_cursor": len(net_errors),
         "_console_err_cursor": len(console_errors),
     }

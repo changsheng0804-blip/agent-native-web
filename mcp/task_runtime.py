@@ -112,6 +112,15 @@ def normalize_page_state(signal: dict | None, outcome: str | None = None) -> dic
             overlays.append({"kind": kind, "ref": _overlay_ref(item)})
     overlays.sort(key=lambda item: (item["kind"], item["ref"]))
 
+    raw_probes = signal.get("probes") or {}
+    probes = {}
+    if isinstance(raw_probes, dict):
+        for key, value in raw_probes.items():
+            if not isinstance(key, str) or not key[:120]:
+                continue
+            if isinstance(value, (bool, int, float)):
+                probes[key[:120]] = value
+
     # page_outcome 是页面观测结果，不等于业务事实；只把异常/阻断类结果
     # 作为状态提示保留，正常 progressed 不强行写入状态身份。
     outcome_hint = outcome if outcome in ("challenged", "errored", "uncertain") else None
@@ -121,6 +130,7 @@ def normalize_page_state(signal: dict | None, outcome: str | None = None) -> dic
         "form_state": form_state,
         "form_fields": fields,
         "overlays": overlays,
+        "probes": probes,
         "outcome_hint": outcome_hint,
     }
     state["state_key"] = state_key(state)
@@ -522,11 +532,13 @@ def plan_graph(
     *,
     max_steps: int = 8,
     allow_candidate: bool = False,
+    current_business_state: str | None = None,
 ) -> dict:
     """在已观测图上做确定性的有限步路径规划。
 
     这不是概率生成，也不是让模型凭经验猜按钮顺序：只沿图中已经存在的
-    起点匹配边搜索。默认只允许 verified 边；探索阶段可显式允许 candidate
+    起点匹配边搜索。若当前业务状态已明确,会把同一业务状态的历史运行时节点
+    作为兼容起点,避免无关页面细节波动阻断复用。默认只允许 verified 边；探索阶段可显式允许 candidate
     或 replayed 边，但返回结果会标明该路径尚未达到安全发布条件。
     """
     graph = graph if isinstance(graph, dict) else {}
@@ -539,6 +551,7 @@ def plan_graph(
 
     base = {
         "current_state_key": current,
+        "current_business_state": str(current_business_state or "") or None,
         "goal_state": goal or None,
         "max_steps": step_limit,
         "allow_candidate": bool(allow_candidate),
@@ -609,8 +622,14 @@ def plan_graph(
             "verification": verification,
         }
 
-    queue = deque([(current, [])])
-    visited = {current}
+    start_keys = [current]
+    if current_business_state:
+        start_keys.extend(
+            key for key, snapshot in state_snapshots.items()
+            if snapshot.get("business_state") == current_business_state and key != current
+        )
+    queue = deque((key, []) for key in start_keys)
+    visited = set(start_keys)
     examined = 0
     while queue:
         state_now, path = queue.popleft()
@@ -671,11 +690,26 @@ def validate_replay_step(trace: dict, edge: dict) -> dict:
     expected_to = str(edge.get("to") or "")
     observed_from = str(before.get("state_key") or "")
     observed_to = str(after.get("state_key") or "")
+    trace_before_business = trace.get("business_before") or {}
+    trace_after_business = trace.get("business_after") or {}
+    edge_business = edge.get("business") or {}
+    observed_from_business = str(trace_before_business.get("state_id") or "")
+    observed_to_business = str(trace_after_business.get("state_id") or "")
+    from_exact = bool(expected_from and observed_from == expected_from)
+    from_business = bool(
+        observed_from_business and observed_from_business in (edge_business.get("from") or [])
+    )
+    to_exact = bool(expected_to and observed_to == expected_to)
+    to_business = bool(
+        observed_to_business and observed_to_business in (edge_business.get("to") or [])
+    )
     checks = {
         "from_state": {
-            "ok": bool(expected_from and observed_from == expected_from),
+            "ok": from_exact or from_business,
+            "match_mode": "exact" if from_exact else ("business" if from_business else "none"),
             "expected": expected_from or None,
             "observed": observed_from or None,
+            "observed_business_state": observed_from_business or None,
         },
         "operation": {
             "ok": bool(expected_operation and observed_operation == expected_operation),
@@ -683,9 +717,11 @@ def validate_replay_step(trace: dict, edge: dict) -> dict:
             "observed": observed_operation or None,
         },
         "to_state": {
-            "ok": bool(expected_to and observed_to == expected_to),
+            "ok": to_exact or to_business,
+            "match_mode": "exact" if to_exact else ("business" if to_business else "none"),
             "expected": expected_to or None,
             "observed": observed_to or None,
+            "observed_business_state": observed_to_business or None,
         },
         "page_outcome": {
             "ok": bool(expected_outcomes and observed_outcome in expected_outcomes),

@@ -82,6 +82,34 @@ def normalize_operation_contracts(contracts: object) -> list[dict]:
     return normalized
 
 
+def normalize_state_probes(probes: object) -> list[dict]:
+    """规范化站点适配器的语义状态探针,禁止携带任意脚本。"""
+    if not isinstance(probes, list):
+        return []
+    normalized = []
+    seen = set()
+    allowed = ("role", "tag", "text", "name", "interactive", "in_viewport")
+    for probe in probes:
+        if not isinstance(probe, dict):
+            continue
+        probe_id = _text(probe.get("id"), 120)
+        if not probe_id or probe_id in seen:
+            continue
+        query = {}
+        for key in allowed:
+            if probe.get(key) is not None:
+                query[key] = probe[key] if key in ("interactive", "in_viewport") else _text(probe[key], 160)
+        if not query:
+            continue
+        seen.add(probe_id)
+        normalized.append({
+            "id": probe_id,
+            "query": query,
+            "mode": _text(probe.get("mode"), 20) or "exists",
+        })
+    return normalized
+
+
 def normalize_site_adapter(adapter: object) -> dict:
     """把站点业务适配器收束为可复用的显式配置。
 
@@ -102,6 +130,7 @@ def normalize_site_adapter(adapter: object) -> dict:
         "adapter_version": _text(adapter.get("adapter_version") or adapter.get("version"), 80),
         "workflow_id": _text(adapter.get("workflow_id"), 120),
         "site_version": _text(adapter.get("site_version"), 160),
+        "state_probes": normalize_state_probes(adapter.get("state_probes")),
         "state_rules": normalize_state_rules(state_rules),
         "operation_contracts": normalize_operation_contracts(contracts),
         "description": _text(adapter.get("description"), 240),
@@ -113,7 +142,14 @@ def _match_condition(runtime_state: dict, key: str, expected: object) -> bool:
         return any(item.get("kind") == expected for item in runtime_state.get("overlays", []))
     if key == "has_any_overlay":
         return bool(runtime_state.get("overlays")) == bool(expected)
-    actual = runtime_state.get(key)
+    if key == "route_prefix":
+        return str(runtime_state.get("route") or "").startswith(str(expected))
+    actual = runtime_state
+    for part in str(key).split("."):
+        if not isinstance(actual, dict):
+            actual = None
+            break
+        actual = actual.get(part)
     if isinstance(expected, list):
         return actual in expected
     return actual == expected

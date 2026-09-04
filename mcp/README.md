@@ -63,3 +63,11 @@ world_adapter_compare      站点适配器版本兼容性检查
 ```
 
 站点适配器 JSON 只能从 `site_adapters/` 受控目录加载。它是显式业务配置，包含状态规则、操作契约和适用版本，不会自动读取或推断网站后端逻辑。
+
+GitHub 真实流程闭环可运行：
+
+```bash
+python test_real_github_task_graph.py
+```
+
+验证记录见 [真实站点任务图闭环验证报告](../docs/真实站点任务图闭环验证 GitHub.md)。该测试只读公开页面，轨迹写入临时目录并在结束后清理。
