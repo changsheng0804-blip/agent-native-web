@@ -41,6 +41,7 @@ TIMEOUT_OVERRIDES = {
     "test_fingerprint_real.py": 900,  # 六站 × 2 次进站 + 指纹采样
     "test_map_real.py": 900,          # 六站地图体检
     "test_real_github_task_graph.py": 900,  # GitHub 真实任务图闭环
+    "test_real_github_task_graph_ab.py": 1200,  # GitHub 任务图 A/B 对照
     "validate_closed_loop.py": 1200,  # 全量:真站 8 场景 + waitFor 专项
     "validate_closed_loop.py --local": 600,  # 本地 5 场景
     "test_receipt_metrics.py": 300,  # R4 度量:固定电池 ×3 独立重复,约 200s
@@ -96,6 +97,7 @@ SCOPES = {
     "test_map_real.py": ["map"],
     "test_channels_real.py": ["channels"],
     "test_real_github_task_graph.py": ["task-runtime", "real-site"],
+    "test_real_github_task_graph_ab.py": ["task-runtime", "real-site", "benchmark"],
 }
 
 # 别名:常用改动面 → 推荐 scope 组合("--scope 别名" 一次跑多个面)
@@ -161,6 +163,7 @@ GROUPS = {
             "test_map_real.py",       # 地图真站六站体检
             "test_channels_real.py",  # 四条页面信道真站体检(GF弹窗/GitHub导览)
             "test_real_github_task_graph.py",  # GitHub 任务图真实闭环
+            "test_real_github_task_graph_ab.py",  # GitHub 任务图 A/B 对照
             "validate_closed_loop.py",  # 闭环判定一致性全量(真站 8 场景 + waitFor 专项)
         ],
     },

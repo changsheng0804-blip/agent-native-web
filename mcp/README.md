@@ -71,3 +71,11 @@ python test_real_github_task_graph.py
 ```
 
 验证记录见 [真实站点任务图闭环验证报告](../docs/真实站点任务图闭环验证 GitHub.md)。该测试只读公开页面，轨迹写入临时目录并在结束后清理。
+
+GitHub 任务图 A/B 对照可运行：
+
+```bash
+python test_real_github_task_graph_ab.py
+```
+
+对照记录见 [真实站点任务图 A/B 对照报告](../docs/A-B对照基准 GitHub.md)。A 组每次重新探索页面，B 组先读取任务图再规划；两组动作相同，重点观察复用、安全和执行成本。

@@ -19,6 +19,7 @@ Agent-Native Web（智能体原生网页）让智能体可以在网页世界中�
 - [MCP 服务器](mcp/server.py)
 - [站点业务适配器](mcp/site_adapters/)
 - [真实站点任务图闭环验证报告](docs/真实站点任务图闭环验证 GitHub.md)
+- [真实站点任务图 A/B 对照报告](docs/A-B对照基准 GitHub.md)
 - [浏览器扩展内核](extension/)
 - [智能体技能包](skills/agent-world/SKILL.md)
 - [测试夹具](tests/fixtures/)
