@@ -542,17 +542,11 @@ def _impl_with_status(name, args):
             pass
     if name in {"world_state", "world_change_digest", "world_evidence", "world_guide"}:
         return result
-    # Phase 2 Diff-First 载荷:协议 6 词工具默认轻量 status;
-    # verbose=true 或 page_outcome 为失败/存疑态(unchanged/uncertain/challenged/errored)时自动全量深诊断
-    light = name in ("world_act", "world_find", "world_outcome")
-    if light:
-        try:
-            payload = _result_payload(result)
-            po = (payload or {}).get("page_outcome")
-            if args.get("verbose") or po in ("unchanged", "uncertain", "challenged", "errored"):
-                light = False
-        except Exception:
-            light = False
+    # 瘦身演进:动作类工具 (ACTION_NAMES + world_act) 与查找/查询工具默认采用轻量 status
+    # 只有显式 verbose=true 时才附带全量 frames/forms/world 深度诊断,大幅降低 Token 占用
+    light = name in ACTION_NAMES or name in ("world_act", "world_find", "world_outcome")
+    if light and args.get("verbose"):
+        light = False
     return _inject_status(result, wid, light=light)
 
 
@@ -2217,7 +2211,11 @@ def _outcome_card(wid, action, args, ret, before_signal):
             "anomaly": _anomaly,
         },
         "overlays": {"new": new_overlays[:8], "gone": gone_overlays[:8]},
-        "next": {"guide_stale": guide_stale, "suggested": next_suggested, "candidates": []},
+        "next": {
+            "guide_stale": guide_stale,
+            "suggested": next_suggested,
+            "candidates": (occlusion.get("candidates") or []) if (occlusion and occlusion.get("covered")) else [],
+        },
         "evidence_seq": int(w.get("evidence_seq", 0)) + 1,
         "changes_seq": {"before": before.get("changes_seq", 0), "after": after.get("changes_seq", 0)},
         "world_epoch": int(w.get("epoch", 0)),
@@ -2831,11 +2829,28 @@ def _occlusion_probe(wid, target_id=None, x=None, y=None):
                     covered = ['dialog', 'alertdialog', 'menu'].includes(role)
                         || /backdrop|overlay|modal/i.test(cls);
                 }
+                let candidates = [];
+                if (covered && top) {
+                    try {
+                        const btns = top.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]');
+                        for (let b of Array.from(btns).slice(0, 3)) {
+                            const bText = (b.innerText || b.getAttribute('aria-label') || b.getAttribute('title') || b.value || '').trim();
+                            const bId = b.getAttribute('id') || '';
+                            candidates.push({
+                                tag: b.tagName.toLowerCase(),
+                                id: bId,
+                                text: bText.slice(0, 40),
+                                reason: '遮挡层内部可交互入口(可尝试点击以关闭或完成验证)'
+                            });
+                        }
+                    } catch (e) {}
+                }
                 return {
                     covered: covered,
                     covered_by: { tag, role, id: top.id || '', cls },
                     at: [cx, cy],
                     target_tag: el && el._el ? el._el.tagName.toLowerCase() : null,
+                    candidates: candidates,
                 };
             }""",
             {"id": target_id, "x": x, "y": y},
@@ -2871,6 +2886,8 @@ def _occlusion_attach(ret, probe):
         "at": at,
         "action": action,
     }
+    if probe.get("candidates"):
+        ret["occlusion"]["candidates"] = probe["candidates"]
     ret["obscured_note"] = f"目标被 {label} 遮挡于 {at}:{action}"
 
 
