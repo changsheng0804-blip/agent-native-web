@@ -145,7 +145,11 @@ async def main():
                 success_one = await explore(session)
                 success_two = await explore(session)
                 failure = await explore(session, NO_RESULT_QUERY)
-                task_ids = [success_one["task_id"], success_two["task_id"], failure["task_id"]]
+                exploration_runs = [success_one, success_two, failure]
+                task_ids = [item["task_id"] for item in exploration_runs]
+                exploration_trace_count = sum(
+                    len(item["traces"]) for item in exploration_runs
+                )
 
                 bundle = await call(session, "world_graph_bundle", {
                     "task_ids": task_ids,
@@ -240,10 +244,18 @@ async def main():
                         "task_ids": task_ids,
                     })
                     assert replay_failure["replay"]["status"] == "passed", replay_failure
+                    replay_trace_count = len(current_trace["traces"])
                     print(json.dumps({
                         "site": "GitHub git/git",
                         "task_ids": task_ids,
                         "explorations": 3,
+                        "metrics": {
+                            "exploration_trace_count": exploration_trace_count,
+                            "fresh_replay_action_count": replay_trace_count,
+                            "safe_plan_block_count": 1,
+                            "replay_check_count": 2,
+                            "direct_speed_comparison": "not_measured",
+                        },
                         "bundle_status": graph["status"],
                         "safe_plan": safe_plan["plan"]["status"],
                         "exploratory_plan": exploratory_plan["plan"]["status"],
