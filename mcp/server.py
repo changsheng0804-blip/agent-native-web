@@ -16,6 +16,7 @@ Agent World MCP Server
   world_state    页面状态信道(读取最新整体状态)
   world_business_state 业务状态信道(由显式规则投影)
   world_operation_check 业务操作前置检查(只检查不执行)
+  world_task_plan 任务路径规划(从运行时图寻找可复用路径,只规划不执行)
   world_change_digest 变化摘要信道(读取压缩后的变化)
   world_evidence 操作证据信道(读取动作前后证据)
   world_trace    任务轨迹信道(读取脱敏轨迹)
@@ -77,6 +78,8 @@ try:
         new_id,
         normalize_page_state,
         persistence_enabled,
+        plan_graph,
+        state_key,
     )
 except ImportError:  # 允许从仓库根目录以模块方式加载
     from mcp.task_runtime import (
@@ -86,6 +89,8 @@ except ImportError:  # 允许从仓库根目录以模块方式加载
         new_id,
         normalize_page_state,
         persistence_enabled,
+        plan_graph,
+        state_key,
     )
 
 # Playwright 同步 API 强依赖 greenlet 协程上下文，必须在单一固定 OS 工作线程内运行，杜绝多线程竞争切换
@@ -199,6 +204,7 @@ async def list_tools():
                     "graph_valid_until": {"type": "integer", "description": "可选候选图有效截止时间,Unix 时间戳;到期后图标记为 expired"},
                     "business_state_rules": {"type": "array", "description": "可选显式业务状态规则;未知或多规则命中时不会猜测", "items": {"type": "object"}},
                     "operation_contracts": {"type": "array", "description": "可选业务操作契约,包含前置状态和逻辑输入输出引用", "items": {"type": "object"}},
+                    "enforce_contracts": {"type": "boolean", "description": "是否在 world_act 执行前强制检查业务操作契约;开启后,带 operation 的动作不满足前置条件时会被拦截", "default": False},
                 },
                 "required": ["url"],
             },
@@ -340,6 +346,22 @@ async def list_tools():
                     "operation": {"type": "string", "description": "业务操作名,例如提交资料"},
                 },
                 "required": ["world_id", "operation"],
+            },
+        ),
+        types.Tool(
+            name="world_task_plan",
+            description="任务路径规划:从当前运行时状态出发,沿已观测的任务图寻找目标业务状态;默认只采用 verified(已通过回放与分支检查)边,allow_candidate=true 仅用于探索,不会执行动作。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "goal_state": {"type": "string", "description": "目标业务状态编号,例如 profile.complete"},
+                    "task_ids": {"type": "array", "description": "可选历史任务实例编号;明确提供后会把已归档轨迹加入规划来源", "items": {"type": "string"}},
+                    "max_steps": {"type": "integer", "description": "最多规划多少步,默认 8", "default": 8},
+                    "min_replays": {"type": "integer", "description": "规划时采用的独立回放次数阈值,默认 2"},
+                    "allow_candidate": {"type": "boolean", "description": "是否允许把 candidate/replayed(未完全验证)边用于探索性规划,默认 false", "default": False},
+                },
+                "required": ["world_id", "goal_state"],
             },
         ),
         types.Tool(
@@ -627,6 +649,7 @@ async def list_tools():
                     "operation_id": {"type": "string", "description": "可选操作编号,用于把相邻步骤绑定到同一业务操作"},
                     "executor": {"type": "string", "description": "可选执行器标记,例如 world_act、webmcp 或授权接口"},
                     "task_id": {"type": "string", "description": "可选任务实例编号,不填写时继承 world_open 的任务编号"},
+                    "enforce_contracts": {"type": "boolean", "description": "可选开启本次动作的契约强制检查;不会关闭 world_open 已开启的严格模式;带 operation 时失败则不点击页面", "default": False},
                     "input_bindings": {"type": "array", "description": "可选输入数据绑定,只填写逻辑引用,例如 [{\"from\":\"填写资料.资料\",\"to\":\"提交资料.资料\"}]", "items": {"type": "object"}},
                     "output_bindings": {"type": "array", "description": "可选输出数据绑定,只填写逻辑引用,不填写真实值,例如 [{\"name\":\"资料\",\"ref\":\"profile\"}]", "items": {"type": "object"}},
                 },
@@ -713,7 +736,7 @@ def _impl_with_status(name, args):
         except Exception:
             pass
     # 独立信道工具(world_state/digest/evidence/guide)自带信道结构,不再附加大 status
-    if name in {"world_state", "world_business_state", "world_operation_check", "world_change_digest", "world_evidence", "world_trace", "world_graph", "world_trace_archive", "world_graph_archive", "world_graph_assess", "world_graph_bundle", "world_guide"}:
+    if name in {"world_state", "world_business_state", "world_operation_check", "world_task_plan", "world_change_digest", "world_evidence", "world_trace", "world_graph", "world_trace_archive", "world_graph_archive", "world_graph_assess", "world_graph_bundle", "world_guide"}:
         return result
     # 瘦身演进:默认协议工具(world_act, world_find, world_outcome)默认轻量 status;
     # 失败/存疑态(unchanged/uncertain/challenged/errored)或显式 verbose=true 时自动全量深诊断;
@@ -918,6 +941,8 @@ def _impl(name, args, before_signal=None):
         return _t_world_business_state(args)
     if name == "world_operation_check":
         return _t_world_operation_check(args)
+    if name == "world_task_plan":
+        return _t_world_task_plan(args)
     if name == "world_change_digest":
         return _t_world_change_digest(args)
     if name == "world_evidence":
@@ -1123,6 +1148,7 @@ def _t_world_open(args):
         graph_valid_until = None
     business_state_rules = normalize_state_rules(args.get("business_state_rules"))
     operation_contracts = normalize_operation_contracts(args.get("operation_contracts"))
+    enforce_contracts = bool(args.get("enforce_contracts", False))
 
     _worlds[wid] = {
         "handle": handle,
@@ -1149,6 +1175,7 @@ def _t_world_open(args):
         "graph_valid_until": graph_valid_until,
         "business_state_rules": business_state_rules,
         "operation_contracts": operation_contracts,
+        "enforce_contracts": enforce_contracts,
         # 世界纪元:world_navigate 成功导航 +1;跨纪元旧 el_N 全部失效
         "epoch": 0,
         "network_errors": net_errors,
@@ -1173,7 +1200,8 @@ def _t_world_open(args):
                 "role": role, "permission_scope": permission_scope,
                 "graph_valid_until": graph_valid_until,
                 "business_state_rule_count": len(business_state_rules),
-                "operation_contract_count": len(operation_contracts)})
+                "operation_contract_count": len(operation_contracts),
+                "enforce_contracts": enforce_contracts})
 
 
 def _t_world_entities(args):
@@ -1353,6 +1381,11 @@ def _business_state_snapshot(wid):
     page_signal = _page_signal_snapshot(wid)
     runtime_state = normalize_page_state(page_signal)
     business = project_business_state(runtime_state, w.get("business_state_rules"))
+    # 业务状态一旦被明确匹配,它必须成为运行时状态身份的一部分。
+    # 否则两个页面事实相同但业务语义不同的节点会被错误合并。
+    if business.get("status") == "matched":
+        runtime_state["business_state"] = business["state_id"]
+        runtime_state["state_key"] = state_key(runtime_state)
     return runtime_state, business
 
 
@@ -1386,6 +1419,75 @@ def _t_world_operation_check(args):
         "business_state": business,
         "check": result,
         "executed": False,
+    })
+
+
+def _t_world_task_plan(args):
+    """从当前运行时状态沿任务图规划路径,不执行任何页面动作。"""
+    wid = int(args["world_id"])
+    w = _world(wid)
+    runtime_state, business = _business_state_snapshot(wid)
+    traces = list(w.get("trace_log", []))
+    requested_task_ids = []
+    for item in args.get("task_ids") or []:
+        task_id = str(item or "")[:120]
+        if task_id and task_id not in requested_task_ids:
+            requested_task_ids.append(task_id)
+    missing_task_ids = []
+    archived_trace_count = 0
+    known_trace_ids = {
+        str(trace.get("trace_id"))
+        for trace in traces
+        if isinstance(trace, dict) and trace.get("trace_id")
+    }
+    if requested_task_ids:
+        if persistence_enabled():
+            for task_id in requested_task_ids[:50]:
+                rows = _trace_store.read(task_id, limit=1000)
+                if not rows:
+                    missing_task_ids.append(task_id)
+                    continue
+                for row in rows:
+                    trace_id = str(row.get("trace_id") or "")
+                    if trace_id and trace_id in known_trace_ids:
+                        continue
+                    traces.append(row)
+                    if trace_id:
+                        known_trace_ids.add(trace_id)
+                    archived_trace_count += 1
+        else:
+            missing_task_ids = list(requested_task_ids)
+    graph = build_graph(
+        traces,
+        task_id=str(w.get("task_id") or ""),
+        goal=str(w.get("task_goal") or ""),
+        min_replays=int(args.get("min_replays", 2)),
+        valid_until=w.get("graph_valid_until"),
+        context=_runtime_context(w),
+    )
+    plan = plan_graph(
+        graph,
+        runtime_state.get("state_key"),
+        str(args.get("goal_state") or ""),
+        max_steps=int(args.get("max_steps", 8)),
+        allow_candidate=bool(args.get("allow_candidate", False)),
+    )
+    return _ok({
+        "world_id": wid,
+        "channel": "task-plan",
+        "runtime_state": runtime_state,
+        "business_state": business,
+        "graph_status": graph.get("status"),
+        "plan": plan,
+        "executed": False,
+        "source": {
+            "trace_count": graph.get("trace_count", 0),
+            "current_trace_count": len(w.get("trace_log", [])),
+            "archived_trace_count": archived_trace_count,
+            "task_ids": requested_task_ids,
+            "missing_task_ids": missing_task_ids,
+            "graph": "当前世界内存轨迹及调用方明确指定的归档轨迹",
+        },
     })
 
 
@@ -3968,6 +4070,36 @@ def _act_one(wid, step, before_signal):
     return result
 
 
+def _contract_gate(wid, action_args, before_signal=None):
+    """严格模式的执行前闸门:契约失败时记录 errored,但不触碰页面。"""
+    w = _world(wid)
+    if not (w.get("enforce_contracts") or bool(action_args.get("enforce_contracts"))):
+        return None
+    operation = str(action_args.get("operation") or "").strip()
+    # 兼容已有低层调用:没有声明业务 operation 时仍允许原有 world_act 行为。
+    # 一旦声明 operation,严格模式就不能绕过契约。
+    if not operation:
+        return None
+    _, business = _business_state_snapshot(wid)
+    check = check_operation(w.get("operation_contracts"), operation, business)
+    if check.get("allowed"):
+        return None
+    reason = f"业务操作 {operation} 未通过前置检查: {check.get('reason', '未知原因')}"
+    card = _errored_card(
+        wid,
+        "world_act.contract",
+        action_args,
+        before_signal,
+        ValueError(reason),
+    )
+    payload = _result_payload(card)
+    if payload:
+        payload["contract_check"] = check
+        payload["executed"] = False
+        return _ok(payload)
+    return card
+
+
 def _t_world_find(args):
     """默认协议:按条件定位构件(替代 world_entities/world_resolve 的日常用法)。
 
@@ -4075,6 +4207,11 @@ def _t_world_act(args, before_signal=None):
             except Exception:
                 before = None
             try:
+                blocked = _contract_gate(wid, step, before)
+                if blocked is not None:
+                    card = _result_payload(blocked)
+                    cards.append(card)
+                    break
                 res = _act_one(wid, step, before)
                 card = _result_payload(res)
             except Exception as e:
@@ -4109,6 +4246,9 @@ def _t_world_act(args, before_signal=None):
         except Exception:
             before_signal = None
     try:
+        blocked = _contract_gate(wid, args, before_signal)
+        if blocked is not None:
+            return blocked
         return _act_one(wid, args, before_signal)
     except Exception as e:
         return _errored_card(wid, f"world_act({kind})", args, before_signal, e)

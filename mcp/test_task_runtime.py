@@ -17,6 +17,7 @@ from task_runtime import (
     build_graph,
     build_trace_entry,
     normalize_page_state,
+    plan_graph,
     sanitize_action,
     stable_route,
 )
@@ -165,6 +166,46 @@ class TaskRuntimeTests(unittest.TestCase):
         expired = assess_graph(graph, expected_outcomes=["progressed"], valid_until=1)
         self.assertEqual(expired["status"], "expired")
         self.assertEqual(expired["edges"][0]["verification"]["status"], "expired")
+
+    def test_planner_requires_verified_edges_unless_exploring(self):
+        graph = {
+            "states": [
+                {"state_key": "state-empty", "snapshot": {"business_state": "profile.empty"}},
+                {"state_key": "state-partial", "snapshot": {"business_state": "profile.partial"}},
+                {"state_key": "state-complete", "snapshot": {"business_state": "profile.complete"}},
+            ],
+            "edges": [
+                {
+                    "edge_id": "edge-fill-1", "from": "state-empty", "to": "state-partial",
+                    "operation": "填写资料", "status": "candidate",
+                    "verification": {"status": "candidate"},
+                    "business": {"to": ["profile.partial"]},
+                },
+                {
+                    "edge_id": "edge-fill-2", "from": "state-partial", "to": "state-complete",
+                    "operation": "补全资料", "status": "candidate",
+                    "verification": {"status": "candidate"},
+                    "business": {"to": ["profile.complete"]},
+                },
+            ],
+        }
+        safe = plan_graph(graph, "state-empty", "profile.complete")
+        self.assertEqual(safe["status"], "blocked")
+        exploratory = plan_graph(
+            graph, "state-empty", "profile.complete", allow_candidate=True,
+        )
+        self.assertEqual(exploratory["status"], "ready")
+        self.assertTrue(exploratory["used_candidate"])
+        self.assertFalse(exploratory["publishable"])
+        self.assertEqual([step["operation"] for step in exploratory["steps"]], ["填写资料", "补全资料"])
+        verified_graph = json.loads(json.dumps(graph))
+        for edge in verified_graph["edges"]:
+            edge["status"] = "verified"
+            edge["verification"]["status"] = "verified"
+        verified = plan_graph(verified_graph, "state-empty", "profile.complete")
+        self.assertEqual(verified["status"], "ready")
+        self.assertTrue(verified["all_verified"])
+        self.assertTrue(verified["publishable"])
 
 
 if __name__ == "__main__":

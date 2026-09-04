@@ -63,6 +63,13 @@ async def main():
                     "world_id": wid, "operation": "填写资料",
                 })
                 assert allowed["check"]["allowed"] is True
+                empty_plan = await call(session, "world_task_plan", {
+                    "world_id": wid,
+                    "goal_state": "profile.complete",
+                    "allow_candidate": True,
+                })
+                assert empty_plan["plan"]["status"] == "blocked"
+                assert empty_plan["executed"] is False
 
                 found = await call(session, "world_find", {"world_id": wid, "q": "用户名"})
                 target = next(item["id"] for item in found["matches"] if item.get("interactive"))
@@ -133,6 +140,53 @@ async def main():
                 assert bundle["enabled"] is True
                 assert bundle["source"]["task_count"] == 1
                 assert bundle["graph"]["status"] == "candidate"
+
+                # 严格模式:业务操作不满足前置条件时,world_act 只产生错误证据卡,
+                # 不应真正点击页面上的 Continue。
+                strict_open = await call(session, "world_open", {
+                    "url": FORM_URI,
+                    "wait_ms": 500,
+                    "task_goal": "提交资料",
+                    "business_state_rules": [
+                        {"id": "profile.empty", "when": {"form_state": "empty", "outcome_hint": None}},
+                        {"id": "profile.complete", "when": {"form_state": "complete", "outcome_hint": None}},
+                    ],
+                    "operation_contracts": [
+                        {"name": "提交资料", "preconditions": ["profile.complete"]},
+                    ],
+                    "enforce_contracts": True,
+                })
+                strict_wid = strict_open["world_id"]
+                assert strict_open["enforce_contracts"] is True
+                reused_plan = await call(session, "world_task_plan", {
+                    "world_id": strict_wid,
+                    "goal_state": "profile.partial",
+                    "task_ids": [task_id],
+                    "allow_candidate": True,
+                })
+                assert reused_plan["source"]["archived_trace_count"] == 1
+                assert reused_plan["plan"]["status"] == "ready"
+                assert reused_plan["plan"]["steps"][0]["operation"] == "填写资料"
+                assert reused_plan["executed"] is False
+                continue_match = await call(session, "world_find", {
+                    "world_id": strict_wid, "q": "Continue",
+                })
+                continue_id = next(item["id"] for item in continue_match["matches"] if item.get("interactive"))
+                blocked_card = await call(session, "world_act", {
+                    "world_id": strict_wid,
+                    "kind": "click",
+                    "id": continue_id,
+                    "operation": "提交资料",
+                })
+                assert blocked_card["page_outcome"] == "errored"
+                assert blocked_card["contract_check"]["status"] == "precondition_failed"
+                assert blocked_card["executed"] is False
+                strict_state = await call(session, "world_business_state", {"world_id": strict_wid})
+                assert strict_state["business_state"]["state_id"] == "profile.empty"
+                strict_trace = await call(session, "world_trace", {"world_id": strict_wid})
+                assert len(strict_trace["traces"]) == 1
+                assert strict_trace["traces"][0]["effect"]["page_outcome"] == "errored"
+                await call(session, "world_close", {"world_id": strict_wid})
 
     print("任务运行时浏览器闭环测试通过")
 

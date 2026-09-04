@@ -18,6 +18,7 @@ import os
 import re
 import time
 import uuid
+from collections import deque
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -509,4 +510,136 @@ def validate_transition(current_state: dict, edge: dict) -> dict:
         "current_state_key": current_key,
         "required_state_key": required_key,
         "reason": "当前状态满足迁移起点" if allowed else "当前状态不满足迁移前置条件",
+    }
+
+
+def plan_graph(
+    graph: dict,
+    current_state_key: str,
+    goal_state: str | None = None,
+    *,
+    max_steps: int = 8,
+    allow_candidate: bool = False,
+) -> dict:
+    """在已观测图上做确定性的有限步路径规划。
+
+    这不是概率生成，也不是让模型凭经验猜按钮顺序：只沿图中已经存在的
+    起点匹配边搜索。默认只允许 verified 边；探索阶段可显式允许 candidate
+    或 replayed 边，但返回结果会标明该路径尚未达到安全发布条件。
+    """
+    graph = graph if isinstance(graph, dict) else {}
+    current = str(current_state_key or "")
+    goal = str(goal_state or "").strip()
+    try:
+        step_limit = max(1, min(int(max_steps), 32))
+    except (TypeError, ValueError):
+        step_limit = 8
+
+    base = {
+        "current_state_key": current,
+        "goal_state": goal or None,
+        "max_steps": step_limit,
+        "allow_candidate": bool(allow_candidate),
+        "steps": [],
+        "used_candidate": False,
+        "all_verified": False,
+        "publishable": False,
+    }
+    if not current:
+        return {**base, "status": "blocked", "reason": "当前运行时状态没有 state_key"}
+    if not goal:
+        return {**base, "status": "needs_goal", "reason": "必须明确目标业务状态,不会自行选择终点"}
+
+    state_snapshots = {
+        str(item.get("state_key")): item.get("snapshot") or {}
+        for item in graph.get("states", [])
+        if isinstance(item, dict) and item.get("state_key")
+    }
+
+    def matches_goal(state_key_value: str, edge: dict | None = None) -> bool:
+        snapshot = state_snapshots.get(state_key_value) or {}
+        if snapshot.get("business_state") == goal:
+            return True
+        business = (edge or {}).get("business") or {}
+        return goal in (business.get("to") or [])
+
+    if matches_goal(current):
+        return {
+            **base,
+            "status": "ready",
+            "reason": "当前状态已经是目标业务状态",
+            "all_verified": True,
+            "publishable": True,
+        }
+
+    edges_by_from = {}
+    for edge in graph.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        from_key = edge.get("from")
+        if from_key:
+            edges_by_from.setdefault(str(from_key), []).append(edge)
+    for candidates in edges_by_from.values():
+        candidates.sort(key=lambda item: str(item.get("edge_id") or ""))
+
+    def edge_allowed(edge: dict) -> bool:
+        status = ((edge.get("verification") or {}).get("status")
+                  or edge.get("status") or "candidate")
+        if status == "expired":
+            return False
+        if allow_candidate:
+            return status in ("candidate", "replayed", "verified")
+        return status == "verified"
+
+    def step_for(edge: dict) -> dict:
+        verification = edge.get("verification") or {"status": edge.get("status", "candidate")}
+        return {
+            "edge_id": edge.get("edge_id"),
+            "operation": edge.get("operation"),
+            "from": edge.get("from"),
+            "to": edge.get("to"),
+            "status": verification.get("status", edge.get("status", "candidate")),
+            "preconditions": edge.get("preconditions") or {},
+            "effects": edge.get("effects") or {},
+            "business": edge.get("business") or {},
+            "operation_contract": edge.get("operation_contract"),
+            "dataflow": edge.get("dataflow") or {"inputs": [], "outputs": []},
+            "verification": verification,
+        }
+
+    queue = deque([(current, [])])
+    visited = {current}
+    examined = 0
+    while queue:
+        state_now, path = queue.popleft()
+        for edge in edges_by_from.get(state_now, []):
+            examined += 1
+            if not edge_allowed(edge):
+                continue
+            next_key = str(edge.get("to") or "")
+            if not next_key:
+                continue
+            next_path = path + [step_for(edge)]
+            if matches_goal(next_key, edge):
+                used_candidate = any(item.get("status") != "verified" for item in next_path)
+                return {
+                    **base,
+                    "status": "ready",
+                    "reason": "已在任务运行时图中找到从当前状态到目标状态的路径",
+                    "steps": next_path,
+                    "used_candidate": used_candidate,
+                    "all_verified": not used_candidate,
+                    "publishable": not used_candidate,
+                    "examined_edges": examined,
+                }
+            if len(next_path) >= step_limit or next_key in visited:
+                continue
+            visited.add(next_key)
+            queue.append((next_key, next_path))
+
+    return {
+        **base,
+        "status": "blocked",
+        "reason": "图中没有满足当前安全级别、步数上限和目标状态的路径",
+        "examined_edges": examined,
     }
