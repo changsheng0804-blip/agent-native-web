@@ -76,6 +76,7 @@ SCOPES = {
     "test_assumption_b_shadow.py": ["shadow", "kernel"],
     "test_shadow_dynamic.py": ["shadow", "observer"],
     "test_fill_clear_and_text.py": ["fill", "observer"],
+    "test_graph_vs_baseline.py": ["graph", "pipeline", "judgment"],
     # real 组
     "test_map.py": ["map", "navigation"],
     "test_map_drill.py": ["map"],
@@ -135,6 +136,7 @@ GROUPS = {
             "test_shadow_dynamic.py", # Shadow DOM 动态感知(运行期新增/点击,预期通过)
             "test_fill_clear_and_text.py", # fill 清空语义 + 纯文本变更感知(弱模型验证发现的两个缺陷)
             "test_silent_failure.py",  # 网络与控制台静默失败监听(借鉴 Chrome DevTools MCP:422/500/console.error)
+            "test_graph_vs_baseline.py", # 业务逻辑图工程 vs 传统单步探索消融实验 (向导/批流/毒化自愈)
         ],
     },
     "real": {

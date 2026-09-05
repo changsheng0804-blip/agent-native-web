@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>企业云服务部署向导 (Business Wizard)</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; background: #f4f6f8; color: #333; }
+        .container { max-width: 640px; margin: 0 auto; background: white; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); padding: 24px; }
+        .stepper { display: flex; justify-content: space-between; margin-bottom: 24px; border-bottom: 1px solid #eee; padding-bottom: 12px; }
+        .step-item { font-size: 13px; color: #888; font-weight: 500; }
+        .step-item.active { color: #1890ff; font-weight: bold; }
+        .step-panel { display: none; }
+        .step-panel.active { display: block; }
+        .form-group { margin-bottom: 16px; }
+        .form-group label { display: block; margin-bottom: 6px; font-weight: 500; font-size: 14px; }
+        .form-control { width: 100%; padding: 8px 12px; border: 1px solid #d9d9d9; border-radius: 4px; box-sizing: border-box; }
+        .distractor-links { margin-top: 16px; font-size: 12px; display: flex; gap: 12px; }
+        .distractor-links a { color: #888; text-decoration: none; }
+        .btn-group { display: flex; justify-content: space-between; margin-top: 24px; }
+        .btn { padding: 8px 18px; border: 1px solid #d9d9d9; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .btn-primary { background: #1890ff; border-color: #1890ff; color: white; }
+        .btn-primary:disabled { background: #bae7ff; border-color: #bae7ff; cursor: not-allowed; }
+        .alert-error { color: #ff4d4f; font-size: 12px; margin-top: 4px; display: none; }
+        
+        /* Modal */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.45); display: none; justify-content: center; align-items: center; z-index: 1000; }
+        .modal-card { background: white; padding: 20px; border-radius: 8px; width: 400px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+        .modal-title { font-size: 16px; font-weight: bold; margin-bottom: 12px; }
+        .modal-body { font-size: 13px; color: #666; margin-bottom: 16px; line-height: 1.5; }
+        
+        /* Success */
+        .success-box { text-align: center; padding: 32px 0; }
+        .success-icon { font-size: 48px; color: #52c41a; margin-bottom: 12px; }
+        .success-token { font-family: monospace; background: #f6ffed; border: 1px solid #b7eb8f; padding: 6px 12px; display: inline-block; margin-top: 8px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>云资源部署流水线向导</h2>
+        <div class="stepper" role="navigation">
+            <div class="step-item active" id="badge-1">1. 基本信息</div>
+            <div class="step-item" id="badge-2">2. 环境选择</div>
+            <div class="step-item" id="badge-3">3. 安全确认</div>
+            <div class="step-item" id="badge-4">4. 部署交付</div>
+        </div>
+
+        <!-- Step 1 -->
+        <div class="step-panel active" id="step-1" data-state="ENTRY_STEP_1">
+            <div class="form-group">
+                <label for="service-name">服务集群标识 (必填)</label>
+                <input type="text" id="service-name" class="form-control" placeholder="如: my-cluster-prod">
+                <div class="alert-error" id="err-name">服务名称不能为空</div>
+            </div>
+            <div class="form-group">
+                <label for="admin-email">运维负责人邮箱</label>
+                <input type="email" id="admin-email" class="form-control" placeholder="ops@company.com">
+            </div>
+            <div class="distractor-links">
+                <a href="#help" id="link-help">帮助文档与指南</a>
+                <a href="#terms" id="link-terms">服务使用协议条款</a>
+                <a href="#pricing" id="link-pricing">计费规格说明</a>
+            </div>
+            <div class="btn-group">
+                <div></div>
+                <button class="btn btn-primary" id="btn-next-1">下一步：选择环境</button>
+            </div>
+        </div>
+
+        <!-- Step 2 -->
+        <div class="step-panel" id="step-2" data-state="STEP_2_ENV">
+            <div class="form-group">
+                <label>目标部署区域</label>
+                <div>
+                    <label style="display:inline; margin-right:16px;"><input type="radio" name="region" value="shanghai" checked> 华东 (上海)</label>
+                    <label style="display:inline;"><input type="radio" name="region" value="beijing"> 华北 (北京)</label>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>计算实例规格 (必须选择生产型)</label>
+                <div style="display:flex; gap:12px; margin-top:8px;">
+                    <button type="button" class="btn tier-btn" id="tier-test" data-val="test">轻量测试型 (2C4G)</button>
+                    <button type="button" class="btn tier-btn" id="tier-prod" data-val="prod">高可用生产型 (8C32G)</button>
+                </div>
+                <input type="hidden" id="env-tier" value="">
+                <div class="alert-error" id="err-tier">必须选择规格类型</div>
+            </div>
+            <div class="btn-group">
+                <button class="btn" id="btn-prev-2">上一步</button>
+                <button class="btn btn-primary" id="btn-next-2">下一步：安全风险确认</button>
+            </div>
+        </div>
+
+        <!-- Step 3 -->
+        <div class="step-panel" id="step-3" data-state="STEP_3_CONFIRM">
+            <div class="form-group">
+                <p style="font-size:14px; color:#666;">配置概览：已选高可用规格。由于涉及公网暴露端口，需要进行高危安全策略确认。</p>
+            </div>
+            <div class="form-group">
+                <button class="btn" id="btn-trigger-modal" style="background:#faad14; color:white; border-color:#faad14;">⚠️ 开启生产安全授权审查</button>
+            </div>
+            <div class="alert-error" id="err-auth">必须通过安全授权审查后方可进入发布阶段</div>
+            <div class="btn-group">
+                <button class="btn" id="btn-prev-3">上一步</button>
+                <button class="btn btn-primary" id="btn-next-3" disabled>下一步：执行发布</button>
+            </div>
+        </div>
+
+        <!-- Step 4 -->
+        <div class="step-panel" id="step-4" data-state="STEP_4_DEPLOY">
+            <div class="form-group" id="deploy-waiting">
+                <p>所有前置配置已就绪。点击下方按钮触发全自动化流水线部署。</p>
+                <button class="btn btn-primary" id="btn-execute-deploy" style="background:#52c41a; border-color:#52c41a; width:100%; padding:12px;">🚀 确认并触发流水线部署</button>
+            </div>
+            <div class="success-box" id="deploy-success" style="display:none;">
+                <div class="success-icon">✓</div>
+                <h3>服务部署成功！</h3>
+                <p>流水线凭据令牌：<span class="success-token" id="res-token">DEPLOY_SUCCESS_TOKEN_9988</span></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 安全阻断弹窗 -->
+    <div class="modal-overlay" id="modal-auth" role="dialog" aria-modal="true">
+        <div class="modal-card">
+            <div class="modal-title">高危安全生产确认</div>
+            <div class="modal-body">
+                您正在部署生产集群环境。该操作将开通公网访问并初始化持久化存储卷。<br>
+                请确认您已阅读《生产环境操作准则》。
+            </div>
+            <div style="margin-bottom:16px;">
+                <label style="font-size:13px;"><input type="checkbox" id="chk-modal-agree"> 我已知晓生产环境风险并授权部署</label>
+            </div>
+            <div style="display:flex; justify-content:flex-end; gap:8px;">
+                <button class="btn" id="btn-modal-cancel">取消</button>
+                <button class="btn btn-primary" id="btn-modal-confirm" disabled>确认授权并放行</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let isAuthVerified = false;
+
+        // Step 1
+        document.getElementById('btn-next-1').addEventListener('click', () => {
+            const name = document.getElementById('service-name').value.trim();
+            if (!name) {
+                document.getElementById('err-name').style.display = 'block';
+                return;
+            }
+            document.getElementById('err-name').style.display = 'none';
+            switchStep(1, 2);
+        });
+
+        // Step 2
+        document.querySelectorAll('.tier-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tier-btn').forEach(b => {
+                    b.style.background = '#fff';
+                    b.style.color = '#333';
+                    b.style.borderColor = '#d9d9d9';
+                    b.setAttribute('aria-selected', 'false');
+                });
+                btn.style.background = '#1890ff';
+                btn.style.color = '#fff';
+                btn.style.borderColor = '#1890ff';
+                btn.setAttribute('aria-selected', 'true');
+                document.getElementById('env-tier').value = btn.getAttribute('data-val');
+            });
+        });
+        document.getElementById('btn-prev-2').addEventListener('click', () => switchStep(2, 1));
+        document.getElementById('btn-next-2').addEventListener('click', () => {
+            const tier = document.getElementById('env-tier').value;
+            if (!tier) {
+                document.getElementById('err-tier').style.display = 'block';
+                return;
+            }
+            document.getElementById('err-tier').style.display = 'none';
+            switchStep(2, 3);
+        });
+
+        // Step 3 (Modal Trigger & Confirm)
+        document.getElementById('btn-prev-3').addEventListener('click', () => switchStep(3, 2));
+        document.getElementById('btn-trigger-modal').addEventListener('click', () => {
+            document.getElementById('modal-auth').style.display = 'flex';
+        });
+        document.getElementById('chk-modal-agree').addEventListener('change', (e) => {
+            e.target.setAttribute('aria-checked', String(e.target.checked));
+            document.getElementById('btn-modal-confirm').disabled = !e.target.checked;
+        });
+        document.getElementById('btn-modal-cancel').addEventListener('click', () => {
+            document.getElementById('modal-auth').style.display = 'none';
+        });
+        document.getElementById('btn-modal-confirm').addEventListener('click', () => {
+            isAuthVerified = true;
+            document.getElementById('modal-auth').style.display = 'none';
+            document.getElementById('btn-next-3').disabled = false;
+            document.getElementById('err-auth').style.display = 'none';
+            document.getElementById('btn-trigger-modal').innerText = '✅ 已通过安全授权审查';
+            document.getElementById('btn-trigger-modal').style.background = '#52c41a';
+            document.getElementById('btn-trigger-modal').style.borderColor = '#52c41a';
+        });
+        document.getElementById('btn-next-3').addEventListener('click', () => {
+            if (!isAuthVerified) {
+                document.getElementById('err-auth').style.display = 'block';
+                return;
+            }
+            switchStep(3, 4);
+        });
+
+        // Step 4
+        document.getElementById('btn-execute-deploy').addEventListener('click', () => {
+            document.getElementById('btn-execute-deploy').disabled = true;
+            document.getElementById('btn-execute-deploy').innerText = '正在启动部署流水线...';
+            setTimeout(() => {
+                document.getElementById('deploy-waiting').style.display = 'none';
+                document.getElementById('deploy-success').style.display = 'block';
+            }, 300);
+        });
+
+        function switchStep(from, to) {
+            document.getElementById('step-' + from).classList.remove('active');
+            document.getElementById('badge-' + from).classList.remove('active');
+            document.getElementById('step-' + to).classList.add('active');
+            document.getElementById('badge-' + to).classList.add('active');
+        }
+    </script>
+</body>
+</html>
