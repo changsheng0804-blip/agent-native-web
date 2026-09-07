@@ -25,19 +25,19 @@
 ### far-modal(远距弹窗) [TP]
 - why: 页面出现新的弹窗/菜单(可能远离目标): 弹窗 dialog.far-modal-title-居中弹窗-这个弹窗离角落按钮很远-用于验证-2
 - truth: dialog可见
-- 证据窗: polls=1 total=209ms first_change=209ms stop=early-effect
+- 证据窗: polls=1 total=211ms first_change=211ms stop=early-effect
 - note: 角落按钮→居中弹窗(离按钮 ~600px),专测 ±200px 是否漏判
 
 ### tabs(标签切换无弹窗) [TP]
 - why: 目标自身状态变化: 选中态(aria-selected) 翻转
 - truth: tab-b选中
-- 证据窗: polls=1 total=204ms first_change=204ms stop=early-effect
+- 证据窗: polls=1 total=205ms first_change=205ms stop=early-effect
 - note: 无 dialog,SPA 式切换,专测是否误判 effected(FP)或漏判
 
 ### negative-heading(负例) [TN]
 - why: 目标区域无变化(点击可能未生效,或效果发生在远处)
 - truth: 无变化
-- 证据窗: polls=3 total=682ms first_change=206ms stop=stable
+- 证据窗: polls=3 total=721ms first_change=204ms stop=stable
 - note: 点击无副作用标题,应 TN 不误报
 
 ### fill-dyn(填表值进入输入框) [TP]
@@ -57,7 +57,7 @@
 ### visual-css(纯 CSS 视觉生效·PR2 视觉兜底) [TP]
 - why: 区域元素计算样式变化(1处,如el_4.backgroundColor:rgb(52, 152, 219)→rgb(231, 76, 60))
 - truth: 动画目标已变 active
-- 证据窗: polls=3 total=619ms first_change=208ms stop=stable
+- 证据窗: polls=3 total=683ms first_change=250ms stop=stable
 - note: DOM 无增删、纯背景色翻转 → 应触发视觉 diff 兜底 visual-effected,TP
 
 ### visual-negative(视觉兜底负例·不误报) [TN]
