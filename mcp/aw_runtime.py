@@ -921,6 +921,13 @@ def _page_signal_snapshot(wid, fast=False):
     }
 
 
+SCREENSHOT_DIR = Path(__file__).parent / "screenshots"
+SCREENSHOT_DIR.mkdir(exist_ok=True)
+PROFILES_DIR = Path(__file__).parent / "profiles"
+PROFILES_DIR.mkdir(exist_ok=True)
+# P0-2 视觉阈值:区域前后帧 RMS 差异超过此值判 visual-effected(5.0,校准见 docs/archive/视觉阈值校准报告.md)
+VISUAL_RMS_THRESHOLD = 5.0
+
 if not ALL_IN_ONE.exists():
     raise SystemExit(f"all-in-one.js 不存在: {ALL_IN_ONE}")
 
