@@ -13,3 +13,4 @@ __pycache__/
 mcp/quality_report.md
 mcp/validate_report.md
 mcp/verify_record.md
+mcp/experiments/artifacts/
