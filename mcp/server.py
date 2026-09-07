@@ -1932,6 +1932,7 @@ def _t_world_timeline(args):
     statuses = {}
     api_hits = []
     dom_counts = {}
+    recent_dom = []   # 最近 DOM 变化明细(name 含新文本,如 content.1200 → 语义化摘要用)
     premises = []
     failures = []
     for e in events:
@@ -1943,6 +1944,9 @@ def _t_world_timeline(args):
                 api_hits.append({"url": e.get("url"), "status": s})
         elif e["type"] == "dom":
             dom_counts[e.get("dtype")] = dom_counts.get(e.get("dtype"), 0) + 1
+            recent_dom.append({"name": e.get("name"), "semantic": e.get("semantic"),
+                               "dtype": e.get("dtype")})
+            recent_dom = recent_dom[-3:]
         elif e["type"] == "premise":
             premises.append({"name": e.get("name"), "expected": e.get("expected"),
                              "actual": e.get("actual"), "derived_from": e.get("derived_from")})
@@ -1963,6 +1967,7 @@ def _t_world_timeline(args):
         "statuses": {str(k): v for k, v in statuses.items()},
         "api_hits": api_hits[:10],
         "dom_changes": dom_counts,
+        "recent_dom": recent_dom,
         "premises": premises[:8],
         "failures": failures[:5],
         "silent_failures": silent,
@@ -2399,6 +2404,8 @@ def _t_world_open(args):
             time.sleep(0.5)
     elif ready_policy == "terrain":
         _wait_progressive_phase(wid, "terrain", min(stabilize_ms, 3000))
+    # 初始 DOM 快照在 open 时点建立(避免懒合并把 open 后、首次读取前的真实变化吞掉)
+    _tl_merge_dom(wid)
     summary = _evaluate(wid, "agentWorld.query.getPageSummary()")
     scan_state = _scan_state(wid)
     if not stable_ready and ready_policy == "stable":
