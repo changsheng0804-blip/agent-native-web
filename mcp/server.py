@@ -28,6 +28,7 @@ Agent World MCP Server
 """
 import asyncio
 import base64
+import collections
 import hashlib
 import json
 import math
@@ -1082,6 +1083,22 @@ async def list_tools():
             },
         ),
         types.Tool(
+            name="world_timeline",
+            description=("统一时间线读取(游标增量):动作/网络请求/响应/DOM 变更/前提失效合并为一条因果时间轴。"
+                         "digest 模式返回统计 + 因果窗口(每个动作引发了什么)+ 静默失败标注;"
+                         "raw 模式返回原始事件。since 传上次的 cursor 做增量续读。"),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "since": {"type": "integer", "description": "游标,只返回 seq 更大的事件", "default": 0},
+                    "mode": {"type": "string", "description": "digest(摘要,默认) 或 raw(原始事件)",
+                             "enum": ["digest", "raw"], "default": "digest"},
+                },
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
             name="world_screenshot",
             description="截图:整页、指定构件区域或带编号标注图(Set-of-Mark)。支持直接返回图片数据(ImageContent)或文件路径,原生多模态模型友好。",
             inputSchema={
@@ -1286,6 +1303,12 @@ def _impl_with_status(name, args):
             _task_begin_action(int(wid), name, args)
         except Exception:
             pass
+        # 统一时间线:动作开始入账 + 合并动作前的 DOM 变更
+        try:
+            _tl_merge_dom(int(wid))
+            _tl_action(int(wid), "start", name, args)
+        except Exception:
+            pass
     try:
         result = _impl(name, args, before_signal)
     except Exception as e:
@@ -1307,6 +1330,12 @@ def _impl_with_status(name, args):
     if name in TRACKED_ACTION_NAMES and wid is not None:
         try:
             _task_finish_action(int(wid), name, args, result, before_signal=before_signal)
+        except Exception:
+            pass
+        # 统一时间线:动作结束入账 + 合并动作后的 DOM 变更(动作窗口闭合)
+        try:
+            _tl_merge_dom(int(wid))
+            _tl_action(int(wid), "end", name, args, result)
         except Exception:
             pass
     # 阶段 B:动作出口的后果卡缓存,供 world_outcome 幂等读取(world_act 内部已记录证据,这里只缓存卡)
@@ -1588,6 +1617,8 @@ def _impl(name, args, before_signal=None):
         return _t_world_ack(args)
     if name == "world_status":
         return _t_world_status(args)
+    if name == "world_timeline":
+        return _t_world_timeline(args)
     if name == "world_click_at":
         return _t_world_click_at(args, before_signal)
     if name == "world_navigate":
@@ -1662,6 +1693,14 @@ def _assumption_check(wid):
                                   "name": name, "expected": expected, "actual": current2,
                                   "at_ms": int(time.time() * 1000)}
                         w.setdefault("pending_notices", []).append(notice)
+                        # 统一时间线入账(因果:指向最近一次响应事件)
+                        tl_evts = list(w.get("timeline") or [])
+                        last_resp = next((e for e in reversed(tl_evts) if e["type"] == "response"), None)
+                        _tl(wid, "premise", {
+                            "name": name, "expected": expected, "actual": current2,
+                            "derived_from": last_resp.get("seq") if last_resp else None,
+                            "derived_url": last_resp.get("url") if last_resp else None,
+                        })
                 except Exception:
                     pass
     except Exception:
@@ -1731,6 +1770,204 @@ def _t_world_status(args):
         rows = [{"name": k, "active": bool(v.get("active", True)), "expect": v.get("expect")}
                 for k, v in (w.get("assumptions") or {}).items()]
     return _ok({"world_id": wid, "channel": "premise", "assumptions": rows})
+
+
+# ── 统一时间线(环境侧因果时间轴)─────────────────────────────────
+# 三层反馈合并到一条 append-only 事件账本,统一 seq 游标:
+#   action(动作) / request/response/failed(运行时流) / dom(DOM 变更) /
+#   console/pageerror(控制台) / premise(前提失效)
+# 设计要点:
+#  - 事件带世界时钟 t(ms);seq 是账本内追加顺序(游标),展示按 t 语义解释
+#  - DOM 事件懒合并:读取/动作时从内核 changes 拉取批量入账(不实时轮询)
+#  - URL 归一化去 query(防 token 泄漏),不存响应体(隐私/体积)
+#  - 环形缓冲(600 条),世界关闭即销毁
+#  - causal_windows:按 action 事件切段,回答"这个动作引发了什么"(跨层因果)
+TIMELINE_MAX = 600
+
+
+def _tl(wid, etype, data=None):
+    """统一时间线入账。线程安全;监听器回调与工具执行线程都可能调用。"""
+    try:
+        w = _worlds.get(int(wid))
+        if not w:
+            return None
+        with w.setdefault("tl_lock", threading.RLock()):
+            seq = w.get("timeline_seq", 0) + 1
+            w["timeline_seq"] = seq
+            evt = {"seq": seq, "t": int(time.time() * 1000), "type": etype}
+            if data:
+                evt.update(data)
+            tl = w.setdefault("timeline", collections.deque(maxlen=TIMELINE_MAX))
+            tl.append(evt)
+            return seq
+    except Exception:
+        return None
+
+
+def _tl_merge_dom(wid):
+    """懒合并:把内核 DOM 变更流转入统一时间线(按内核时间戳排序批量入账)。
+
+    降噪(实测:GitHub 渐进扫描 + 整页替换可产生 ~600 条/次):
+      - 初始快照不入账:world_open 后首次合并只建立 name 集合
+      - 批量替换聚合:同批 add+remove > 50 条(导航/刷新/SPA整块替换)
+        → 聚合成一条 bulk 事件(结构信号保留,明细不淹没有用事件)
+      - update 按"新 name"过滤:渐进扫描逐元素 touch 跳过;
+        真实内容变化(价格 800→1200)必然产生新 name → 入账
+      - add/remove 小批量(真实结构变化:弹窗/选项/表单)全量入账
+    """
+    try:
+        w = _worlds.get(int(wid))
+        if not w or w.get("page") is None:
+            return
+        since = w.get("tl_dom_since", 0)
+        data = _evaluate(wid, "(s) => agentWorld.changes(s)", since)
+        events = (data or {}).get("events", []) or []
+        if not events:
+            return
+        with w.setdefault("tl_lock", threading.RLock()):
+            w["tl_dom_since"] = (data or {}).get("to", since) or since
+            events.sort(key=lambda e: e.get("t") or 0)
+            names = w.setdefault("tl_dom_names", set())
+            if not w.get("tl_dom_init"):
+                for evt in events:
+                    if evt.get("type") == "update":
+                        n = (evt.get("name") or "")[:60]
+                        if n:
+                            names.add(n)
+                w["tl_dom_init"] = True
+                return
+            adds = sum(1 for e in events if e.get("type") == "add")
+            rems = sum(1 for e in events if e.get("type") == "remove")
+            if adds + rems > 50:
+                _tl(wid, "dom", {"dtype": "bulk", "add": adds, "remove": rems,
+                                 "kt": (events[-1].get("t") if events else 0)})
+                return
+            for evt in events:
+                etype = evt.get("type")
+                name = (evt.get("name") or "")[:60]
+                if etype == "update":
+                    if name in names:
+                        continue
+                    names.add(name)
+                    if len(names) > 2000:
+                        names.clear()
+                _tl(wid, "dom", {
+                    "id": evt.get("id"), "name": name,
+                    "semantic": (evt.get("semantic") or "")[:30],
+                    "dtype": etype, "kt": evt.get("t"),
+                })
+    except Exception:
+        pass
+
+
+def _tl_action(wid, phase, name, args, result=None):
+    """动作事件入账。phase: start/end。end 附结果摘要(后果卡主标签)。"""
+    try:
+        data = {"action": name, "phase": phase}
+        if args:
+            for k in ("id", "text", "url", "kind", "key"):
+                if args.get(k) is not None:
+                    data[k] = str(args[k])[:60]
+        if phase == "end" and result:
+            payload = _result_payload(result)
+            if payload:
+                data["outcome"] = payload.get("page_outcome")
+                data["why"] = str(payload.get("why") or "")[:80]
+        _tl(int(wid), "action", data)
+    except Exception:
+        pass
+
+
+def _timeline_causal_windows(events):
+    """因果窗口:按 action 事件切段,每段 = 该动作的后果(动作 seq 到下一动作 seq 之间)。
+    返回压缩摘要:类型计数 + 状态码 + 关键事件(前提失效/失败/4xx/JSON 接口)。"""
+    windows = []
+    cur = None
+    for e in events:
+        if e["type"] == "action":
+            if cur:
+                windows.append(cur)
+            cur = {"action": e.get("action"), "phase": e.get("phase"),
+                   "seq": e["seq"], "items": []}
+        elif cur is not None:
+            cur["items"].append(e)
+    if cur:
+        windows.append(cur)
+    out = []
+    for w in windows:
+        if not w["items"]:
+            continue
+        counts = {}
+        statuses = []
+        key_items = []
+        for it in w["items"]:
+            counts[it["type"]] = counts.get(it["type"], 0) + 1
+            if it.get("status"):
+                statuses.append(it["status"])
+            if it["type"] in ("premise", "failed") or (it["type"] == "response" and it.get("status", 0) >= 400):
+                key_items.append({"type": it["type"], "url": it.get("url"),
+                                  "status": it.get("status"), "name": it.get("name")})
+            elif it["type"] == "response" and "json" in (it.get("ctype") or ""):
+                key_items.append({"type": "api", "url": it.get("url"), "status": it.get("status")})
+        out.append({"action": w["action"], "from_seq": w["seq"],
+                    "counts": counts, "statuses": statuses[:8], "key": key_items[:8]})
+    return out
+
+
+def _t_world_timeline(args):
+    """统一时间线读取:游标增量 + 因果窗口 + 模式摘要。"""
+    wid = int(args["world_id"])
+    since = int(args.get("since", 0))
+    mode = str(args.get("mode") or "digest").strip().lower()
+    w = _world(wid)
+    _tl_merge_dom(wid)
+    with w.setdefault("tl_lock", threading.RLock()):
+        tl = list(w.get("timeline") or [])
+        events = [e for e in tl if e["seq"] > since]
+    to = events[-1]["seq"] if events else since
+    if mode == "raw":
+        return _ok({"world_id": wid, "channel": "timeline", "from": since, "to": to,
+                    "cursor": to, "events": events[:200]})
+    counts = {}
+    statuses = {}
+    api_hits = []
+    dom_counts = {}
+    premises = []
+    failures = []
+    for e in events:
+        counts[e["type"]] = counts.get(e["type"], 0) + 1
+        if e["type"] == "response":
+            s = e.get("status", 0)
+            statuses[s] = statuses.get(s, 0) + 1
+            if "json" in (e.get("ctype") or ""):
+                api_hits.append({"url": e.get("url"), "status": s})
+        elif e["type"] == "dom":
+            dom_counts[e.get("dtype")] = dom_counts.get(e.get("dtype"), 0) + 1
+        elif e["type"] == "premise":
+            premises.append({"name": e.get("name"), "expected": e.get("expected"),
+                             "actual": e.get("actual"), "derived_from": e.get("derived_from")})
+        elif e["type"] == "failed":
+            failures.append({"url": e.get("url"), "error": e.get("error")})
+    # 静默失败:窗口内有 4xx/5xx/failed 且无 DOM 变化(L1 盲区自动标注)
+    silent = []
+    if failures or any(int(s) >= 400 for s in statuses):
+        if not dom_counts:
+            silent = [{"4xx_5xx": {str(k): v for k, v in statuses.items() if int(k) >= 400},
+                       "failed": failures[:3]}]
+    windows = _timeline_causal_windows(events)
+    return _ok({
+        "world_id": wid, "channel": "timeline", "from": since, "to": to,
+        "cursor": to,
+        "events_seen": len(events),
+        "counts": counts,
+        "statuses": {str(k): v for k, v in statuses.items()},
+        "api_hits": api_hits[:10],
+        "dom_changes": dom_counts,
+        "premises": premises[:8],
+        "failures": failures[:5],
+        "silent_failures": silent,
+        "causal_windows": windows[:10],
+    })
 
 
 # ── L3 动作证据卡(runtime 流 → 结构化动作反馈)──────────────────
@@ -1969,6 +2206,14 @@ def _t_world_open(args):
         runtime_events.append(evt)
         if len(runtime_events) > 500:
             runtime_events.pop(0)
+        # 同步入统一时间线(带世界时钟;URL 归一化)
+        try:
+            payload = {k: v for k, v in evt.items() if k != "t"}
+            if payload.get("url"):
+                payload["url"] = _evidence_norm_url(payload["url"])
+            _tl(wid, evt["type"], payload)
+        except Exception:
+            pass
 
     def _on_response(res):
         try:
