@@ -1,0 +1,62 @@
+[
+ {
+  "site": "google-flights",
+  "total": 70,
+  "by_type": {
+   "request": 34,
+   "response": 34,
+   "console": 2
+  },
+  "poll_patterns": [
+   {
+    "url": "play.google.com/log",
+    "interval_s": 1.8,
+    "count": 2,
+    "cv": 0.0
+   }
+  ],
+  "api_endpoints": [
+   "ogads-pa.clients6.google.com/$rpc/google.internal.onegoogle.asyncdata.v1.AsyncDataService/GetAsyncData",
+   "www.google.com/_/FlightsFrontendUi/browserinfo"
+  ],
+  "errors": [],
+  "error_count": 0,
+  "console": {
+   "count": 2,
+   "levels": {
+    "log": 2
+   },
+   "samples": [
+    "%c%s color: red; background: yellow; font-size: 24px; WARNING!",
+    "%c%s font-size: 18px; Using this console may allow attackers to impersonate you and steal your information using an attack called Self-XSS.\nDo not ent"
+   ]
+  },
+  "compression": {
+   "raw": 70,
+   "pattern_rows": 5,
+   "ratio": 14.0
+  }
+ },
+ {
+  "site": "hacker-news",
+  "total": 12,
+  "by_type": {
+   "request": 6,
+   "response": 6
+  },
+  "poll_patterns": [],
+  "api_endpoints": [],
+  "errors": [],
+  "error_count": 0,
+  "console": {
+   "count": 0,
+   "levels": {},
+   "samples": []
+  },
+  "compression": {
+   "raw": 12,
+   "pattern_rows": 0,
+   "ratio": 12.0
+  }
+ }
+]

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>订单表单 - 前提失效实验</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; max-width: 420px; }
+  .field { margin-bottom: 14px; }
+  label { display: inline-block; width: 90px; }
+  input[type="text"], input[type="date"], input[type="number"] { width: 200px; padding: 4px; }
+  #price-total { font-size: 20px; color: #c00; margin: 12px 0; }
+  #submit { padding: 8px 24px; font-size: 15px; }
+  #success { display: none; margin-top: 14px; color: #0a0; font-weight: bold; }
+  #error { display: none; margin-top: 14px; color: #a00; }
+</style>
+</head>
+<body>
+  <h2>旅行订单表单</h2>
+  <div class="field"><label>出发地</label><input id="field-origin" type="text" placeholder="出发地"></div>
+  <div class="field"><label>目的地</label><input id="field-dest" type="text" placeholder="目的地"></div>
+  <div class="field"><label>日期</label><input id="field-date" type="text" placeholder="YYYY-MM-DD"></div>
+  <div class="field"><label>人数</label><input id="field-passengers" type="text" placeholder="人数"></div>
+  <div class="field"><label>保险</label><input id="field-insurance" type="checkbox" aria-label="购买保险"><span>购买保险</span></div>
+  <div id="price-total">当前价格: ¥800</div>
+  <button id="submit">提交订单</button>
+  <div id="success">✅ 订单提交成功</div>
+  <div id="receipt">订单已提交, 应付: ¥800</div>
+  <div id="error"></div>
+  <script>
+    // 提交:无校验,直接生成回执(回执内容 = 各字段当前值 + 保险状态)
+    // 关键设计:表单值/勾选状态对 world_entities 不可见,且提交不校验——
+    // 字段被重置/取消后,页面不会报错,只有回执内容能暴露错误。
+    document.getElementById('submit').addEventListener('click', function () {
+      var origin = document.getElementById('field-origin').value.trim() || '(空)';
+      var dest = document.getElementById('field-dest').value.trim() || '(空)';
+      var date = document.getElementById('field-date').value.trim() || '(空)';
+      var passengers = document.getElementById('field-passengers').value.trim() || '(空)';
+      var ins = document.getElementById('field-insurance').checked ? '已购' : '未购';
+      document.getElementById('receipt').textContent =
+        '订单已提交: 出发地=' + origin + ', 目的地=' + dest + ', 日期=' + date +
+        ', 人数=' + passengers + ', 保险=' + ins;
+      document.getElementById('success').style.display = 'block';
+      document.getElementById('error').style.display = 'none';
+    });
+  </script>
+</body>
+</html>

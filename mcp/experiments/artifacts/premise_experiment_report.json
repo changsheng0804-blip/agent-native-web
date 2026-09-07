@@ -1,0 +1,279 @@
+{
+ "runs": 3,
+ "results": [
+  {
+   "arm": "A",
+   "success": true,
+   "receipt_ok": false,
+   "receipt": "订单已提交: 出发地=北京, 目的地=上海, 日期=2026-10-01, 人数=2, 保险=未购",
+   "agent_status": "done",
+   "steps": 23,
+   "tokens_in": 188178,
+   "tokens_out": 1037,
+   "calls": 23,
+   "elapsed_s": 119.4,
+   "injected": {
+    "origin": true,
+    "origin_at": 1788704935616,
+    "origin_recovered_at": 1788704935649,
+    "insurance": true,
+    "insurance_at": 1788704941335,
+    "price": true,
+    "price_at": 1788704941372,
+    "insurance_recovered_at": 1788704941428
+   },
+   "recovery_ms": {
+    "origin_ms": 33,
+    "insurance_ms": 93,
+    "price_exposed_ms": null
+   },
+   "monitor": null,
+   "log": [
+    "[注入] 重置出发地(当时 origin='北京' dest='上海')",
+    "[注入] 取消保险勾选",
+    "[注入] 价格改为 ¥1200",
+    "[页面] ✅ 订单提交成功",
+    "[结果] ✅ 提交成功,回执: 订单已提交: 出发地=北京, 目的地=上海, 日期=2026-10-01, 人数=2, 保险=未购",
+    "[结果] 回执内容错误(字段被重置/取消但未修正)"
+   ],
+   "run": 1
+  },
+  {
+   "arm": "A",
+   "success": true,
+   "receipt_ok": false,
+   "receipt": "订单已提交: 出发地=北京, 目的地=上海, 日期=2026-10-01, 人数=2, 保险=未购",
+   "agent_status": "done",
+   "steps": 24,
+   "tokens_in": 225445,
+   "tokens_out": 722,
+   "calls": 24,
+   "elapsed_s": 126.0,
+   "injected": {
+    "origin": true,
+    "origin_at": 1788705069509,
+    "origin_recovered_at": 1788705071089,
+    "insurance": true,
+    "insurance_at": 1788705084244,
+    "price": true,
+    "price_at": 1788705084274,
+    "insurance_recovered_at": 1788705084305
+   },
+   "recovery_ms": {
+    "origin_ms": 1580,
+    "insurance_ms": 61,
+    "price_exposed_ms": null
+   },
+   "monitor": null,
+   "log": [
+    "[注入] 重置出发地(当时 origin='北京' dest='上海')",
+    "[注入] 取消保险勾选",
+    "[注入] 价格改为 ¥1200",
+    "[页面] ✅ 订单提交成功",
+    "[结果] ✅ 提交成功,回执: 订单已提交: 出发地=北京, 目的地=上海, 日期=2026-10-01, 人数=2, 保险=未购",
+    "[结果] 回执内容错误(字段被重置/取消但未修正)"
+   ],
+   "run": 2
+  },
+  {
+   "arm": "A",
+   "success": true,
+   "receipt_ok": false,
+   "receipt": "订单已提交: 出发地=北京, 目的地=上海, 日期=2026-10-01, 人数=2, 保险=未购",
+   "agent_status": "done",
+   "steps": 17,
+   "tokens_in": 112924,
+   "tokens_out": 448,
+   "calls": 17,
+   "elapsed_s": 76.2,
+   "injected": {
+    "origin": true,
+    "origin_at": 1788705185584,
+    "origin_recovered_at": 1788705187183,
+    "insurance": true,
+    "insurance_at": 1788705196186,
+    "price": true,
+    "price_at": 1788705196218,
+    "insurance_recovered_at": 1788705196251
+   },
+   "recovery_ms": {
+    "origin_ms": 1599,
+    "insurance_ms": 65,
+    "price_exposed_ms": null
+   },
+   "monitor": null,
+   "log": [
+    "[注入] 重置出发地(当时 origin='北京' dest='上海')",
+    "[注入] 取消保险勾选",
+    "[注入] 价格改为 ¥1200",
+    "[页面] ✅ 订单提交成功",
+    "[结果] ✅ 提交成功,回执: 订单已提交: 出发地=北京, 目的地=上海, 日期=2026-10-01, 人数=2, 保险=未购",
+    "[结果] 回执内容错误(字段被重置/取消但未修正)"
+   ],
+   "run": 3
+  },
+  {
+   "arm": "B",
+   "success": true,
+   "receipt_ok": true,
+   "receipt": "订单已提交: 出发地=北京, 目的地=上海, 日期=2026-10-01, 人数=2, 保险=已购",
+   "agent_status": "max_steps",
+   "steps": 25,
+   "tokens_in": 169866,
+   "tokens_out": 1466,
+   "calls": 25,
+   "elapsed_s": 118.2,
+   "injected": {
+    "origin": true,
+    "origin_at": 1788705288494,
+    "origin_recovered_at": 1788705290032,
+    "insurance": true,
+    "insurance_at": 1788705299383,
+    "price": true,
+    "price_at": 1788705299415,
+    "insurance_recovered_at": 1788705299447
+   },
+   "recovery_ms": {
+    "origin_ms": 1538,
+    "insurance_ms": 64,
+    "price_exposed_ms": null
+   },
+   "monitor": {
+    "polls": 178,
+    "violations": 2,
+    "pending": 0
+   },
+   "log": [
+    "[注入] 重置出发地(当时 origin='北京' dest='上海')",
+    "[注入] 取消保险勾选",
+    "[注入] 价格改为 ¥1200",
+    "[监视] ⚠ 前提失效: origin 期望 '北京' 实际 ''",
+    "[监视] ⚠ 前提失效: insurance 期望 'true' 实际 'false'",
+    "[页面] ✅ 订单提交成功",
+    "[结果] ✅ 提交成功,回执: 订单已提交: 出发地=北京, 目的地=上海, 日期=2026-10-01, 人数=2, 保险=已购",
+    "[结果] 回执内容正确"
+   ],
+   "run": 1
+  },
+  {
+   "arm": "B",
+   "success": true,
+   "receipt_ok": true,
+   "receipt": "订单已提交: 出发地=北京, 目的地=上海, 日期=2026-10-01, 人数=2, 保险=已购",
+   "agent_status": "max_steps",
+   "steps": 25,
+   "tokens_in": 177410,
+   "tokens_out": 760,
+   "calls": 25,
+   "elapsed_s": 122.0,
+   "injected": {
+    "origin": true,
+    "origin_at": 1788705397495,
+    "origin_recovered_at": 1788705397526,
+    "insurance": true,
+    "insurance_at": 1788705438024,
+    "price": true,
+    "price_at": 1788705438059,
+    "insurance_recovered_at": 1788705438115
+   },
+   "recovery_ms": {
+    "origin_ms": 31,
+    "insurance_ms": 91,
+    "price_exposed_ms": null
+   },
+   "monitor": {
+    "polls": 297,
+    "violations": 2,
+    "pending": 0
+   },
+   "log": [
+    "[注入] 重置出发地(当时 origin='北京' dest='上海')",
+    "[监视] ⚠ 前提失效: origin 期望 '北京' 实际 ''",
+    "[注入] 取消保险勾选",
+    "[注入] 价格改为 ¥1200",
+    "[监视] ⚠ 前提失效: insurance 期望 'true' 实际 'false'",
+    "[页面] ✅ 订单提交成功",
+    "[结果] ✅ 提交成功,回执: 订单已提交: 出发地=北京, 目的地=上海, 日期=2026-10-01, 人数=2, 保险=已购",
+    "[结果] 回执内容正确"
+   ],
+   "run": 2
+  },
+  {
+   "arm": "B",
+   "success": true,
+   "receipt_ok": true,
+   "receipt": "订单已提交: 出发地=北京, 目的地=上海, 日期=2026-10-01, 人数=2, 保险=已购",
+   "agent_status": "max_steps",
+   "steps": 25,
+   "tokens_in": 169709,
+   "tokens_out": 710,
+   "calls": 25,
+   "elapsed_s": 113.7,
+   "injected": {
+    "origin": true,
+    "origin_at": 1788705528616,
+    "origin_recovered_at": 1788705528645,
+    "insurance": true,
+    "insurance_at": 1788705570764,
+    "price": true,
+    "price_at": 1788705570796,
+    "insurance_recovered_at": 1788705570828
+   },
+   "recovery_ms": {
+    "origin_ms": 29,
+    "insurance_ms": 64,
+    "price_exposed_ms": null
+   },
+   "monitor": {
+    "polls": 248,
+    "violations": 2,
+    "pending": 0
+   },
+   "log": [
+    "[注入] 重置出发地(当时 origin='北京' dest='上海')",
+    "[监视] ⚠ 前提失效: origin 期望 '北京' 实际 ''",
+    "[注入] 取消保险勾选",
+    "[注入] 价格改为 ¥1200",
+    "[监视] ⚠ 前提失效: insurance 期望 'true' 实际 'false'",
+    "[页面] ✅ 订单提交成功",
+    "[结果] ✅ 提交成功,回执: 订单已提交: 出发地=北京, 目的地=上海, 日期=2026-10-01, 人数=2, 保险=已购",
+    "[结果] 回执内容正确"
+   ],
+   "run": 3
+  }
+ ],
+ "summary": {
+  "A": {
+   "n": 3,
+   "success": 3,
+   "receipt_ok": 0,
+   "task_ok": 0,
+   "steps_avg": 21.3,
+   "tokens_avg": 176251,
+   "recovery_origin_avg_ms": 1071,
+   "recovery_insurance_avg_ms": 73,
+   "monitor_violations": [],
+   "monitor_polls": []
+  },
+  "B": {
+   "n": 3,
+   "success": 3,
+   "receipt_ok": 3,
+   "task_ok": 3,
+   "steps_avg": 25.0,
+   "tokens_avg": 173307,
+   "recovery_origin_avg_ms": 533,
+   "recovery_insurance_avg_ms": 73,
+   "monitor_violations": [
+    2,
+    2,
+    2
+   ],
+   "monitor_polls": [
+    178,
+    297,
+    248
+   ]
+  }
+ }
+}

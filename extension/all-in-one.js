@@ -858,6 +858,9 @@ window.AgentRuntime = window.AgentRuntime || {};
           tag: el.tag,
           semantic: el.semantic,
           text: el.text,
+          // 批量查询只暴露实际 DOM href；JS 点击卡片没有 href 时保持 null，
+          // 不猜测或伪造转链地址。
+          href: (el.attributes && el.attributes.href) || null,
           bounds: el.bounds,
           interactive: el.interactive,
           inViewport: el.inViewport

@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Time Axis Experiment Fixture</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 24px; }
+  section { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  button { padding: 8px 16px; font-size: 15px; cursor: pointer; }
+  .out { margin-top: 8px; min-height: 24px; }
+  .card { border: 1px solid #999; border-radius: 6px; padding: 8px; margin-top: 4px; background: #f6f6f6; }
+  h2 { margin: 0 0 8px; font-size: 16px; }
+</style>
+</head>
+<body>
+  <h1>时间感知反馈实验夹具</h1>
+  <p>每个场景:点击按钮 → 页面按设定时序产生 DOM 变化。data-expected 声明地面真值供实验脚本断言。</p>
+
+  <!-- S0: 无变化对照 -->
+  <section data-testid="s0">
+    <h2>S0 无变化对照</h2>
+    <button id="s0-btn" data-testid="s0-btn" data-expected="none">S0 点击后什么都不发生</button>
+    <div id="s0-out" class="out" data-testid="s0-out"></div>
+  </section>
+
+  <!-- S1: 延时生效(3s > 基线 2.5s 观察窗) -->
+  <section data-testid="s1">
+    <h2>S1 延时生效(3 秒后弹窗)</h2>
+    <button id="s1-btn" data-testid="s1-btn" data-expected="delayed-effect">S1 点击后 3 秒出现对话框</button>
+    <div id="s1-out" class="out" data-testid="s1-out"></div>
+  </section>
+
+  <!-- S2: 振荡(同一构件 500ms 交替增删,持续 4s) -->
+  <section data-testid="s2">
+    <h2>S2 振荡(2Hz 增删循环)</h2>
+    <button id="s2-btn" data-testid="s2-btn" data-expected="oscillation">S2 点击后开始振荡 4 秒</button>
+    <div id="s2-out" class="out" data-testid="s2-out"></div>
+  </section>
+
+  <!-- S3: 渐进渲染(三波) -->
+  <section data-testid="s3">
+    <h2>S3 渐进渲染(300/800/1500ms 三波)</h2>
+    <button id="s3-btn" data-testid="s3-btn" data-expected="progressive">S3 点击后分三波加载</button>
+    <div id="s3-out" class="out" data-testid="s3-out"></div>
+  </section>
+
+  <!-- S4: 静默回退(600ms 出现,2000ms 被移除) -->
+  <section data-testid="s4">
+    <h2>S4 静默回退(出现后又被移除)</h2>
+    <button id="s4-btn" data-testid="s4-btn" data-expected="reverted">S4 点击后提示出现又消失</button>
+    <div id="s4-out" class="out" data-testid="s4-out"></div>
+  </section>
+
+<script>
+  (function () {
+    function makeEl(id, text, role) {
+      var el = document.createElement('div');
+      el.id = id;
+      el.textContent = text;
+      el.className = 'card';
+      if (role) el.setAttribute('role', role);
+      return el;
+    }
+
+    // S1: 3s 后出现 dialog
+    document.getElementById('s1-btn').addEventListener('click', function () {
+      setTimeout(function () {
+        var dlg = makeEl('s1-dialog', '延时对话框内容', 'dialog');
+        document.getElementById('s1-out').appendChild(dlg);
+      }, 3000);
+    });
+
+    // S2: 500ms 交替增删,持续 4s
+    document.getElementById('s2-btn').addEventListener('click', function () {
+      var out = document.getElementById('s2-out');
+      var start = Date.now();
+      var state = false;
+      (function tick() {
+        if (Date.now() - start > 4000) {
+          if (!state) {
+            var fin = makeEl('s2-final', '振荡结束,最终稳定元素');
+            out.appendChild(fin);
+          }
+          return;
+        }
+        if (state) {
+          var el = document.getElementById('s2-el');
+          if (el) el.remove();
+        } else {
+          out.appendChild(makeEl('s2-el', 'oscillating'));
+        }
+        state = !state;
+        setTimeout(tick, 500);
+      })();
+    });
+
+    // S3: 三波渐进
+    document.getElementById('s3-btn').addEventListener('click', function () {
+      var out = document.getElementById('s3-out');
+      function wave(ms, id, text) {
+        setTimeout(function () {
+          out.appendChild(makeEl(id, text));
+        }, ms);
+      }
+      wave(300, 's3-w1', '第一批内容');
+      wave(800, 's3-w2', '第二批内容');
+      wave(1500, 's3-w3', '第三批内容');
+    });
+
+    // S4: 600ms 出现,2000ms 移除
+    document.getElementById('s4-btn').addEventListener('click', function () {
+      var out = document.getElementById('s4-out');
+      setTimeout(function () {
+        out.appendChild(makeEl('s4-msg', '成功提示(即将被回退)'));
+      }, 600);
+      setTimeout(function () {
+        var el = document.getElementById('s4-msg');
+        if (el) el.remove();
+      }, 2000);
+    });
+  })();
+</script>
+</body>
+</html>

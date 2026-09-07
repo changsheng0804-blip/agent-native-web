@@ -1,0 +1,178 @@
+{
+ "steps": 4,
+ "runs": 3,
+ "results": [
+  {
+   "arm": "A",
+   "step": "wiki-search-suggestions",
+   "status": "ok",
+   "latency_ms": 1580,
+   "server_page_outcome": "progressed",
+   "server_effect_verdict": "effected",
+   "server_why": "填表值已进入可见输入框",
+   "action_chars": 2848,
+   "gt": {
+    "text": true
+   },
+   "gt_label": "建议出现(艾伦·图灵)",
+   "run": 1,
+   "expected": "建议出现(艾伦·图灵)",
+   "match": true
+  },
+  {
+   "arm": "B",
+   "step": "wiki-search-suggestions",
+   "status": "ok",
+   "latency_ms": 1552,
+   "server_page_outcome": "progressed",
+   "server_effect_verdict": "effected",
+   "server_why": "填表值已进入可见输入框",
+   "action_chars": 2849,
+   "card_verdict": "effected-delayed",
+   "card_why": "归属到 1 个高价值构件变化,最晚 lag 1990ms(延时生效)",
+   "window_events": 7,
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1,
+     6
+    ],
+    "last_event_t": 1788695286151,
+    "last_event_lag_ms": 1990,
+    "quiet_since_ms": 1990
+   },
+   "reversion": 0,
+   "oscillation": null,
+   "change_chars": 31916,
+   "url_change_injected": false,
+   "gt": {
+    "text": true
+   },
+   "gt_label": "建议出现(艾伦·图灵)",
+   "run": 1,
+   "expected": "建议出现(艾伦·图灵)",
+   "match": true,
+   "match_mode": "strict"
+  },
+  {
+   "arm": "A",
+   "step": "wiki-search-suggestions",
+   "status": "ok",
+   "latency_ms": 1758,
+   "server_page_outcome": "progressed",
+   "server_effect_verdict": "effected",
+   "server_why": "填表值已进入可见输入框",
+   "action_chars": 2848,
+   "gt": {
+    "text": true
+   },
+   "gt_label": "建议出现(艾伦·图灵)",
+   "run": 2,
+   "expected": "建议出现(艾伦·图灵)",
+   "match": true
+  },
+  {
+   "arm": "B",
+   "step": "wiki-search-suggestions",
+   "status": "ok",
+   "latency_ms": 1488,
+   "server_page_outcome": "progressed",
+   "server_effect_verdict": "effected",
+   "server_why": "填表值已进入可见输入框",
+   "action_chars": 2849,
+   "card_verdict": "effected-delayed",
+   "card_why": "归属到 1 个高价值构件变化,最晚 lag 1930ms(延时生效)",
+   "window_events": 7,
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1,
+     6
+    ],
+    "last_event_t": 1788695309036,
+    "last_event_lag_ms": 1930,
+    "quiet_since_ms": 1930
+   },
+   "reversion": 0,
+   "oscillation": null,
+   "change_chars": 32672,
+   "url_change_injected": false,
+   "gt": {
+    "text": true
+   },
+   "gt_label": "建议出现(艾伦·图灵)",
+   "run": 2,
+   "expected": "建议出现(艾伦·图灵)",
+   "match": true,
+   "match_mode": "strict"
+  },
+  {
+   "arm": "A",
+   "step": "wiki-search-suggestions",
+   "status": "ok",
+   "latency_ms": 1527,
+   "server_page_outcome": "progressed",
+   "server_effect_verdict": "effected",
+   "server_why": "填表值已进入可见输入框",
+   "action_chars": 2848,
+   "gt": {
+    "text": true
+   },
+   "gt_label": "建议出现(艾伦·图灵)",
+   "run": 3,
+   "expected": "建议出现(艾伦·图灵)",
+   "match": true
+  },
+  {
+   "arm": "B",
+   "step": "wiki-search-suggestions",
+   "status": "ok",
+   "latency_ms": 1611,
+   "server_page_outcome": "progressed",
+   "server_effect_verdict": "effected",
+   "server_why": "填表值已进入可见输入框",
+   "action_chars": 2849,
+   "card_verdict": "effected-delayed",
+   "card_why": "归属到 1 个高价值构件变化,最晚 lag 2076ms(延时生效)",
+   "window_events": 7,
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1,
+     6
+    ],
+    "last_event_t": 1788695333526,
+    "last_event_lag_ms": 2076,
+    "quiet_since_ms": 2076
+   },
+   "reversion": 0,
+   "oscillation": null,
+   "change_chars": 32672,
+   "url_change_injected": false,
+   "gt": {
+    "text": true
+   },
+   "gt_label": "建议出现(艾伦·图灵)",
+   "run": 3,
+   "expected": "建议出现(艾伦·图灵)",
+   "match": true,
+   "match_mode": "strict"
+  }
+ ],
+ "summary": {
+  "wiki-search-suggestions": {
+   "A": {
+    "n": 3,
+    "ok": 3,
+    "partial": 0,
+    "skip": 0
+   },
+   "B": {
+    "n": 3,
+    "ok": 3,
+    "partial": 0,
+    "skip": 0
+   }
+  }
+ }
+}
