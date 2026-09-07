@@ -689,7 +689,7 @@ def _ensure_page_runtime(page, attempts=3):
         return False
 
 
-def _evaluate(world_id, expr, arg=None):
+def _evaluate(world_id, expr, arg=None, timeout=None):
     w = _world(world_id)
     page = w["page"]
     token = id(page)
@@ -698,6 +698,13 @@ def _evaluate(world_id, expr, arg=None):
         if _ensure_page_runtime(page):
             ready_tokens.add(token)
             w.setdefault("runtime_pending_tokens", set()).discard(token)
+    # Playwright evaluate 不支持 timeout 关键字;用 set_default_timeout 控制
+    # 导航等待上限(默认 30s,导航竞态下会阻塞动作反馈),用完还原。
+    if timeout is not None:
+        try:
+            page.set_default_timeout(timeout)
+        except Exception:
+            pass
     try:
         return page.evaluate(expr, arg) if arg is not None else page.evaluate(expr)
     except Exception as first_error:
@@ -718,6 +725,12 @@ def _evaluate(world_id, expr, arg=None):
         ready_tokens.add(token)
         w.setdefault("runtime_pending_tokens", set()).discard(token)
         return page.evaluate(expr, arg) if arg is not None else page.evaluate(expr)
+    finally:
+        if timeout is not None:
+            try:
+                page.set_default_timeout(30000)
+            except Exception:
+                pass
 
 
 def _evaluate_query_retry(world_id, expr, arg=None, attempts=3):
@@ -1309,10 +1322,10 @@ def _impl_with_status(name, args):
             _tl_action(int(wid), "start", name, args)
         except Exception:
             pass
+    _ws_t0 = None
     try:
         result = _impl(name, args, before_signal)
-    except Exception as e:
-        # 动作异常路径:返回统一后果卡 page_outcome=errored(结构化返回,不吞错误)
+    except Exception as e:        # 动作异常路径:返回统一后果卡 page_outcome=errored(结构化返回,不吞错误)
         if name in TRACKED_ACTION_NAMES and wid is not None:
             traceback.print_exc()
             try:
@@ -1879,12 +1892,16 @@ def _tl_action(wid, phase, name, args, result=None):
 
 
 def _timeline_causal_windows(events):
-    """因果窗口:按 action 事件切段,每段 = 该动作的后果(动作 seq 到下一动作 seq 之间)。
-    返回压缩摘要:类型计数 + 状态码 + 关键事件(前提失效/失败/4xx/JSON 接口)。"""
+    """因果窗口:按动作 start 事件切段,每段 = 该动作的后果(本动作 start 到下一动作 start)。
+
+    注意:一次动作产生 start/end 两个 action 事件,只以 start 为窗口边界
+    (end 之前的事件 = 动作执行期间的后果,归入本窗口;否则一次点击会被切成两段)。
+    返回压缩摘要:类型计数 + 状态码 + 关键事件(前提失效/失败/4xx/JSON 接口)。
+    """
     windows = []
     cur = None
     for e in events:
-        if e["type"] == "action":
+        if e["type"] == "action" and e.get("phase") == "start":
             if cur:
                 windows.append(cur)
             cur = {"action": e.get("action"), "phase": e.get("phase"),
@@ -2082,13 +2099,13 @@ def _inject_action_evidence(result, wid, t_start):
 
 def _resolve_id(world_id, q):
     """支持名字/强 ID,统一解析为强 ID"""
-    r = _evaluate(world_id, "(q) => agentWorld.query.resolve(q)", q)
+    r = _evaluate(world_id, "(q) => agentWorld.query.resolve(q)", q, timeout=8000)
     if r and r.get("id"):
         return r["id"]
     if r and r.get("matches"):
         raise ValueError(f"{q!r} 有 {len(r['matches'])} 个候选: {r['matches']},请用 findEntities 精确过滤")
     # 文本兜底:resolve 未命中时,按可见文本做大小写不敏感子串匹配(与内核 findEntities 口径一致)
-    texts = _evaluate(world_id, "(q) => agentWorld.query.findEntities({text: q})", q) or []
+    texts = _evaluate(world_id, "(q) => agentWorld.query.findEntities({text: q})", q, timeout=8000) or []
     if len(texts) == 1:
         return texts[0]["id"]
     if len(texts) > 1:
@@ -3784,11 +3801,16 @@ def _click_locator_nowait(locator, timeout=10000):
 
 
 def _refresh_core_status(wid, settle_ms=300):
-    """操作后等防抖+渲染,主动刷新内核状态(状态卡反映操作结果)"""
+    """操作后等防抖+渲染,主动刷新内核状态(状态卡反映操作结果)
+
+    导航竞态保护:点击触发导航后旧文档执行上下文随即销毁,此时 evaluate
+    会阻塞等待新文档(实测 GitHub 导航最长阻塞 ~30s,动作反馈被拖慢)。
+    刷新旧文档本身无意义——3s 短超时,失败即放弃,后果卡由 URL 事实判定。
+    """
     w = _world(wid)
     time.sleep(settle_ms / 1000)
     try:
-        _evaluate(wid, "() => { agentWorld._runtime.refreshStatus(); return true; }")
+        _evaluate(wid, "() => { agentWorld._runtime.refreshStatus(); return true; }", timeout=3000)
     except Exception:
         pass
 
@@ -3823,13 +3845,32 @@ def _fill_visible(wid, text):
         return False
 
 
-def _page_signal_snapshot(wid):
+def _page_signal_snapshot(wid, fast=False):
     """读取一份很小的页面整体状态,作为动作反馈的全局基线。
 
     这里不读取整页结构,只关注导航和覆盖层这类会改变任务路径的信号。
+    fast=True:导航已开始(URL 已变),新文档状态由后续查询提供——立即返回轻量
+    快照,不 evaluate 等待新文档(实测 GitHub 导航期间 evaluate 可阻塞 ~20s,
+    拖垮动作反馈;URL 变化本身就是导航类强证据)。
     """
     w = _world(wid)
     page = w.get("page")
+    if fast:
+        try:
+            current_url = page.url[:300]
+        except Exception:
+            current_url = ""
+        return {
+            "url": current_url,
+            "title": "",
+            "state": "loading",
+            "changes_seq": 0,
+            "dialogs": [],
+            "menus": [],
+            "_net_err_cursor": len(w.get("network_errors") or []),
+            "_console_err_cursor": len(w.get("console_errors") or []),
+            "scan_revision": int((w.get("task_context") or {}).get("page", {}).get("scan_revision", 0)),
+        }
     token = id(page) if page is not None else None
     pending = w.setdefault("runtime_pending_tokens", set())
     if token in pending:
@@ -3863,7 +3904,7 @@ def _page_signal_snapshot(wid):
             "scan_revision": int((w.get("task_context") or {}).get("page", {}).get("scan_revision", 0)),
         }
     try:
-        core = _evaluate(wid, "() => agentWorld.query.getStatus()") or {}
+        core = _evaluate(wid, "() => agentWorld.query.getStatus()", timeout=4000) or {}
     except Exception:
         core = {}
     try:
@@ -3878,6 +3919,7 @@ def _page_signal_snapshot(wid):
                     menus: pick('menu')
                 };
             }""",
+            timeout=4000,
         ) or {}
     except Exception:
         overlays = {}
@@ -3891,11 +3933,11 @@ def _page_signal_snapshot(wid):
     net_errors = w.get("network_errors") or []
     console_errors = w.get("console_errors") or []
     try:
-        scan_state = _evaluate(wid, "() => window.__agentWorldProgressiveScan || {}") or {}
+        scan_state = _evaluate(wid, "() => window.__agentWorldProgressiveScan || {}", timeout=4000) or {}
         if not scan_state.get("active"):
             # 导航后 init script 可能重建页面世界，重新挂上渐进扫描调度。
             _start_progressive_scan(wid)
-            scan_state = _evaluate(wid, "() => window.__agentWorldProgressiveScan || {}") or {}
+            scan_state = _evaluate(wid, "() => window.__agentWorldProgressiveScan || {}", timeout=4000) or {}
         scan_revision = int(scan_state.get("revision", 0))
         _task_update(wid, page={"scan_revision": scan_revision})
     except Exception:
@@ -4361,17 +4403,25 @@ def _outcome_card(wid, action, args, ret, before_signal):
     结构 = 旧返回字段(超集,兼容现有客户端)+ 卡片字段。
     主标签(page_outcome/situation/confidence/why)位于字段最前。
     """
+    _oc_t0 = None
     w = _world(int(wid))
     try:
         before = before_signal or _page_signal_snapshot(int(wid))
     except Exception:
         before = {}
-    # 先在原页面解析目标；转到新标签页后旧 el_N 不再存在，但后果卡仍应保留目标身份。
+    # 导航是否已开始(URL 相对动作前已变):导航后旧 el_N 已失效,再解析目标只会
+    # evaluate 阻塞等待新文档(实测 GitHub 可拖 ~18s);后果卡由 URL 事实判定。
+    _navigated = False
+    try:
+        _navigated = bool(w["page"].url and before and (w["page"].url != before.get("url")))
+    except Exception:
+        _navigated = False
+    # 在转到新标签页后旧 el_N 不再存在，但后果卡仍应保留目标身份。
     submit_trigger = False
     resolved = None
     ent = None
     target_arg = args.get("id")
-    if target_arg and action != "world_navigate":
+    if target_arg and action != "world_navigate" and not _navigated:
         try:
             resolved = _resolve_id(int(wid), target_arg)
         except Exception:
@@ -4396,7 +4446,14 @@ def _outcome_card(wid, action, args, ret, before_signal):
                 page_poll_ms = 800
     new_pages = _activate_new_page(int(wid), args.get("_before_page_tokens"), poll_ms=page_poll_ms)
     try:
-        after = _page_signal_snapshot(int(wid))
+        # 导航已开始(URL 相对动作前已变)时用轻量 after 快照:不等新文档 evaluate
+        # (GitHub 实测导航期间 evaluate 可阻塞 ~20s,动作反馈被拖慢;URL 变化是导航强证据)
+        fast_after = False
+        try:
+            fast_after = (w["page"].url != (before or {}).get("url"))
+        except Exception:
+            fast_after = False
+        after = _page_signal_snapshot(int(wid), fast=fast_after)
     except Exception:
         after = {}
     # 保留旧 feedback/全局纠正逻辑(URL/弹窗覆盖局部判定)
