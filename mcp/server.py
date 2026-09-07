@@ -2009,7 +2009,7 @@ def _evidence_norm_url(url):
         return str(url)[:160]
 
 
-def _build_action_evidence(wid, t_start):
+def _build_action_evidence(wid, t_start, page_outcome=None, effect_verdict=None):
     """从 runtime 流切片构建动作证据卡。"""
     w = _worlds.get(int(wid))
     if not w:
@@ -2044,12 +2044,20 @@ def _build_action_evidence(wid, t_start):
         "console_errors": [c["text"] for c in cons[:3]],
         "decision": None,
     }
-    card["decision"] = _evidence_decision(card)
+    card["decision"] = _evidence_decision(card, page_outcome=page_outcome, effect_verdict=effect_verdict)
     return card
 
 
-def _evidence_decision(card):
-    """规则化决策建议:证据 → agent 下一步行动(与实验脚本一致的口径)。"""
+def _evidence_decision(card, page_outcome=None, effect_verdict=None):
+    """规则化决策建议:证据 → agent 下一步行动(与实验脚本一致的口径)。
+
+    融合后果卡判定:请求全 2xx 但页面判定未生效(unchanged/no-change)时,
+    请求状态不能作为生效证据(实测:GitHub 后台轮询全 2xx,无副作用点击
+    的 decision 曾误报"已生效,继续下一步"——与后果卡 unchanged 直接矛盾)。
+    """
+    if page_outcome in ("unchanged", "challenged") or effect_verdict in ("no-change", "unknown"):
+        return ("页面判定动作未生效/存疑:请求状态不能确认生效"
+                "(后台轮询/预取也可能 2xx),先核对目标元素与页面状态再重试")
     doc_urls = [r["url"] for r in card["requests"] if r.get("rtype") == "document"]
     if any("/login" in u for u in doc_urls):
         return (f"被重定向到登录页({[u for u in doc_urls if '/login' in u][0]})"
@@ -2077,7 +2085,18 @@ def _inject_action_evidence(result, wid, t_start):
     try:
         if t_start is None:
             return result
-        card = _build_action_evidence(wid, t_start)
+        # 融合后果卡判定:动作返回里的 page_outcome/effect.verdict
+        page_outcome = None
+        effect_verdict = None
+        try:
+            payload = _result_payload(result)
+            if payload:
+                page_outcome = payload.get("page_outcome")
+                effect_verdict = (payload.get("effect") or {}).get("verdict")
+        except Exception:
+            pass
+        card = _build_action_evidence(wid, t_start, page_outcome=page_outcome,
+                                      effect_verdict=effect_verdict)
         if not card:
             return result
         for item in result or []:
