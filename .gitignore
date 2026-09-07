@@ -8,3 +8,8 @@ __pycache__/
 
 # Firecrawl 工具缓存(不入库)
 .firecrawl/
+
+# 门禁/验证运行报告(运行时生成,历史快照见 docs/archive/)
+mcp/quality_report.md
+mcp/validate_report.md
+mcp/verify_record.md

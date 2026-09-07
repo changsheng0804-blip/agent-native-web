@@ -18,14 +18,14 @@ Agent-Native Web（智能体原生网页）让智能体可以在网页世界中�
 - [完整项目指南](docs/项目指南与架构.md)
 - [MCP 服务器](mcp/server.py)
 - [站点业务适配器](mcp/site_adapters/)
-- [真实站点任务图闭环验证报告](docs/真实站点任务图闭环验证 GitHub.md)
-- [真实站点任务图 A/B 对照报告](docs/A-B对照基准 GitHub.md)
+- [真实站点任务图闭环验证报告](docs/archive/真实站点任务图闭环验证 GitHub.md)
+- [真实站点任务图 A/B 对照报告](docs/archive/A-B对照基准 GitHub.md)
 - [浏览器扩展内核](extension/)
 - [智能体技能包](skills/agent-world/SKILL.md)
 - [测试夹具](tests/fixtures/)
 - [安全边界说明](docs/安全边界-IPI防御.md)
-- [真实网站操作对比记录](docs/真实网站操作对比记录.md)
-- [实时反馈与网页导览实施计划](docs/实施计划-实时反馈与网页导览.md)
+- [真实网站操作对比记录](docs/archive/真实网站操作对比记录.md)
+- [实时反馈与网页导览实施计划](docs/archive/实施计划-实时反馈与网页导览.md)
 
 ## 快速运行
 
@@ -88,7 +88,7 @@ python mcp/run_quality.py --list
 2. **L3 evidence decision 与后果卡矛盾**：后台轮询全 2xx 时无副作用点击被误判"已生效,继续下一步"（与 `unchanged` 矛盾）。已融合后果卡判定。
 3. **change_digest key 漏批量信号**：整页替换（563 remove + 1437 update）被单条语义降权漏掉，key 为空。已增加批量信号归纳层。
 
-范式结论（源自统一时间线三阶段 A/B 评估）：**时间线价值在"信息"不在"工具"**——由 harness 每步自动注入压缩摘要（事件计数 + 状态码 + 语义化 DOM 变化，如 `content.1200`），实测慢异步任务步数/耗时/tokens 减半、变价任务从落后反超；依赖模型主动调用工具的模式（模型 15 轮只用 1 次 `world_assume`）不成立。详细论证见 [统一时间线评估报告](docs/评估报告-统一时间线真实任务AB.md) 与 [重核记录](docs/重核记录-反馈机制真实价值.md)。
+范式结论（源自统一时间线三阶段 A/B 评估）：**时间线价值在"信息"不在"工具"**——由 harness 每步自动注入压缩摘要（事件计数 + 状态码 + 语义化 DOM 变化，如 `content.1200`），实测慢异步任务步数/耗时/tokens 减半、变价任务从落后反超；依赖模型主动调用工具的模式（模型 15 轮只用 1 次 `world_assume`）不成立。详细论证见 [统一时间线评估报告](docs/archive/评估报告-统一时间线真实任务AB.md) 与 [重核记录](docs/archive/重核记录-反馈机制真实价值.md)。
 
 ## 当前状态
 
