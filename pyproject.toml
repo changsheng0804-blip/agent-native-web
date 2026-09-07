@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Agent-Native Web —— 让智能体在网页世界中获得快速、准确、无歧义的反馈(MCP 服务器 + 浏览器扩展内核)"
 requires-python = ">=3.10"
 dependencies = [
-    "mcp>=1.0",
+    "mcp>=1.29,<2",   # 锁 1.x:2.x 移除了 Server.list_tools 装饰器(2026-09-07 CI 实证)
     "playwright>=1.40",
     "pillow>=10.0",   # 视觉 diff 证据与 SoM 标注;缺失会导致 server.py 启动即崩溃
 ]
