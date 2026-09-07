@@ -1,0 +1,17 @@
+{
+ "world": "https://news.ycombinator.com/",
+ "false_alarms": 0,
+ "status_latency_ms": 36.3,
+ "notice": [
+  {
+   "channel": "premise",
+   "type": "assumption-violated",
+   "name": "score",
+   "expected": "53 points by qznc 29 minutes ago  | hide | 16 comments",
+   "actual": "9999 points by qznc 29 minutes ago  | hide | 16 comments",
+   "at_ms": 1788708562869
+  }
+ ],
+ "notice_delay_ms": 1848,
+ "post_ack_clean": true
+}

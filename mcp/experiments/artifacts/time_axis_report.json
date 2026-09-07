@@ -1,0 +1,763 @@
+{
+ "fixture": "G:\\工作区\\Agent-world-mcp\\agent-native-web\\tests\\fixtures\\time_axis.html",
+ "runs_per_arm": 3,
+ "summary": {
+  "s0-btn": {
+   "A": {
+    "n": 3,
+    "ok": 3,
+    "outcomes": {
+     "unchanged": 3
+    }
+   },
+   "B": {
+    "n": 3,
+    "ok": 3,
+    "outcomes": {
+     "no-change": 3
+    }
+   }
+  },
+  "s1-btn": {
+   "A": {
+    "n": 3,
+    "ok": 0,
+    "outcomes": {
+     "unchanged": 3
+    }
+   },
+   "B": {
+    "n": 3,
+    "ok": 3,
+    "outcomes": {
+     "effected-delayed": 3
+    }
+   }
+  },
+  "s2-btn": {
+   "A": {
+    "n": 3,
+    "ok": 0,
+    "outcomes": {
+     "unchanged": 3
+    }
+   },
+   "B": {
+    "n": 3,
+    "ok": 3,
+    "outcomes": {
+     "oscillation": 3
+    }
+   }
+  },
+  "s3-btn": {
+   "A": {
+    "n": 3,
+    "ok": 0,
+    "outcomes": {
+     "uncertain": 3
+    }
+   },
+   "B": {
+    "n": 3,
+    "ok": 3,
+    "outcomes": {
+     "changed": 3
+    }
+   }
+  },
+  "s4-btn": {
+   "A": {
+    "n": 3,
+    "ok": 3,
+    "outcomes": {
+     "uncertain": 3
+    }
+   },
+   "B": {
+    "n": 3,
+    "ok": 3,
+    "outcomes": {
+     "reverted": 3
+    }
+   }
+  }
+ },
+ "results": [
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "unchanged",
+   "server_effect_verdict": "no-change",
+   "server_why": "目标区域无变化(点击可能未生效,或效果发生在远处)",
+   "latency_ms": 1304,
+   "scenario": "s0-btn",
+   "expected": "none",
+   "run": 1,
+   "match": true
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "unchanged",
+   "card_verdict": "no-change",
+   "card_confidence": "high",
+   "card_why": "6000ms 窗口内无任何变更事件",
+   "window_events": 0,
+   "attributed": [],
+   "oscillation": null,
+   "stability": {
+    "state": "stable",
+    "buckets": [],
+    "last_event_t": null,
+    "quiet_since_ms": null
+   },
+   "reversion": [],
+   "click_latency_ms": 1229,
+   "event_fetch_ms": 522,
+   "scenario": "s0-btn",
+   "expected": "none",
+   "run": 1,
+   "match": true
+  },
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "unchanged",
+   "server_effect_verdict": "no-change",
+   "server_why": "目标区域无变化(点击可能未生效,或效果发生在远处)",
+   "latency_ms": 1163,
+   "scenario": "s0-btn",
+   "expected": "none",
+   "run": 2,
+   "match": true
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "unchanged",
+   "card_verdict": "no-change",
+   "card_confidence": "high",
+   "card_why": "6000ms 窗口内无任何变更事件",
+   "window_events": 0,
+   "attributed": [],
+   "oscillation": null,
+   "stability": {
+    "state": "stable",
+    "buckets": [],
+    "last_event_t": null,
+    "quiet_since_ms": null
+   },
+   "reversion": [],
+   "click_latency_ms": 1135,
+   "event_fetch_ms": 576,
+   "scenario": "s0-btn",
+   "expected": "none",
+   "run": 2,
+   "match": true
+  },
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "unchanged",
+   "server_effect_verdict": "no-change",
+   "server_why": "目标区域无变化(点击可能未生效,或效果发生在远处)",
+   "latency_ms": 1167,
+   "scenario": "s0-btn",
+   "expected": "none",
+   "run": 3,
+   "match": true
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "unchanged",
+   "card_verdict": "no-change",
+   "card_confidence": "high",
+   "card_why": "6000ms 窗口内无任何变更事件",
+   "window_events": 0,
+   "attributed": [],
+   "oscillation": null,
+   "stability": {
+    "state": "stable",
+    "buckets": [],
+    "last_event_t": null,
+    "quiet_since_ms": null
+   },
+   "reversion": [],
+   "click_latency_ms": 1148,
+   "event_fetch_ms": 556,
+   "scenario": "s0-btn",
+   "expected": "none",
+   "run": 3,
+   "match": true
+  },
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "unchanged",
+   "server_effect_verdict": "no-change",
+   "server_why": "目标区域无变化(点击可能未生效,或效果发生在远处)",
+   "latency_ms": 1114,
+   "scenario": "s1-btn",
+   "expected": "delayed-effect",
+   "run": 1,
+   "match": false
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "unchanged",
+   "card_verdict": "effected-delayed",
+   "card_confidence": "high",
+   "card_why": "归属到 1 个高价值构件变化,最晚 lag 3288ms(延时生效)",
+   "window_events": 1,
+   "attributed": [
+    {
+     "id": "el_25",
+     "semantic": "dialog",
+     "lag_ms": 3288
+    }
+   ],
+   "oscillation": null,
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1
+    ],
+    "last_event_t": 1788691204216,
+    "last_event_lag_ms": 3288,
+    "quiet_since_ms": 3288
+   },
+   "reversion": [],
+   "click_latency_ms": 1183,
+   "event_fetch_ms": 548,
+   "scenario": "s1-btn",
+   "expected": "delayed-effect",
+   "run": 1,
+   "match": true
+  },
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "unchanged",
+   "server_effect_verdict": "no-change",
+   "server_why": "目标区域无变化(点击可能未生效,或效果发生在远处)",
+   "latency_ms": 1199,
+   "scenario": "s1-btn",
+   "expected": "delayed-effect",
+   "run": 2,
+   "match": false
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "unchanged",
+   "card_verdict": "effected-delayed",
+   "card_confidence": "high",
+   "card_why": "归属到 1 个高价值构件变化,最晚 lag 3416ms(延时生效)",
+   "window_events": 1,
+   "attributed": [
+    {
+     "id": "el_25",
+     "semantic": "dialog",
+     "lag_ms": 3416
+    }
+   ],
+   "oscillation": null,
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1
+    ],
+    "last_event_t": 1788691217559,
+    "last_event_lag_ms": 3416,
+    "quiet_since_ms": 3416
+   },
+   "reversion": [],
+   "click_latency_ms": 1207,
+   "event_fetch_ms": 548,
+   "scenario": "s1-btn",
+   "expected": "delayed-effect",
+   "run": 2,
+   "match": true
+  },
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "unchanged",
+   "server_effect_verdict": "no-change",
+   "server_why": "目标区域无变化(点击可能未生效,或效果发生在远处)",
+   "latency_ms": 1183,
+   "scenario": "s1-btn",
+   "expected": "delayed-effect",
+   "run": 3,
+   "match": false
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "unchanged",
+   "card_verdict": "effected-delayed",
+   "card_confidence": "high",
+   "card_why": "归属到 1 个高价值构件变化,最晚 lag 3351ms(延时生效)",
+   "window_events": 1,
+   "attributed": [
+    {
+     "id": "el_25",
+     "semantic": "dialog",
+     "lag_ms": 3351
+    }
+   ],
+   "oscillation": null,
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1
+    ],
+    "last_event_t": 1788691230612,
+    "last_event_lag_ms": 3351,
+    "quiet_since_ms": 3351
+   },
+   "reversion": [],
+   "click_latency_ms": 1186,
+   "event_fetch_ms": 552,
+   "scenario": "s1-btn",
+   "expected": "delayed-effect",
+   "run": 3,
+   "match": true
+  },
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "unchanged",
+   "server_effect_verdict": "no-change",
+   "server_why": "目标区域无变化(点击可能未生效,或效果发生在远处)",
+   "latency_ms": 1385,
+   "scenario": "s2-btn",
+   "expected": "oscillation",
+   "run": 1,
+   "match": false
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "unchanged",
+   "card_verdict": "oscillation",
+   "card_confidence": "high",
+   "card_why": "振荡信号: name:card.oscillating 在 8 次 add/remove 交替(2.25Hz)——疑似重绘循环/反爬",
+   "window_events": 9,
+   "attributed": [],
+   "oscillation": {
+    "key": "name:card.oscillating",
+    "toggles": 8,
+    "first_t": 1788691241164,
+    "last_t": 1788691244714,
+    "hz": 2.25,
+    "ids": [
+     "el_25",
+     "el_25",
+     "el_26",
+     "el_26",
+     "el_27",
+     "el_27",
+     "el_28",
+     "el_28"
+    ]
+   },
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1
+    ],
+    "last_event_t": 1788691245227,
+    "last_event_lag_ms": 4424,
+    "quiet_since_ms": 4424
+   },
+   "reversion": [],
+   "click_latency_ms": 1414,
+   "event_fetch_ms": 549,
+   "scenario": "s2-btn",
+   "expected": "oscillation",
+   "run": 1,
+   "match": true
+  },
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "unchanged",
+   "server_effect_verdict": "no-change",
+   "server_why": "目标区域无变化(点击可能未生效,或效果发生在远处)",
+   "latency_ms": 1410,
+   "scenario": "s2-btn",
+   "expected": "oscillation",
+   "run": 2,
+   "match": false
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "unchanged",
+   "card_verdict": "oscillation",
+   "card_confidence": "high",
+   "card_why": "振荡信号: name:card.oscillating 在 8 次 add/remove 交替(2.24Hz)——疑似重绘循环/反爬",
+   "window_events": 9,
+   "attributed": [],
+   "oscillation": {
+    "key": "name:card.oscillating",
+    "toggles": 8,
+    "first_t": 1788691254491,
+    "last_t": 1788691258065,
+    "hz": 2.24,
+    "ids": [
+     "el_25",
+     "el_25",
+     "el_26",
+     "el_26",
+     "el_27",
+     "el_27",
+     "el_28",
+     "el_28"
+    ]
+   },
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1
+    ],
+    "last_event_t": 1788691258575,
+    "last_event_lag_ms": 4434,
+    "quiet_since_ms": 4434
+   },
+   "reversion": [],
+   "click_latency_ms": 1414,
+   "event_fetch_ms": 544,
+   "scenario": "s2-btn",
+   "expected": "oscillation",
+   "run": 2,
+   "match": true
+  },
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "unchanged",
+   "server_effect_verdict": "no-change",
+   "server_why": "目标区域无变化(点击可能未生效,或效果发生在远处)",
+   "latency_ms": 1443,
+   "scenario": "s2-btn",
+   "expected": "oscillation",
+   "run": 3,
+   "match": false
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "unchanged",
+   "card_verdict": "oscillation",
+   "card_confidence": "high",
+   "card_why": "振荡信号: name:card.oscillating 在 8 次 add/remove 交替(2.24Hz)——疑似重绘循环/反爬",
+   "window_events": 9,
+   "attributed": [],
+   "oscillation": {
+    "key": "name:card.oscillating",
+    "toggles": 8,
+    "first_t": 1788691268137,
+    "last_t": 1788691271714,
+    "hz": 2.24,
+    "ids": [
+     "el_25",
+     "el_25",
+     "el_26",
+     "el_26",
+     "el_27",
+     "el_27",
+     "el_28",
+     "el_28"
+    ]
+   },
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1,
+     1
+    ],
+    "last_event_t": 1788691272223,
+    "last_event_lag_ms": 4432,
+    "quiet_since_ms": 4432
+   },
+   "reversion": [],
+   "click_latency_ms": 1384,
+   "event_fetch_ms": 552,
+   "scenario": "s2-btn",
+   "expected": "oscillation",
+   "run": 3,
+   "match": true
+  },
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "uncertain",
+   "server_effect_verdict": "changed",
+   "server_why": "目标区域有变化但无关键交互构件",
+   "latency_ms": 1177,
+   "scenario": "s3-btn",
+   "expected": "progressive",
+   "run": 1,
+   "match": false
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "uncertain",
+   "card_verdict": "changed",
+   "card_confidence": "medium",
+   "card_why": "窗口内 3 条变化但无高价值信号,性质不明",
+   "window_events": 3,
+   "attributed": [],
+   "oscillation": null,
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1,
+     1,
+     1
+    ],
+    "last_event_t": 1788691282763,
+    "last_event_lag_ms": 1851,
+    "quiet_since_ms": 1851
+   },
+   "reversion": [],
+   "click_latency_ms": 1186,
+   "event_fetch_ms": 551,
+   "scenario": "s3-btn",
+   "expected": "progressive",
+   "run": 1,
+   "match": true
+  },
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "uncertain",
+   "server_effect_verdict": "changed",
+   "server_why": "目标区域有变化但无关键交互构件",
+   "latency_ms": 1185,
+   "scenario": "s3-btn",
+   "expected": "progressive",
+   "run": 2,
+   "match": false
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "uncertain",
+   "card_verdict": "changed",
+   "card_confidence": "medium",
+   "card_why": "窗口内 3 条变化但无高价值信号,性质不明",
+   "window_events": 3,
+   "attributed": [],
+   "oscillation": null,
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1,
+     1,
+     1
+    ],
+    "last_event_t": 1788691296019,
+    "last_event_lag_ms": 1901,
+    "quiet_since_ms": 1901
+   },
+   "reversion": [],
+   "click_latency_ms": 1250,
+   "event_fetch_ms": 547,
+   "scenario": "s3-btn",
+   "expected": "progressive",
+   "run": 2,
+   "match": true
+  },
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "uncertain",
+   "server_effect_verdict": "changed",
+   "server_why": "目标区域有变化但无关键交互构件",
+   "latency_ms": 1179,
+   "scenario": "s3-btn",
+   "expected": "progressive",
+   "run": 3,
+   "match": false
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "uncertain",
+   "card_verdict": "changed",
+   "card_confidence": "medium",
+   "card_why": "窗口内 3 条变化但无高价值信号,性质不明",
+   "window_events": 3,
+   "attributed": [],
+   "oscillation": null,
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1,
+     1,
+     1
+    ],
+    "last_event_t": 1788691309055,
+    "last_event_lag_ms": 1847,
+    "quiet_since_ms": 1847
+   },
+   "reversion": [],
+   "click_latency_ms": 1182,
+   "event_fetch_ms": 545,
+   "scenario": "s3-btn",
+   "expected": "progressive",
+   "run": 3,
+   "match": true
+  },
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "uncertain",
+   "server_effect_verdict": "changed",
+   "server_why": "目标区域有变化但无关键交互构件",
+   "latency_ms": 1579,
+   "scenario": "s4-btn",
+   "expected": "reverted",
+   "run": 1,
+   "match": true
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "uncertain",
+   "card_verdict": "reverted",
+   "card_confidence": "high",
+   "card_why": "静默回退: 1 个构件出现后又被移除,最近 lag 1405ms",
+   "window_events": 2,
+   "attributed": [],
+   "oscillation": null,
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1,
+     1
+    ],
+    "last_event_t": 1788691323056,
+    "last_event_lag_ms": 2348,
+    "quiet_since_ms": 2348
+   },
+   "reversion": [
+    {
+     "key": "id:el_25",
+     "id": "el_25",
+     "add_seq": 2,
+     "remove_seq": 3,
+     "add_t": 1788691321651,
+     "remove_t": 1788691323056,
+     "lag_ms": 1405
+    }
+   ],
+   "click_latency_ms": 1585,
+   "event_fetch_ms": 538,
+   "scenario": "s4-btn",
+   "expected": "reverted",
+   "run": 1,
+   "match": true
+  },
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "uncertain",
+   "server_effect_verdict": "changed",
+   "server_why": "目标区域有变化但无关键交互构件",
+   "latency_ms": 1572,
+   "scenario": "s4-btn",
+   "expected": "reverted",
+   "run": 2,
+   "match": true
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "uncertain",
+   "card_verdict": "reverted",
+   "card_confidence": "high",
+   "card_why": "静默回退: 1 个构件出现后又被移除,最近 lag 1396ms",
+   "window_events": 2,
+   "attributed": [],
+   "oscillation": null,
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1,
+     1
+    ],
+    "last_event_t": 1788691336559,
+    "last_event_lag_ms": 2327,
+    "quiet_since_ms": 2327
+   },
+   "reversion": [
+    {
+     "key": "id:el_25",
+     "id": "el_25",
+     "add_seq": 2,
+     "remove_seq": 3,
+     "add_t": 1788691335163,
+     "remove_t": 1788691336559,
+     "lag_ms": 1396
+    }
+   ],
+   "click_latency_ms": 1576,
+   "event_fetch_ms": 640,
+   "scenario": "s4-btn",
+   "expected": "reverted",
+   "run": 2,
+   "match": true
+  },
+  {
+   "arm": "A-baseline",
+   "server_page_outcome": "uncertain",
+   "server_effect_verdict": "changed",
+   "server_why": "目标区域有变化但无关键交互构件",
+   "latency_ms": 1587,
+   "scenario": "s4-btn",
+   "expected": "reverted",
+   "run": 3,
+   "match": true
+  },
+  {
+   "arm": "B-time-aware",
+   "server_page_outcome": "uncertain",
+   "card_verdict": "reverted",
+   "card_confidence": "high",
+   "card_why": "静默回退: 1 个构件出现后又被移除,最近 lag 1407ms",
+   "window_events": 2,
+   "attributed": [],
+   "oscillation": null,
+   "stability": {
+    "state": "stable",
+    "buckets": [
+     1,
+     1
+    ],
+    "last_event_t": 1788691350343,
+    "last_event_lag_ms": 2344,
+    "quiet_since_ms": 2344
+   },
+   "reversion": [
+    {
+     "key": "id:el_25",
+     "id": "el_25",
+     "add_seq": 2,
+     "remove_seq": 3,
+     "add_t": 1788691348936,
+     "remove_t": 1788691350343,
+     "lag_ms": 1407
+    }
+   ],
+   "click_latency_ms": 1572,
+   "event_fetch_ms": 544,
+   "scenario": "s4-btn",
+   "expected": "reverted",
+   "run": 3,
+   "match": true
+  }
+ ]
+}

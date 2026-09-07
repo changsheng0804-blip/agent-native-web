@@ -49,3 +49,37 @@ python test_global_feedback.py
 python test_channels.py
 python test_guide.py
 ```
+
+## 统一环境侧时间线(world_timeline)
+
+在 L2 前提监视与 L3 动作证据卡之上，`world_timeline` 把三层反馈合并为**同一条环境侧因果时间线**：
+动作生命周期(`action`)、网络事件(`request`/`response`/`requestfailed`)、DOM 变化(`dom`)按统一序号
+`seq` 与墙钟 `t` 排列，游标增量读取不重不漏。
+
+```text
+seq=10 action    world_click start(el_79)
+seq=11 request   github.com/git/git/pulls
+seq=12 response  200 text/html
+...
+seq=34 action    world_click start
+seq=35 request   api.github.com/pull_request_review_decisions
+seq=36 response  200 json          ← 因果窗口 key 归因
+```
+
+- 读模式：`mode=digest`(默认)返回聚合摘要；`mode=raw` 返回原始事件明细
+- 游标增量：`since=上次 cursor` 不重不漏；环形缓冲 `deque(600)`，随世界销毁清除
+- **因果窗口**：每个动作到下一动作之间的全部事件 = 该动作的后果（`counts`/`statuses`/`key`），
+  key 只保留高价值项（前提失效、失败、4xx、JSON 接口响应）
+- **前提失效**：`premise` 事件带 `derived_from`，指向触发它的响应 `seq`（可回放归因）
+- **静默失败**：窗口内出现 4xx/5xx/failed 且无任何 DOM 变化时自动标注 `silent_failures`（L1 盲区）
+
+降噪三规则（真实站点实测 600→38 条，-94%）：初始快照不入账（只建立 name 集合）；批量替换
+（同批 add+remove>50，即导航/刷新）聚合为一条 `bulk` 事件；`update` 按"新 name"入账
+（渐进扫描逐元素 touch 跳过，真实文本变化如价格 800→1200 必然产生新 name）。
+
+验证与演示：
+
+```bash
+python experiments/test_server_timeline.py   # 7 项集成断言
+python experiments/run_timeline_gh.py        # GitHub 真实站点演示
+```
