@@ -14,12 +14,13 @@ Agent World MCP Server
   world_resolve  弱 ID 解析(名字/强 ID/页面原生 id)
   world_changes  变更流(增量续读,游标)
   world_state    页面状态信道(读取最新整体状态)
+  world_change_digest 变化摘要信道(读取压缩后的变化)
+  world_evidence 操作证据信道(读取动作前后证据)
   world_business_state 业务状态信道(由显式规则投影)
   world_operation_check 业务操作前置检查(只检查不执行)
   world_task_plan 任务路径规划(从运行时图寻找可复用路径,只规划不执行)
   world_graph_replay_check 回放核对(验证实际轨迹是否符合指定图边)
-  world_change_digest 变化摘要信道(读取压缩后的变化)
-  world_evidence 操作证据信道(读取动作前后证据)
+  world_adapter_compare 站点适配器对比(两套规则逐项 diff)
   world_trace    任务轨迹信道(读取脱敏轨迹)
   world_graph    候选任务运行时图(从轨迹即时生成)
   world_trace_archive 读取已归档任务轨迹
@@ -29,165 +30,62 @@ Agent World MCP Server
   world_guide   结合三条信道生成任务导览
   world_click    编号驱动点击 + 页面整体反馈
   world_fill     编号驱动填表
+  world_batch_fill 批量填表(多字段一次提交)
+  world_press    编号驱动按键
   world_wait     等待构件出现/消失
+  world_click_at 坐标驱动点击(视觉兜底)
+  world_navigate 页面内导航(更换当前世界 URL)
+  world_eval     页面内求值(调试/深诊断)
+  world_assume   前提假设声明(declare)
+  world_ack      前提确认(ack)
+  world_status   状态信道(读取世界状态)
+  world_timeline 统一时间线信道(因果窗口 + 模式摘要)
   world_screenshot 局部/整页截图(视觉兜底)
   world_close    关闭世界
   world_list     列出已打开的世界
+  world_find     页面元素查找(统一构件解析)
+  world_act      语义动作(统一操作入口)
+  world_outcome  操作后果卡信道(读取动作结果)
 
 运行:python server.py  (stdio 模式,由 MCP 客户端拉起)
 """
 import asyncio
-import base64
-import collections
-import hashlib
 import json
-import math
-import os
-import re
-import sys
 import time
-import threading
 import traceback
 import uuid
-from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from urllib.parse import urlsplit
-from PIL import Image, ImageChops, ImageDraw, ImageStat
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 import mcp.types as types
-from playwright.sync_api import sync_playwright
 
-try:
-    from business_runtime import (
-        attach_business_runtime,
-        check_operation,
-        normalize_operation_contracts,
-        normalize_site_adapter,
-        normalize_state_rules,
-        project_business_state,
-    )
-except ImportError:
-    from mcp.business_runtime import (
-        attach_business_runtime,
-        check_operation,
-        normalize_operation_contracts,
-        normalize_site_adapter,
-        normalize_state_rules,
-        project_business_state,
-    )
+from business_runtime import (
+    normalize_operation_contracts,
+    normalize_site_adapter,
+    normalize_state_rules,
+)
 
-try:
-    from site_adapter import compare_site_adapters, load_site_adapter_file
-except ImportError:
-    from mcp.site_adapter import compare_site_adapters, load_site_adapter_file
+from site_adapter import load_site_adapter_file
 
-try:
-    from task_runtime import (
-        TraceStore,
-        build_graph,
-        build_trace_entry,
-        new_id,
-        normalize_page_state,
-        persistence_enabled,
-        plan_graph,
-        state_key,
-        validate_replay_step,
-    )
-except ImportError:  # 允许从仓库根目录以模块方式加载
-    from mcp.task_runtime import (
-        TraceStore,
-        build_graph,
-        build_trace_entry,
-        new_id,
-        normalize_page_state,
-        persistence_enabled,
-        plan_graph,
-        state_key,
-        validate_replay_step,
-    )
+from task_runtime import (
+    new_id,
+    persistence_enabled,
+)
 
-try:
-    from aw_tool_schemas import build_tool_definitions
-except ImportError:
-    from mcp.aw_tool_schemas import build_tool_definitions
+from aw_tool_schemas import build_tool_definitions
 
-try:
-    from aw_core import (  # noqa: F401
-    CANONICAL_TOOLS,
-    CANONICAL_ORDER,
+from aw_core import (
     ACTION_NAMES,
-    TRACKED_ACTION_NAMES,
-    AUTH_COOKIE_HINTS,
-    ASSUMPTION_INTERVAL_S,
-    ASSUMPTION_RECHECK_S,
-    TIMELINE_MAX,
-    ACTION_EVIDENCE_PRE_S,
-    _IMPORTANT_ROLES,
-    _DIGEST_HIGH_ROLES,
-    _MEDIUM_ROLES,
-    _ROLE_LABEL,
-    SOURCE_FACT,
-    SOURCE_EVIDENCE,
-    SOURCE_INFERENCE,
-    SOURCE_UNTRUSTED,
-    CARD_SOURCE_RULES,
-    STYLE_DIFF_PROPS,
-    STYLE_SNAPSHOT_MAX,
-    _lite_mode,
-    _same_origin,
-    _page_node_identity,
-    _evidence_norm_url,
-    _signal_items,
-    _signal_delta,
-    _entity_match,
-    _anomaly_from_counts,
-    _target_state_flip,
-    _event_importance,
-    _sources_for_card,
-    _guide_terms,
-    _build_click_effect,
-    )
-except ImportError:
-    from mcp.aw_core import (  # noqa: F401
-    CANONICAL_TOOLS,
     CANONICAL_ORDER,
-    ACTION_NAMES,
+    CANONICAL_TOOLS,
     TRACKED_ACTION_NAMES,
-    AUTH_COOKIE_HINTS,
-    ASSUMPTION_INTERVAL_S,
-    ASSUMPTION_RECHECK_S,
-    TIMELINE_MAX,
-    ACTION_EVIDENCE_PRE_S,
-    _IMPORTANT_ROLES,
-    _DIGEST_HIGH_ROLES,
-    _MEDIUM_ROLES,
-    _ROLE_LABEL,
-    SOURCE_FACT,
-    SOURCE_EVIDENCE,
-    SOURCE_INFERENCE,
-    SOURCE_UNTRUSTED,
-    CARD_SOURCE_RULES,
-    STYLE_DIFF_PROPS,
-    STYLE_SNAPSHOT_MAX,
-    _lite_mode,
-    _same_origin,
-    _page_node_identity,
     _evidence_norm_url,
-    _signal_items,
-    _signal_delta,
-    _entity_match,
-    _anomaly_from_counts,
-    _target_state_flip,
-    _event_importance,
-    _sources_for_card,
-    _guide_terms,
-    _build_click_effect,
-    )
+    _guide_terms,  # noqa: F401  仅 re-export 给 mcp/experiments/dbg_guide_terms.py
+    _lite_mode,
+)
 
-try:
-    from aw_runtime import (  # noqa: F401
+from aw_runtime import (  # noqa: F401
     SCREENSHOT_DIR,
     PROFILES_DIR,
     VISUAL_RMS_THRESHOLD,
@@ -236,76 +134,16 @@ try:
     _world,
     _world_pages_summary,
     _worlds,
-    )
-except ImportError:
-    from mcp.aw_runtime import (  # noqa: F401
-    SCREENSHOT_DIR,
-    PROFILES_DIR,
-    VISUAL_RMS_THRESHOLD,
-    ALL_IN_ONE,
-    INJECT_JS,
-    ROUTE_MEMORY_DIR,
-    ROUTE_MEMORY_FILE,
-    _activate_new_page,
-    _cleanup_pending_actions,
-    _ensure_page_runtime,
-    _evaluate,
-    _evaluate_query_retry,
-    _expire_idle_sessions,
-    _find_reusable_world,
-    _get_pw,
-    _has_new_page,
-    _known_page_tokens,
-    _new_task_context,
-    _ok,
-    _page_signal_snapshot,
-    _pending_actions,
-    _pending_actions_lock,
-    _playwright,
-    _pw_executor,
-    _record_route_memory,
-    _resolve_id,
-    _result_payload,
-    _route_hint,
-    _route_memory_append,
-    _route_memory_cache,
-    _route_memory_load,
-    _route_memory_lock,
-    _runtime_context,
-    _scan_state,
-    _start_progressive_scan,
-    _task_begin_action,
-    _task_enqueue_actions,
-    _task_finish_action,
-    _task_mark_queue,
-    _task_public,
-    _task_update,
-    _touch_world,
-    _verify_action_precondition,
-    _wait_progressive_phase,
-    _wait_world_ready,
-    _world,
-    _world_pages_summary,
-    _worlds,
-    )
+)
 
-try:
-    from aw_status import (  # noqa: F401
+from aw_status import (  # noqa: F401
 _auth_status,
     _inject_status,
     _status,
     _status_light,
-    )
-except ImportError:
-    from mcp.aw_status import (  # noqa: F401
-_auth_status,
-    _inject_status,
-    _status,
-    _status_light,
-    )
+)
 
-try:
-    from aw_timeline import (  # noqa: F401
+from aw_timeline import (  # noqa: F401
 _assumption_check,
     _assumption_expr,
     _build_action_evidence,
@@ -323,30 +161,9 @@ _assumption_check,
     _tl_action,
     _tl_merge_dom,
     _trace_store,
-    )
-except ImportError:
-    from mcp.aw_timeline import (  # noqa: F401
-_assumption_check,
-    _assumption_expr,
-    _build_action_evidence,
-    _evidence_decision,
-    _inject_action_evidence,
-    _inject_notices,
-    _record_action_evidence,
-    _t_world_ack,
-    _t_world_assume,
-    _t_world_evidence,
-    _t_world_status,
-    _t_world_timeline,
-    _timeline_causal_windows,
-    _tl,
-    _tl_action,
-    _tl_merge_dom,
-    _trace_store,
-    )
+)
 
-try:
-    from aw_outcome import (  # noqa: F401
+from aw_outcome import (  # noqa: F401
 _anomaly_check,
     _build_page_outcome,
     _challenge_detection,
@@ -361,27 +178,9 @@ _anomaly_check,
     _region_snapshot_at,
     _region_styles,
     _wait_click_effect,
-    )
-except ImportError:
-    from mcp.aw_outcome import (  # noqa: F401
-_anomaly_check,
-    _build_page_outcome,
-    _challenge_detection,
-    _click_region_after,
-    _click_region_snapshot,
-    _errored_card,
-    _finalize_click_result,
-    _is_submit_trigger,
-    _occlusion_attach,
-    _occlusion_probe,
-    _outcome_card,
-    _region_snapshot_at,
-    _region_styles,
-    _wait_click_effect,
-    )
+)
 
-try:
-    from aw_query import (  # noqa: F401
+from aw_query import (  # noqa: F401
 _change_digest,
     _t_world_change_digest,
     _t_world_changes,
@@ -395,26 +194,9 @@ _change_digest,
     _t_world_outcome,
     _t_world_resolve,
     _t_world_state,
-    )
-except ImportError:
-    from mcp.aw_query import (  # noqa: F401
-_change_digest,
-    _t_world_change_digest,
-    _t_world_changes,
-    _t_world_close,
-    _t_world_entities,
-    _t_world_entity,
-    _t_world_find,
-    _t_world_layers,
-    _t_world_list,
-    _t_world_map,
-    _t_world_outcome,
-    _t_world_resolve,
-    _t_world_state,
-    )
+)
 
-try:
-    from aw_taskgraph import (  # noqa: F401
+from aw_taskgraph import (  # noqa: F401
 _business_state_snapshot,
     _contract_gate,
     _graph_trace_source,
@@ -429,27 +211,9 @@ _business_state_snapshot,
     _t_world_task_plan,
     _t_world_trace,
     _t_world_trace_archive,
-    )
-except ImportError:
-    from mcp.aw_taskgraph import (  # noqa: F401
-_business_state_snapshot,
-    _contract_gate,
-    _graph_trace_source,
-    _t_world_adapter_compare,
-    _t_world_business_state,
-    _t_world_graph,
-    _t_world_graph_archive,
-    _t_world_graph_assess,
-    _t_world_graph_bundle,
-    _t_world_graph_replay_check,
-    _t_world_operation_check,
-    _t_world_task_plan,
-    _t_world_trace,
-    _t_world_trace_archive,
-    )
+)
 
-try:
-    from aw_actions import (  # noqa: F401
+from aw_actions import (  # noqa: F401
 ACT_DISPATCH,
     _act_one,
     _build_locator,
@@ -466,41 +230,14 @@ ACT_DISPATCH,
     _t_world_press,
     _t_world_screenshot,
     _t_world_wait,
-    )
-except ImportError:
-    from mcp.aw_actions import (  # noqa: F401
-ACT_DISPATCH,
-    _act_one,
-    _build_locator,
-    _click_locator_nowait,
-    _fill_visible,
-    _refresh_core_status,
-    _t_world_act,
-    _t_world_batch_fill,
-    _t_world_click,
-    _t_world_click_at,
-    _t_world_eval,
-    _t_world_fill,
-    _t_world_navigate,
-    _t_world_press,
-    _t_world_screenshot,
-    _t_world_wait,
-    )
+)
 
-try:
-    from aw_guide import (  # noqa: F401
+from aw_guide import (  # noqa: F401
 _compact_focused_view,
     _expand_candidates,
     _focused_view,
     _t_world_guide,
-    )
-except ImportError:
-    from mcp.aw_guide import (  # noqa: F401
-_compact_focused_view,
-    _expand_candidates,
-    _focused_view,
-    _t_world_guide,
-    )
+)
 server = Server("agent-world")
 
 # ── 世界注册表 ────────────────────────────────────────────────
@@ -539,7 +276,12 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
                 return _ok({"channel": "outcome", "page_outcome": "errored",
                             "action_id": action_id, "confidence": "high", "why": "动作编号不存在或已过期"})
             future = pending["future"]
-            wait_ms = max(0, min(int(arguments.get("wait_ms", 0)), 60000))
+            try:
+                wait_ms = max(0, min(int(arguments.get("wait_ms", 0)), 60000))
+            except (TypeError, ValueError):
+                return _ok({"channel": "outcome", "page_outcome": "errored",
+                            "action_id": action_id, "confidence": "high",
+                            "why": "wait_ms 必须是非负整数"})
             if not future.done() and wait_ms:
                 try:
                     await asyncio.wait_for(asyncio.shield(future), timeout=wait_ms / 1000)
@@ -570,14 +312,19 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             if world_id is None:
                 return _ok({"channel": "outcome", "page_outcome": "errored",
                             "confidence": "high", "why": "receipt 模式必须提供 world_id"})
+            try:
+                world_id_i = int(world_id)
+            except (TypeError, ValueError):
+                return _ok({"channel": "outcome", "page_outcome": "errored",
+                            "confidence": "high", "why": "world_id 必须是整数"})
             action_id = uuid.uuid4().hex
             action_args = dict(arguments)
             action_args.pop("wait_policy", None)
             action_args["_action_id"] = action_id
             future = asyncio.get_event_loop().run_in_executor(_pw_executor, _impl_with_status, name, action_args)
             with _pending_actions_lock:
-                _pending_actions[action_id] = {"future": future, "world_id": int(world_id), "created_at": time.time()}
-            return _ok({"world_id": int(world_id), "channel": "outcome", "page_outcome": "pending",
+                _pending_actions[action_id] = {"future": future, "world_id": world_id_i, "created_at": time.time()}
+            return _ok({"world_id": world_id_i, "channel": "outcome", "page_outcome": "pending",
                         "action_id": action_id, "accepted": True, "confidence": "high",
                         "why": "动作已排入同一网页世界的有序执行队列"})
         # 全部在专用单一 executor 线程执行(Playwright 同步 API 强线程亲和)
@@ -849,22 +596,37 @@ def _t_world_open(args):
         context = browser.new_context(viewport={"width": 1440, "height": 900})
         page = context.new_page()
         handle = browser
-    page.add_init_script(INJECT_JS)
-    if cdp_url:
-        # 已存在的页面 add_init_script 不会立即生效(只对后续导航生效),
-        # 若指定 url 且与当前页不同则导航(init 脚本随导航注入),否则手动注入当前页。
-        if url and page.url != url:
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+    try:
+        page.add_init_script(INJECT_JS)
+        if cdp_url:
+            # 已存在的页面 add_init_script 不会立即生效(只对后续导航生效),
+            # 若指定 url 且与当前页不同则导航(init 脚本随导航注入),否则手动注入当前页。
+            if url and page.url != url:
+                page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            else:
+                try:
+                    page.evaluate(INJECT_JS)
+                except Exception:
+                    pass
         else:
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        if wait_ms:
+            page.wait_for_timeout(wait_ms)
+        ready = _wait_world_ready(page)
+    except Exception:
+        # 启动成功但初始化失败:按 not ready 语义清理,避免 chromium 进程泄漏。
+        # CDP 连接只断开(不关闭用户浏览器);普通分支关闭浏览器。
+        if cdp_url:
             try:
-                page.evaluate(INJECT_JS)
+                browser.close()
             except Exception:
                 pass
-    else:
-        page.goto(url, wait_until="domcontentloaded", timeout=60000)
-    if wait_ms:
-        page.wait_for_timeout(wait_ms)
-    ready = _wait_world_ready(page)
+        else:
+            try:
+                handle.close()
+            except Exception:
+                pass
+        raise
     if not ready:
         # CDP 连接失败时只断开,不关闭用户浏览器
         if cdp_url:
@@ -1089,21 +851,9 @@ def _t_world_open(args):
         "page_hooks": {"request": _on_request, "response": _on_response,
                        "requestfailed": _on_requestfailed, "console": _on_console,
                        "pageerror": _on_pageerror},
-        "page_events": [],
     }
     world = _worlds[wid]
 
-    def _on_new_page(new_page):
-        """记录 context 新页；真正切换 active page 在动作后统一完成。"""
-        try:
-            world.setdefault("page_events", []).append({"page": new_page, "created_at": time.time()})
-        except Exception:
-            pass
-
-    try:
-        context.on("page", _on_new_page)
-    except Exception:
-        pass
     _task_update(wid, status="ready", page={"url": page.url, "epoch": 0})
     # 浏览器内分段扫描立即开始；action 不等待，terrain/stable 按策略等待。
     _start_progressive_scan(wid)

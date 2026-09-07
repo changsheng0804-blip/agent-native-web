@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """统一后果卡簇——page_outcome 五态判定、挑战检测、点击效果(区域快照/样式 diff/视觉阈值)、遮挡归因、错误卡。
 
-自 mcp/server.py 拆出(Step 4 特性簇),行为不变;依赖方向:aw_core ← aw_runtime ← 本簇。
+自 mcp/server.py 拆出(Step 4 特性簇),行为不变;依赖:aw_core/aw_runtime/aw_timeline(aw_core ← aw_runtime ← aw_timeline ← 本簇)。
 """
 import json, math, time
-from PIL import Image, ImageChops, ImageDraw, ImageStat
+from PIL import Image, ImageChops, ImageStat
 try:
     from aw_core import (
     STYLE_DIFF_PROPS,
@@ -656,10 +656,6 @@ def _errored_card(wid, action, args, before_signal, exc):
         before = before_signal or _page_signal_snapshot(int(wid))
     except Exception:
         before = {}
-    try:
-        after = _page_signal_snapshot(int(wid))
-    except Exception:
-        after = {}
     # P0-1:errored 卡也消耗一个序号。不 mint 的话,它的序号会与上一张成功卡重复,
     # world_outcome(since=上一序号) 将返回 none,把这张 errored 藏掉(对账黑洞)。
     try:

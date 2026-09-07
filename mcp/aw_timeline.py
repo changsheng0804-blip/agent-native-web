@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """时间线簇——统一环境侧因果时间线(_tl/_tl_merge_dom/_tl_action)、前提监视(assume/ack/status)、动作证据卡(evidence)、通知注入。
 
-自 mcp/server.py 拆出(Step 4 特性簇),行为不变;依赖方向:aw_core ← aw_runtime ← 本簇。
+自 mcp/server.py 拆出(Step 4 特性簇),行为不变;依赖:aw_core/aw_runtime(aw_core ← aw_runtime ← 本簇)。
 """
 import collections, json, threading, time
 try:
@@ -332,7 +332,7 @@ def _timeline_causal_windows(events):
             counts[it["type"]] = counts.get(it["type"], 0) + 1
             if it.get("status"):
                 statuses.append(it["status"])
-            if it["type"] in ("premise", "failed") or (it["type"] == "response" and it.get("status", 0) >= 400):
+            if it["type"] in ("premise", "requestfailed") or (it["type"] == "response" and it.get("status", 0) >= 400):
                 key_items.append({"type": it["type"], "url": it.get("url"),
                                   "status": it.get("status"), "name": it.get("name")})
             elif it["type"] == "response" and "json" in (it.get("ctype") or ""):
@@ -378,14 +378,14 @@ def _t_world_timeline(args):
         elif e["type"] == "premise":
             premises.append({"name": e.get("name"), "expected": e.get("expected"),
                              "actual": e.get("actual"), "derived_from": e.get("derived_from")})
-        elif e["type"] == "failed":
+        elif e["type"] == "requestfailed":
             failures.append({"url": e.get("url"), "error": e.get("error")})
     # 静默失败:窗口内有 4xx/5xx/failed 且无 DOM 变化(L1 盲区自动标注)
     silent = []
     if failures or any(int(s) >= 400 for s in statuses):
         if not dom_counts:
             silent = [{"4xx_5xx": {str(k): v for k, v in statuses.items() if int(k) >= 400},
-                       "failed": failures[:3]}]
+                       "requestfailed": failures[:3]}]
     windows = _timeline_causal_windows(events)
     return _ok({
         "world_id": wid, "channel": "timeline", "from": since, "to": to,
