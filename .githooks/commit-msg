@@ -1,0 +1,18 @@
+#!/bin/sh
+# 提交溯源 trailer(解决同一智能体多对话提交不可区分的问题)
+#   Task:    当前分支名 = 对话/任务单位;合并、删除分支后仍可从提交追溯到任务
+#   Session: 可选;对话启动时 export AGENT_SESSION_ID=<会话短id> 即自动携带
+# 启用(每个克隆一次性): git config core.hooksPath .githooks
+msg="$1"
+branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null)
+if [ -z "$branch" ] || [ "$branch" = "HEAD" ]; then
+  exit 0
+fi
+if [ -n "$AGENT_SESSION_ID" ]; then
+  git interpret-trailers --if-exists replace --in-place \
+    --trailer "Task: $branch" --trailer "Session: $AGENT_SESSION_ID" "$msg"
+else
+  git interpret-trailers --if-exists replace --in-place \
+    --trailer "Task: $branch" "$msg"
+fi
+exit 0

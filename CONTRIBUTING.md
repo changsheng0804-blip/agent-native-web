@@ -15,6 +15,19 @@
 - 提交信息只写变更内容,**不携带门禁报告全文**(报告放 `docs/archive/` 或运行时文件)。
 - 提交者身份用统一约定名(`git config user.name`),不使用占位名(如 `user`)。
 
+## 提交溯源(多对话/多智能体必读)
+同一个智能体常有多个对话并行工作,仅靠 user.name 无法区分提交来自哪次对话。约定三层方案:
+
+1. **身份**:`user.name` = 智能体名(如 `codex`、`dimagent`);`user.email` 用 GitHub noreply
+   (`287860629+changsheng0804-blip@users.noreply.github.com`),保证头像与归属正确。
+2. **任务溯源(自动)**:一个对话通常对应一个分支。启用仓库钩子后,每次提交自动追加
+   `Task: <分支名>` trailer——分支合并、删除后依然可追溯到任务。新克隆需一次性执行:
+   ```bash
+   git config core.hooksPath .githooks
+   ```
+3. **会话溯源(可选)**:对话启动时 `export AGENT_SESSION_ID=<会话短id>`,提交自动追加
+   `Session:` trailer。审计方式:`git log --format='%B' -1 <sha>` 查看 Task/Session 行。
+
 ## 测试与门禁
 - 日常:`python mcp/run_quality.py --scope <守护面>`;提交合并前 offline 全量必须全绿:
   `python mcp/run_quality.py`(串行约 13 分钟 / `--parallel 3` 约 5-6 分钟)。
