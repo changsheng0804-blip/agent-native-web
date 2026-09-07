@@ -113,6 +113,79 @@ try:
 except ImportError:
     from mcp.aw_tool_schemas import build_tool_definitions
 
+try:
+    from aw_core import (  # noqa: F401
+    CANONICAL_TOOLS,
+    CANONICAL_ORDER,
+    ACTION_NAMES,
+    TRACKED_ACTION_NAMES,
+    AUTH_COOKIE_HINTS,
+    ASSUMPTION_INTERVAL_S,
+    ASSUMPTION_RECHECK_S,
+    TIMELINE_MAX,
+    ACTION_EVIDENCE_PRE_S,
+    _IMPORTANT_ROLES,
+    _DIGEST_HIGH_ROLES,
+    _MEDIUM_ROLES,
+    _ROLE_LABEL,
+    SOURCE_FACT,
+    SOURCE_EVIDENCE,
+    SOURCE_INFERENCE,
+    SOURCE_UNTRUSTED,
+    CARD_SOURCE_RULES,
+    STYLE_DIFF_PROPS,
+    STYLE_SNAPSHOT_MAX,
+    _lite_mode,
+    _same_origin,
+    _page_node_identity,
+    _evidence_norm_url,
+    _signal_items,
+    _signal_delta,
+    _entity_match,
+    _anomaly_from_counts,
+    _target_state_flip,
+    _event_importance,
+    _sources_for_card,
+    _guide_terms,
+    _build_click_effect,
+    )
+except ImportError:
+    from mcp.aw_core import (  # noqa: F401
+    CANONICAL_TOOLS,
+    CANONICAL_ORDER,
+    ACTION_NAMES,
+    TRACKED_ACTION_NAMES,
+    AUTH_COOKIE_HINTS,
+    ASSUMPTION_INTERVAL_S,
+    ASSUMPTION_RECHECK_S,
+    TIMELINE_MAX,
+    ACTION_EVIDENCE_PRE_S,
+    _IMPORTANT_ROLES,
+    _DIGEST_HIGH_ROLES,
+    _MEDIUM_ROLES,
+    _ROLE_LABEL,
+    SOURCE_FACT,
+    SOURCE_EVIDENCE,
+    SOURCE_INFERENCE,
+    SOURCE_UNTRUSTED,
+    CARD_SOURCE_RULES,
+    STYLE_DIFF_PROPS,
+    STYLE_SNAPSHOT_MAX,
+    _lite_mode,
+    _same_origin,
+    _page_node_identity,
+    _evidence_norm_url,
+    _signal_items,
+    _signal_delta,
+    _entity_match,
+    _anomaly_from_counts,
+    _target_state_flip,
+    _event_importance,
+    _sources_for_card,
+    _guide_terms,
+    _build_click_effect,
+    )
+
 # Playwright 同步 API 强依赖 greenlet 协程上下文，必须在单一固定 OS 工作线程内运行，杜绝多线程竞争切换
 _pw_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="playwright_worker")
 _pending_actions = {}
@@ -182,16 +255,6 @@ def _touch_world(wid):
     w = _world(wid)
     w["last_activity"] = time.time()
     return w
-
-
-def _same_origin(left, right):
-    try:
-        a, b = urlsplit(str(left or "")), urlsplit(str(right or ""))
-        if a.scheme == "file" or b.scheme == "file":
-            return a.scheme == b.scheme and Path(a.path).parent == Path(b.path).parent
-        return (a.scheme, a.netloc) == (b.scheme, b.netloc)
-    except Exception:
-        return False
 
 
 def _expire_idle_sessions():
@@ -499,27 +562,6 @@ def _verify_action_precondition(wid, step):
         ent = _evaluate(wid, "(id) => agentWorld.query.getEntity(id)", target) or {}
         if bool(ent.get("interactive")) != bool(pre["interactive"]):
             raise ValueError("前置条件失效:目标当前不可交互")
-
-
-def _page_node_identity(signal):
-    """页面节点组合身份的轻量版本：网址模式、标题、覆盖层和状态。"""
-    signal = signal or {}
-    url = str(signal.get("url") or "")
-    try:
-        parsed = urlsplit(url)
-        path = re.sub(r"/(?:\d{2,}|[0-9a-f]{8,})", "/:param", parsed.path or "/")
-        url_pattern = f"{parsed.scheme}://{parsed.netloc}{path}"[:300]
-    except Exception:
-        url_pattern = url[:300]
-    regions = []
-    for key in ("dialogs", "menus"):
-        regions.extend(str(x.get("name") or x.get("id") or "")[:80].lower()
-                       for x in signal.get(key, []) or [])
-    basis = {"url_pattern": url_pattern,
-             "title": re.sub(r"\s+", " ", str(signal.get("title") or "").strip().lower())[:120],
-             "regions": sorted(regions)[:8], "state": signal.get("state") or "unknown"}
-    raw = json.dumps(basis, ensure_ascii=False, sort_keys=True)
-    return "node_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16], basis
 
 
 def _runtime_context(w):
@@ -841,14 +883,6 @@ def _evaluate_query_retry(world_id, expr, arg=None, attempts=3):
 #   world_open → world_guide → world_find → world_act → world_outcome → world_close
 # 其余 19 个旧工具全部保留(兼容已接入客户端),描述加 [内部/调试] 前缀;
 # AGENT_WORLD_LITE=1 时 list_tools 只暴露 6 个, call_tool 拒绝旧工具。
-CANONICAL_TOOLS = {"world_open", "world_guide", "world_find", "world_act", "world_outcome", "world_close"}
-CANONICAL_ORDER = ["world_open", "world_guide", "world_find", "world_act", "world_outcome", "world_close"]
-
-
-def _lite_mode():
-    return os.environ.get("AGENT_WORLD_LITE", "").strip().lower() in ("1", "true", "yes", "on")
-
-
 @server.list_tools()
 async def list_tools():
     tools = build_tool_definitions()
@@ -931,10 +965,6 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 
 
 # 动作类工具:统一走 before_signal + 证据记录 + 统一后果卡(阶段 A)
-ACTION_NAMES = {"world_click", "world_click_at", "world_fill", "world_batch_fill", "world_press", "world_navigate"}
-TRACKED_ACTION_NAMES = ACTION_NAMES | {"world_act"}
-
-
 def _impl_with_status(name, args):
     if _lite_mode() and name not in CANONICAL_TOOLS:
         raise ValueError(f"AGENT_WORLD_LITE 模式只开放 6 个默认工具({sorted(CANONICAL_TOOLS)});{name} 是内部/调试工具,请勿在 LITE 会话调用")
@@ -1028,9 +1058,6 @@ def _impl_with_status(name, args):
 
 
 # ── 网页状态卡(仪表盘)────────────────────────────────────────
-AUTH_COOKIE_HINTS = ["passport", "session", "token", "sid", "uid", "unb", "sso", "login", "auth"]
-
-
 def _auth_status(wid):
     """登录态检测:双信号交叉(cookie 为主,DOM 特征辅助)"""
     w = _world(wid)
@@ -1325,10 +1352,6 @@ def _ok(data):
 #  - Playwright 同步 API 强线程亲和 → 快检骑在每次工具调用上(不设后台线程)
 #  - 通知骑在每次工具返回上(F2:不造新必调动词,agent 无需主动轮询)
 #  - 双重校验防瞬时噪声;ack 协议防通知震荡(冷却期会误屏蔽真实失效,已排除)
-ASSUMPTION_INTERVAL_S = 1.0   # 每前提最小检查间隔
-ASSUMPTION_RECHECK_S = 0.3    # 通知前二次校验间隔
-
-
 def _assumption_expr(doc_id, attr):
     """读元素真实状态的 JS 表达式:先按 DOM id,再按内核 id 解析(LLM 可能传 el_N)。"""
     resolve = (f"document.getElementById('{doc_id}') || "
@@ -1467,9 +1490,6 @@ def _t_world_status(args):
 #  - URL 归一化去 query(防 token 泄漏),不存响应体(隐私/体积)
 #  - 环形缓冲(600 条),世界关闭即销毁
 #  - causal_windows:按 action 事件切段,回答"这个动作引发了什么"(跨层因果)
-TIMELINE_MAX = 600
-
-
 def _tl(wid, etype, data=None):
     """统一时间线入账。线程安全;监听器回调与工具执行线程都可能调用。"""
     try:
@@ -1670,17 +1690,6 @@ def _t_world_timeline(args):
 #  - 只存元数据(URL/方法/类型/状态/时序),不读响应体(隐私/体积)
 #  - URL 归一化去 query(防 token/敏感参数泄漏到工具返回)
 #  - 规则化决策建议(重定向到登录/4xx/无请求/全 2xx/数据接口),不引入 LLM
-ACTION_EVIDENCE_PRE_S = 0.5
-
-
-def _evidence_norm_url(url):
-    try:
-        p = urlsplit(str(url))
-        return f"{p.netloc}{p.path or '/'}"[:160]
-    except Exception:
-        return str(url)[:160]
-
-
 def _build_action_evidence(wid, t_start, page_outcome=None, effect_verdict=None):
     """从 runtime 流切片构建动作证据卡。"""
     w = _worlds.get(int(wid))
@@ -2268,67 +2277,6 @@ def _t_world_resolve(args):
 
 # 交互/结构性语义角色 → 高重要性(出现/消失通常是操作结果)
 # 供 effect 判定使用(宽口径:按钮/链接出现也可能是操作结果的间接证据)
-_IMPORTANT_ROLES = {
-    "dialog", "alertdialog", "menu", "form", "button", "input", "combobox",
-    "listbox", "option", "link", "navigation", "tab", "tablist", "searchbox",
-    "textbox", "select", "details", "summary", "tooltip",
-}
-# digest 强信号角色(窄口径):只认"几乎必是操作结果"的语义。
-# 重型 SPA 整体重渲染时,页面外壳(button/link/navigation)会大量"假新增"刷屏,
-# 若把它们标高,真信号(弹窗)会被挤出 highlights(digest 价值评估实测:噪声 29 vs 强信号 5)。
-_DIGEST_HIGH_ROLES = {
-    "dialog", "alertdialog", "menu", "option", "listbox", "combobox",
-    "input", "select", "searchbox", "textbox",
-}
-# 内容性角色 → 中重要性
-_MEDIUM_ROLES = {
-    "heading", "list", "listitem", "article", "section", "region",
-    "card", "banner", "contentinfo", "main", "complementary",
-    # 外壳/重渲染常见角色:digest 出现不一定是操作结果,降为中(仅影响 digest,不影响 effect)
-    "button", "link", "navigation", "tab", "tablist", "form", "details", "summary",
-}
-
-
-def _event_importance(evt):
-    """单条变更事件的重要性分级(high/medium/low)——供 digest/变更流使用。
-    依据:事件类型(结构性 add/remove > update > visibility) × 语义角色。
-    注意:high 只给"强信号"角色(_DIGEST_HIGH_ROLES)——重型 SPA 重渲染时
-    外壳(button/link/navigation)大量假新增,若标高会把真弹窗挤出 highlights。
-    旧事件(内核补 semantic 前记录)缺 semantic 时从 name 前缀推断。
-    """
-    etype = evt.get("type")
-    semantic = evt.get("semantic") or ""
-    if not semantic:
-        name = evt.get("name") or ""
-        semantic = name.split(".")[0] if name else ""
-    if etype == "visibility":
-        return "low"
-    if etype in ("add", "remove"):
-        if semantic in _DIGEST_HIGH_ROLES:
-            return "high"
-        if semantic in _IMPORTANT_ROLES or semantic in _MEDIUM_ROLES:
-            return "medium"
-        return "medium"  # 新增/移除默认中(结构变化),具体由 digest 归纳
-    # update
-    if semantic in _DIGEST_HIGH_ROLES:
-        return "medium"  # 强信号构件更新值得看
-    return "low"
-
-
-_ROLE_LABEL = {
-    "dialog": "弹窗", "alertdialog": "警告弹窗", "menu": "菜单", "button": "按钮",
-    "input": "输入框", "combobox": "组合框", "listbox": "列表", "option": "选项",
-    "link": "链接", "navigation": "导航", "tab": "标签页", "tablist": "标签栏",
-    "searchbox": "搜索框", "textbox": "文本框", "select": "选择器",
-    "details": "折叠区", "summary": "折叠标题", "tooltip": "提示",
-    "heading": "标题", "list": "列表", "listitem": "列表项", "article": "文章",
-    "section": "区块", "region": "区域", "card": "卡片", "banner": "页头",
-    "contentinfo": "页脚", "main": "主体", "complementary": "侧栏",
-    "form": "表单", "content": "内容", "img": "图片", "video": "视频",
-    "table": "表格", "navigation2": "导航",
-}
-
-
 def _change_digest(events):
     """把一批变更事件归纳成结构化语义摘要(CAD 图纸风格)。
     返回 {counts, key}——不写人话句子,只用强 ID 引用:
@@ -3025,61 +2973,6 @@ def _t_world_graph_bundle(args):
         "source": {"task_count": len(task_ids), "trace_count": len(traces)},
         "publishable": False,
     })
-
-
-def _guide_terms(task):
-    """从一句任务描述提取少量搜索锚点,不让导览层读取完整页面文本。"""
-    stopwords = {
-        "请帮我", "帮我", "帮助", "找到", "查找", "查看", "打开", "进入", "点击", "确认",
-        "页面", "网页", "网站", "当前", "任务", "并", "和", "的", "一个", "一下", "区域",
-        "操作", "完成", "是否", "然后", "之后", "上方", "里面", "这个", "那个",
-        "为", "把", "将", "开启", "开通", "设置", "标记为", "发布到", "选择", "提交", "保存",
-        "find", "open", "go", "to", "the", "a", "an", "and", "on", "in", "page", "confirm",
-    }
-    raw = re.findall(r"[a-z0-9][a-z0-9_-]*|[\u4e00-\u9fff]{2,}", str(task).lower())
-    terms = []
-    aliases = {
-        "拉取请求": "pull requests",
-        "合并请求": "pull requests",
-        "问题": "issues",
-        "查找": "search",
-        "检索": "search",
-        "筛选": "filter",
-        "搜索": "search",
-        "发布": "release",
-        "标签": "tag",
-        "模型": "model",
-        "弹窗": "dialog",
-    }
-    for item in raw:
-        for source, alias in aliases.items():
-            if source in item and alias not in terms:
-                terms.append(alias)
-        if re.match(r"^[a-z0-9]", item):
-            # 英文/数字词:精确停用词过滤。绝不能对连写英文做子串 replace——
-            # 停用词 "a" 会把 "star" 拆成 "st"(实测:全场元素 name 都含 st,
-            # 候选全 4 分大平局,Notifications 抢走 Star 任务的 first)。
-            if item not in stopwords and len(item) >= 2 and item not in terms:
-                terms.append(item)
-        else:
-            # 中文段无空格分隔,停用词只能按子串剔除(如"打开仓库"剔除"打开")
-            cleaned = item
-            for stop in sorted(stopwords, key=len, reverse=True):
-                cleaned = cleaned.replace(stop, " ")
-            for term in re.findall(r"[\u4e00-\u9fff]{2,}", cleaned):
-                if term not in stopwords and len(term) >= 2 and term not in terms:
-                    terms.append(term)
-    expanded = list(terms)
-    for term in terms:
-        alias = aliases.get(term)
-        if alias and alias not in expanded:
-            expanded.append(alias)
-    # 网页上“筛选”经常由搜索输入框承载,两者应作为同一任务焦点。
-    if "filter" in expanded and "search" not in expanded:
-        expanded.append("search")
-    if "search" in expanded and "filter" not in expanded:
-        expanded.append("filter")
-    return expanded[:16]
 
 
 def _expand_candidates(wid, max_results=8):
@@ -4239,27 +4132,6 @@ def _page_signal_snapshot(wid, fast=False):
     }
 
 
-def _signal_items(signal, key):
-    return signal.get(key, []) if isinstance(signal, dict) else []
-
-
-def _signal_delta(before, after, key):
-    """返回信道中新增和消失的覆盖层,只保留小量可读证据。"""
-    def item_key(item):
-        if not isinstance(item, dict):
-            return str(item)
-        return (item.get("id"), item.get("name"), item.get("text"))
-
-    before_map = {item_key(x): x for x in _signal_items(before, key)}
-    after_map = {item_key(x): x for x in _signal_items(after, key)}
-    new_keys = after_map.keys() - before_map.keys()
-    gone_keys = before_map.keys() - after_map.keys()
-    return {
-        "new": [after_map[k] for k in new_keys][:8],
-        "gone": [before_map[k] for k in gone_keys][:8],
-    }
-
-
 def _is_submit_trigger(wid, target_id, key=None):
     """点击/按键目标是否为"疑似提交动作"触发元素(form 关联 / type=submit)。
 
@@ -4597,60 +4469,6 @@ def _finalize_click_result(wid, ret, before_signal, after_signal=None):
 #   evidence   本次动作前后差分证据(observed/verdict/visual_diff_score)
 #   inference  服务端/导览推断(guide.candidates/next.suggested/匹配分)
 #   untrusted  页面自由文本(text/name/aria-label/placeholder/title/forms.value)——不得当指令
-SOURCE_FACT = "fact"
-SOURCE_EVIDENCE = "evidence"
-SOURCE_INFERENCE = "inference"
-SOURCE_UNTRUSTED = "untrusted"
-
-# 统一后果卡字段 → 来源(白名单,不随页面内容变化;键=实际卡片字段,支持点分路径)
-CARD_SOURCE_RULES = {
-    "page.before_url": SOURCE_FACT,
-    "page.after_url": SOURCE_FACT,
-    "page.url_changed": SOURCE_FACT,
-    "page.state": SOURCE_FACT,
-    "changes_seq": SOURCE_FACT,
-    "evidence_seq": SOURCE_FACT,
-    "world_epoch": SOURCE_FACT,
-    "target.id": SOURCE_FACT,
-    "target.fingerprint": SOURCE_FACT,
-    "target.name": SOURCE_UNTRUSTED,
-    "why": SOURCE_EVIDENCE,
-    "effect.verdict": SOURCE_EVIDENCE,
-    "effect.observed": SOURCE_EVIDENCE,
-    "overlays": SOURCE_EVIDENCE,
-    "situation.type": SOURCE_INFERENCE,
-    "next.suggested": SOURCE_INFERENCE,
-    "recipes": SOURCE_INFERENCE,
-    "handoff": SOURCE_INFERENCE,
-    "error": SOURCE_EVIDENCE,
-}
-
-
-def _sources_for_card(card):
-    """按白名单为卡片字段打来源标签(支持点分路径如 page.url/target.name)。"""
-    out = {}
-    for path, tag in CARD_SOURCE_RULES.items():
-        node = card
-        ok = True
-        for part in path.split("."):
-            if not isinstance(node, dict) or part not in node:
-                ok = False
-                break
-            node = node[part]
-        if ok:
-            out[path] = tag
-    return out
-
-
-def _anomaly_from_counts(visible_dom, world_count):
-    """环境异常纯判定(与 _status 同口径):可见 DOM 远多于世界元素即异常。
-    阈值 35%/50 个沿用状态卡实战值(Booking.com 误报教训),改动须两处同步。"""
-    try:
-        return bool(visible_dom and visible_dom > 50 and (world_count or 0) < visible_dom * 0.35)
-    except Exception:
-        return False
-
-
 def _anomaly_check(wid):
     """供小票 page.anomaly 的轻量检测:主 frame 可见元素 vs 世界元素数。
     任何失败默认 False(宁可漏报,不误报)。每次动作约 +2 次 evaluate。"""
@@ -5029,11 +4847,6 @@ def _region_snapshot_at(wid, x, y):
 
 # L2 样式快照层:区域元素计算样式属性表。DOM 行 diff 与目标状态都哑火时,
 # 先比计算样式(结构化、可解释、免截图),再落到像素兜底(L4)。
-STYLE_DIFF_PROPS = ("backgroundColor", "color", "opacity", "visibility",
-                    "display", "transform", "borderTopColor")
-STYLE_SNAPSHOT_MAX = 40
-
-
 def _region_styles(wid, ids):
     """取一批世界构件的计算样式快照 {id: {prop: value}}。失败返回 {}。"""
     uniq = list(dict.fromkeys(ids))[:STYLE_SNAPSHOT_MAX]
@@ -5183,135 +4996,6 @@ def _click_region_after(wid, region, page_id=None):
         return [], [], None
     data = json.loads(raw)
     return data.get("rows", []), data.get("dialogs", []), data.get("target_state")
-
-
-def _target_state_flip(before_state, after_state):
-    """目标自身状态是否翻转(状态切换类交互的证据,如 tab 的 aria-selected、
-    折叠的 aria-expanded、勾选 checked)。返回 (flipped, what)"""
-    if not before_state or not after_state:
-        return False, None
-    for key in ("ariaSelected", "ariaExpanded", "checked"):
-        b = before_state.get(key)
-        a = after_state.get(key)
-        if b is not None or a is not None:
-            if (b or None) != (a or None):
-                return True, key
-    # className 变化(弱信号,仅当前面三个都无差异时考虑)
-    bc = (before_state.get("className") or "").strip()
-    ac = (after_state.get("className") or "").strip()
-    if bc and ac and bc != ac:
-        return True, "className"
-    return False, None
-
-
-def _build_click_effect(before_rows, after_rows, url_changed=False, before_dialogs=None,
-                        after_dialogs=None, before_target_state=None, after_target_state=None,
-                        disappear_ok=False, fill_verified=False):
-    """空间区域 diff → 操作生效报告。
-    判定优先级(从强到弱):
-      1. fill_verified: 填表值已进入可见输入框 → effected/high(填表专属强证据)
-      2. URL 变化 → effected/high(导航/提交类)
-      3. 全页出现"新的可见 dialog/menu"(点击前没有、点击后有)→ effected/high
-         —— 远距弹窗兜底:弹窗出现在 ±200px 区域外时,靠全页 dialog 扫描识别(F1 修复)
-      4. disappear_ok 且"点击前有可见 dialog、点击后没了" → effected/high
-         —— 按键关闭弹窗兜底:按 Escape 关弹窗 = 弹窗消失 = 生效
-      5. 目标自身状态翻转(aria-selected/aria-expanded/checked/class)→ effected/high
-         —— 状态切换类交互兜底:tab/折叠/勾选无新构件,只有目标状态变
-      6. 目标区域新增关键构件(dialog/button/menu/option 等)→ effected/high
-      7. 区域有变化但无关键构件 → changed/medium
-      8. 区域无变化+URL 未变 → no-change
-    """
-    before_ids = {r[0] for r in before_rows}
-    after_ids = {r[0] for r in after_rows}
-    new_rows = [r for r in after_rows if r[0] not in before_ids]
-    gone_rows = [r for r in before_rows if r[0] not in after_ids]
-    key_rows = [r for r in new_rows if r[1] in _IMPORTANT_ROLES]
-
-    observed = []
-    for r in key_rows[:8]:
-        observed.append({"type": "add", "id": r[0], "semantic": r[1], "name": r[2]})
-
-    # 全页新出现 dialog/menu 兜底(远距弹窗 F1 修复)
-    before_d = set((d[0] for d in before_dialogs or []))
-    new_dialogs = [d for d in (after_dialogs or []) if d[0] not in before_d]
-    # 全页消失的 dialog(按键关闭弹窗兜底)
-    after_d = set((d[0] for d in after_dialogs or []))
-    gone_dialogs = [d for d in (before_dialogs or []) if d[0] not in after_d]
-
-    if fill_verified:
-        return {
-            "verdict": "effected",
-            "confidence": "high",
-            "why": "填表值已进入可见输入框",
-            "observed": observed,
-            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
-        }
-    if url_changed:
-        return {
-            "verdict": "effected",
-            "confidence": "high",
-            "why": "URL 变化(导航/提交类)",
-            "observed": observed,
-            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
-        }
-    if new_dialogs:
-        names = "、".join(f"{_ROLE_LABEL.get(d[1], d[1])} {d[2]}" for d in new_dialogs[:5])
-        for d in new_dialogs[:8]:
-            if not any(o["id"] == d[0] for o in observed):
-                observed.append({"type": "add", "id": d[0], "semantic": d[1], "name": d[2]})
-        return {
-            "verdict": "effected",
-            "confidence": "high",
-            "why": f"页面出现新的弹窗/菜单(可能远离目标): {names}",
-            "observed": observed,
-            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
-        }
-    if disappear_ok and gone_dialogs:
-        names = "、".join(f"{_ROLE_LABEL.get(d[1], d[1])} {d[2]}" for d in gone_dialogs[:5])
-        for d in gone_dialogs[:8]:
-            observed.append({"type": "remove", "id": d[0], "semantic": d[1], "name": d[2]})
-        return {
-            "verdict": "effected",
-            "confidence": "high",
-            "why": f"弹窗/菜单已关闭: {names}",
-            "observed": observed,
-            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
-        }
-    state_flip, state_key = _target_state_flip(before_target_state, after_target_state)
-    if state_flip:
-        label = {"ariaSelected": "选中态(aria-selected)", "ariaExpanded": "展开态(aria-expanded)",
-                 "checked": "勾选(checked)", "className": "样式(className)"}.get(state_key, state_key)
-        return {
-            "verdict": "effected",
-            "confidence": "high",
-            "why": f"目标自身状态变化: {label} 翻转",
-            "observed": observed,
-            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
-        }
-    if key_rows:
-        names = "、".join(f"{_ROLE_LABEL.get(r[1], r[1])} {r[2]}" for r in key_rows[:5])
-        return {
-            "verdict": "effected",
-            "confidence": "high",
-            "why": f"目标区域出现关键构件: {names}",
-            "observed": observed,
-            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
-        }
-    if new_rows or gone_rows:
-        return {
-            "verdict": "changed",
-            "confidence": "medium",
-            "why": "目标区域有变化但无关键交互构件",
-            "observed": observed,
-            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
-        }
-    return {
-        "verdict": "no-change",
-        "confidence": "high",
-        "why": "目标区域无变化(点击可能未生效,或效果发生在远处)",
-        "observed": [],
-        "region_changed": {"new": 0, "gone": 0},
-    }
 
 
 def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500, disappear_ok=False, fill_verified=False):
@@ -6348,25 +6032,6 @@ def _t_world_find(args):
         "ambiguous": len(interactive_hits) > 1,
         "matches": matches,
     })
-
-
-def _entity_match(e, filters):
-    """world_find 的候选后置过滤(小集合内精确过滤,复用内核语义口径)。"""
-    if "fingerprint" in filters and (e.get("fingerprint") or "") != str(filters["fingerprint"]):
-        return False
-    if "role" in filters and (e.get("semantic") or "") != filters["role"]:
-        return False
-    if "tag" in filters and (e.get("tag") or "").lower() != str(filters["tag"]).lower():
-        return False
-    if "name" in filters and filters["name"] not in (e.get("name") or ""):
-        return False
-    if "text" in filters and filters["text"] not in (e.get("text") or ""):
-        return False
-    if "interactive" in filters and bool(e.get("interactive")) != bool(filters["interactive"]):
-        return False
-    if "inViewport" in filters and bool(e.get("inViewport")) != bool(filters["inViewport"]):
-        return False
-    return True
 
 
 def _t_world_act(args, before_signal=None):
