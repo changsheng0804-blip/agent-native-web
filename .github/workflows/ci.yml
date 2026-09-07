@@ -24,15 +24,19 @@ jobs:
           playwright install --with-deps chromium
       - name: 扩展内核合并文件语法检查
         run: node --check extension/all-in-one.js
+      - name: ruff 正确性检查
+        run: |
+          pip install ruff
+          ruff check mcp
       - name: 门禁冒烟(协议收口)
-        run: python mcp/run_quality.py --only test_protocol.py
+        run: python mcp/run_quality.py --only test_protocol.py --report mcp/quality_protocol.md
       - name: 门禁冒烟(小票标准)
-        if: always()
-        run: python mcp/run_quality.py --only test_receipt.py
+        if: !cancelled()
+        run: python mcp/run_quality.py --only test_receipt.py --report mcp/quality_receipt.md
       - name: 上传门禁报告(失败时)
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: quality-report
-          path: mcp/quality_report.md
+          path: mcp/quality_*.md
           if-no-files-found: ignore

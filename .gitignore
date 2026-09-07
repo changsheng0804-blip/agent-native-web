@@ -10,10 +10,13 @@ __pycache__/
 .firecrawl/
 
 # 门禁/验证运行报告(运行时生成,历史快照见 docs/archive/)
-mcp/quality_report.md
+mcp/quality_*.md
 mcp/validate_report.md
 mcp/verify_record.md
 mcp/experiments/artifacts/
+
+# ruff 缓存
+.ruff_cache/
 
 # Python 虚拟环境
 .venv/

@@ -18,7 +18,7 @@
 
 退出码: 0=全过  1=有失败  2=前置检查失败(如 all-in-one.js 不同步)
 
-报告: 写 mcp/quality_report.md(覆盖式),控制台同步输出汇总。
+报告: 写 mcp/quality_report.md(覆盖式,可用 --report PATH 改输出路径),控制台同步输出汇总。
 """
 import argparse
 import json
@@ -70,6 +70,7 @@ SCOPES = {
     "test_page_outcome.py": ["judgment", "challenge"],
     "test_receipt.py": ["judgment", "receipt"],
     "test_receipt_metrics.py": ["judgment", "receipt"],
+    "test_protocol.py": ["protocol", "kernel"],
     "test_occlusion.py": ["occlusion", "action", "judgment"],
     "test_silent_failure.py": ["network", "console", "silent_failure", "judgment"],
     "test_challenge_overlay.py": ["challenge"],
@@ -103,6 +104,9 @@ SCOPES = {
     "test_channels_real.py": ["channels"],
     "test_real_github_task_graph.py": ["task-runtime", "real-site"],
     "test_real_github_task_graph_ab.py": ["task-runtime", "real-site", "benchmark"],
+    # special 组
+    "test_cdp.py": ["cdp", "debug"],
+    "test_profile.py": ["profile"],
 }
 
 # 别名:常用改动面 → 推荐 scope 组合("--scope 别名" 一次跑多个面)
@@ -314,9 +318,16 @@ def main():
     ap.add_argument("--list", action="store_true", help="列出分组、脚本与守护面")
     ap.add_argument("--only", metavar="SCRIPT", help="只跑指定脚本(如 test_map.py)")
     ap.add_argument("--scope", metavar="SCOPE", help="只跑某守护面的测试(如 --scope fill;多面用逗号:--scope fill,observer;别名见 --list)")
+    ap.add_argument("--report", metavar="PATH", default=None,
+                    help="报告输出路径(默认 mcp/quality_report.md;相对路径基于当前工作目录)")
     ap.add_argument("--parallel", type=int, default=1, metavar="N",
                     help="并行跑 N 个测试(默认 1=串行;offline 全量建议 3,约 13 分钟→5 分钟。注意每个测试会拉起独立浏览器,内存有限时用 2)")
     args = ap.parse_args()
+
+    # --report 覆盖默认报告路径(默认 mcp/quality_report.md)
+    if args.report:
+        global REPORT
+        REPORT = pathlib.Path(args.report).resolve()
 
     if args.list:
         for g in ORDER:
@@ -335,12 +346,12 @@ def main():
         groups_run = [f"only:{args.only}"]
     elif args.scope:
         # 展开别名 + 逗号分隔的面,收集覆盖这些面的所有测试。
-        # 默认只扫 offline 组(纯本地、快);若显式面里有 real-only 的
-        # (map/identity/frames/profile/digest/status/navigation/general/debug),
-        # 才同时扫 real 组——避免 --scope quick 误拉真站全量。
+        # 只由 offline 组覆盖的面:只扫 offline 组。task-runtime 虽有两个真站
+        # 任务图测试(test_real_github_task_graph*.py),但它们还带 real-site 面,
+        # 要跑真站请显式 --scope real-site——避免 --scope task-runtime 误拉慢速真站。
         offline_only_faces = {"fill", "forms", "action", "kernel", "observer", "visibility",
                               "shadow", "ipi", "judgment", "challenge", "channels", "guide",
-                              "visual", "screenshot", "receipt"}
+                              "visual", "screenshot", "receipt", "task-runtime"}
         wanted = set()
         for part in [p.strip() for p in args.scope.split(",") if p.strip()]:
             if part in SCOPE_ALIASES:

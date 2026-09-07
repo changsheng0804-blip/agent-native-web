@@ -7,12 +7,13 @@ dependencies = [
     "mcp>=1.29,<2",   # 锁 1.x:2.x 移除了 Server.list_tools 装饰器(2026-09-07 CI 实证)
     "playwright>=1.40",
     "pillow>=10.0",   # 视觉 diff 证据与 SoM 标注;缺失会导致 server.py 启动即崩溃
+    "httpx",          # mcp/experiments/llm_agent.py 直接 import(显式登记,原为传递依赖)
 ]
 
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-extend-exclude = ["mcp/poc", "mcp/experiments", "extension", "tests"]
+extend-exclude = ["mcp/experiments", "extension", "tests"]
 
 [tool.ruff.lint]
 # 先只启用正确性检查(E9 语法/F8xx 未定义名),历史代码不做风格大改
