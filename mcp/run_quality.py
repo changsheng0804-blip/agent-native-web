@@ -84,6 +84,9 @@ SCOPES = {
     "test_site_adapter.py": ["task-runtime"],
     "test_task_runtime_integration.py": ["task-runtime"],
     "test_task_runtime_matrix.py": ["task-runtime"],
+    "experiments/test_server_premise.py": ["premise", "timeline"],
+    "experiments/test_server_timeline.py": ["timeline", "premise"],
+    "test_layers.py": ["layers", "query"],
     # real 组
     "test_map.py": ["map", "navigation"],
     "test_map_drill.py": ["map"],
@@ -153,6 +156,9 @@ GROUPS = {
             "test_site_adapter.py",             # 站点适配器受控加载(离线)
             "test_task_runtime_integration.py", # 任务图浏览器闭环(本地夹具,任务图合入)
             "test_task_runtime_matrix.py",      # 固定覆盖矩阵与非法迁移拦截(任务图合入)
+            "experiments/test_server_premise.py",  # 决策前提监视(assume/ack/status 工具层,order_form 夹具)
+            "experiments/test_server_timeline.py", # 统一时间线(因果窗口/前提入账/静默失败)
+            "test_layers.py",                # world_layers 图层视图(结构/语义/空间/交互/名字)
         ],
     },
     "real": {
