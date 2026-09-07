@@ -2830,14 +2830,20 @@ def _guide_terms(task):
         for source, alias in aliases.items():
             if source in item and alias not in terms:
                 terms.append(alias)
-        cleaned = item
-        # 先移除较长动作短语,避免“标记为”被单字“为”截断后残留“标记”。
-        for stop in sorted(stopwords, key=len, reverse=True):
-            cleaned = cleaned.replace(stop, " ")
-        parts = re.findall(r"[a-z0-9][a-z0-9_-]*|[\u4e00-\u9fff]{2,}", cleaned)
-        for term in parts:
-            if term not in stopwords and len(term) >= 2 and term not in terms:
-                terms.append(term)
+        if re.match(r"^[a-z0-9]", item):
+            # 英文/数字词:精确停用词过滤。绝不能对连写英文做子串 replace——
+            # 停用词 "a" 会把 "star" 拆成 "st"(实测:全场元素 name 都含 st,
+            # 候选全 4 分大平局,Notifications 抢走 Star 任务的 first)。
+            if item not in stopwords and len(item) >= 2 and item not in terms:
+                terms.append(item)
+        else:
+            # 中文段无空格分隔,停用词只能按子串剔除(如"打开仓库"剔除"打开")
+            cleaned = item
+            for stop in sorted(stopwords, key=len, reverse=True):
+                cleaned = cleaned.replace(stop, " ")
+            for term in re.findall(r"[\u4e00-\u9fff]{2,}", cleaned):
+                if term not in stopwords and len(term) >= 2 and term not in terms:
+                    terms.append(term)
     expanded = list(terms)
     for term in terms:
         alias = aliases.get(term)
@@ -3531,7 +3537,11 @@ def _t_world_guide(args):
                 push(e, { semantic: e.region || 'unknown', name: 'live-entity', bounds: null });
             }
             rows.sort((a, b) => {
-                return b.match_score - a.match_score || Number(b.interactive) - Number(a.interactive);
+                // 同分时:命中任务词数多者优先(避免 Notifications 这类无关元素
+                // 与 star 命中者并列 4 分时靠原始顺序抢到 first → next_action 误导)
+                return b.match_score - a.match_score
+                    || (b.matched || []).length - (a.matched || []).length
+                    || Number(b.interactive) - Number(a.interactive);
             });
             return rows.slice(0, arg.max);
         }""",
@@ -3588,7 +3598,14 @@ def _t_world_guide(args):
     route_hint = _route_hint(wid, state, candidates)
     expand_candidates = _expand_candidates(wid)
     if candidates:
-        next_action = f"优先检查候选 {candidates[0].get('id')} 的详图,再决定是否执行动作"
+        top = candidates[0]
+        # next_action 保底:只指向"可交互且命中任务词"的候选;
+        # 同分时无关元素曾排第一(实测 Notifications 抢走 Star 任务的 first),误导 harness 点错。
+        if top.get("interactive") and top.get("matched_terms"):
+            next_action = f"优先检查候选 {top.get('id')} 的详图,再决定是否执行动作"
+        else:
+            next_action = ("候选区分度不足:最高分候选未命中任务词,请先确认目标元素"
+                           "(可用 world_entities 按文本过滤)再执行动作")
     else:
         next_action = "当前页面没有找到直接匹配入口;不要猜测,先扩大到导航/菜单区域或提供更具体目标词"
 
