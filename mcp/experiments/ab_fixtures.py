@@ -88,6 +88,18 @@ PRICE_HTML = """<!DOCTYPE html>
 </body></html>"""
 
 
+VISUAL_HTML = """<!DOCTYPE html>
+<html lang="zh"><head><meta charset="utf-8"><title>视觉兜底测试</title></head>
+<body>
+  <h1>视觉兜底测试</h1>
+  <button id="btn-color" onclick="this.style.backgroundColor='#f00'; this.style.color='#fff';">变色按钮</button>
+  <div id="status">未点击</div>
+  <script>
+    // 点击只改 CSS,不改 DOM 结构/文本——DOM diff 应判 no-change,由视觉/样式兜底捕获
+  </script>
+</body></html>"""
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -107,6 +119,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, SUBMIT_HTML.encode(), "text/html; charset=utf-8")
         if self.path == "/ab/price.html":
             return self._send(200, PRICE_HTML.encode(), "text/html; charset=utf-8")
+        if self.path == "/ab/visual.html":
+            return self._send(200, VISUAL_HTML.encode(), "text/html; charset=utf-8")
         if self.path == "/api/orders":
             time.sleep(2.5)  # 慢接口:SPA 长时间无反馈
             return self._send(200, {"orders": ORDERS})
