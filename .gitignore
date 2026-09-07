@@ -17,3 +17,4 @@ mcp/experiments/artifacts/
 
 # Python 虚拟环境
 .venv/
+uv.lock
