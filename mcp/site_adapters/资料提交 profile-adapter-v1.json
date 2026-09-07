@@ -1,0 +1,40 @@
+{
+  "schema_version": "0.1",
+  "adapter_id": "profile-adapter",
+  "adapter_version": "1",
+  "workflow_id": "profile-submit",
+  "site_version": "fixture-v1",
+  "description": "资料提交任务的示例站点业务适配器",
+  "state_rules": [
+    {
+      "id": "profile.empty",
+      "when": {"form_state": "empty", "outcome_hint": null},
+      "description": "资料表单尚未填写"
+    },
+    {
+      "id": "profile.partial",
+      "when": {"form_state": "partial", "outcome_hint": null},
+      "description": "资料表单已部分填写"
+    },
+    {
+      "id": "profile.complete",
+      "when": {"form_state": "complete", "outcome_hint": null},
+      "description": "资料表单已填写完整"
+    }
+  ],
+  "operations": [
+    {
+      "name": "填写资料",
+      "preconditions": ["profile.empty", "profile.partial"],
+      "outputs": [{"name": "资料", "ref": "profile.form"}],
+      "executor": "world_act"
+    },
+    {
+      "name": "提交资料",
+      "preconditions": ["profile.complete"],
+      "inputs": [{"from": "填写资料.资料", "to": "提交资料.资料"}],
+      "outputs": [{"name": "提交结果", "ref": "profile.result"}],
+      "executor": "world_act"
+    }
+  ]
+}

@@ -83,3 +83,33 @@ seq=36 response  200 json          ← 因果窗口 key 归因
 python experiments/test_server_timeline.py   # 7 项集成断言
 python experiments/run_timeline_gh.py        # GitHub 真实站点演示
 ```
+
+## 任务运行时图
+
+任务图相关信道把页面动作提升为可审计的业务运行时记录：
+
+```text
+world_business_state       业务状态投影
+world_operation_check      操作前置条件检查
+world_task_plan            当前或历史轨迹上的路径规划
+world_graph_replay_check   实际轨迹与任务图边的回放核对
+world_adapter_compare      站点适配器版本兼容性检查
+```
+
+站点适配器 JSON 只能从 `site_adapters/` 受控目录加载。它是显式业务配置，包含状态规则、操作契约和适用版本，不会自动读取或推断网站后端逻辑。
+
+GitHub 真实流程闭环可运行：
+
+```bash
+python test_real_github_task_graph.py
+```
+
+验证记录见 [真实站点任务图闭环验证报告](../docs/真实站点任务图闭环验证 GitHub.md)。该测试只读公开页面，轨迹写入临时目录并在结束后清理。
+
+GitHub 任务图 A/B 对照可运行：
+
+```bash
+python test_real_github_task_graph_ab.py
+```
+
+对照记录见 [真实站点任务图 A/B 对照报告](../docs/A-B对照基准 GitHub.md)。A 组每次重新探索页面，B 组先读取任务图再规划；两组动作相同，重点观察复用、安全和执行成本。

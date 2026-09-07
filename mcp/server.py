@@ -14,8 +14,18 @@ Agent World MCP Server
   world_resolve  弱 ID 解析(名字/强 ID/页面原生 id)
   world_changes  变更流(增量续读,游标)
   world_state    页面状态信道(读取最新整体状态)
+  world_business_state 业务状态信道(由显式规则投影)
+  world_operation_check 业务操作前置检查(只检查不执行)
+  world_task_plan 任务路径规划(从运行时图寻找可复用路径,只规划不执行)
+  world_graph_replay_check 回放核对(验证实际轨迹是否符合指定图边)
   world_change_digest 变化摘要信道(读取压缩后的变化)
   world_evidence 操作证据信道(读取动作前后证据)
+  world_trace    任务轨迹信道(读取脱敏轨迹)
+  world_graph    候选任务运行时图(从轨迹即时生成)
+  world_trace_archive 读取已归档任务轨迹
+  world_graph_archive 由已归档轨迹生成候选图
+  world_graph_assess 评估图的回放与生命周期状态
+  world_graph_bundle 合并多个任务实例进行跨会话评估
   world_guide   结合三条信道生成任务导览
   world_click    编号驱动点击 + 页面整体反馈
   world_fill     编号驱动填表
@@ -48,6 +58,55 @@ from mcp.server import Server
 from mcp.server.stdio import stdio_server
 import mcp.types as types
 from playwright.sync_api import sync_playwright
+
+try:
+    from business_runtime import (
+        attach_business_runtime,
+        check_operation,
+        normalize_operation_contracts,
+        normalize_site_adapter,
+        normalize_state_rules,
+        project_business_state,
+    )
+except ImportError:
+    from mcp.business_runtime import (
+        attach_business_runtime,
+        check_operation,
+        normalize_operation_contracts,
+        normalize_site_adapter,
+        normalize_state_rules,
+        project_business_state,
+    )
+
+try:
+    from site_adapter import compare_site_adapters, load_site_adapter_file
+except ImportError:
+    from mcp.site_adapter import compare_site_adapters, load_site_adapter_file
+
+try:
+    from task_runtime import (
+        TraceStore,
+        build_graph,
+        build_trace_entry,
+        new_id,
+        normalize_page_state,
+        persistence_enabled,
+        plan_graph,
+        state_key,
+        validate_replay_step,
+    )
+except ImportError:  # 允许从仓库根目录以模块方式加载
+    from mcp.task_runtime import (
+        TraceStore,
+        build_graph,
+        build_trace_entry,
+        new_id,
+        normalize_page_state,
+        persistence_enabled,
+        plan_graph,
+        state_key,
+        validate_replay_step,
+    )
 
 # Playwright 同步 API 强依赖 greenlet 协程上下文，必须在单一固定 OS 工作线程内运行，杜绝多线程竞争切换
 _pw_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="playwright_worker")
@@ -96,6 +155,7 @@ server = Server("agent-world")
 _worlds = {}
 _next_world_id = 1
 _playwright = None
+_trace_store = TraceStore()
 
 
 def _get_pw():
@@ -457,6 +517,16 @@ def _page_node_identity(signal):
     return "node_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16], basis
 
 
+def _runtime_context(w):
+    """返回轨迹和候选图共用的来源上下文；未知字段保持为空。"""
+    return {
+        key: w.get(key)
+        for key in ("workflow_id", "site_version", "role", "permission_scope",
+                    "site_adapter_id", "site_adapter_version")
+        if w.get(key)
+    }
+
+
 def _wait_world_ready(page, timeout_ms=15000):
     deadline = time.time() + timeout_ms / 1000
     while time.time() < deadline:
@@ -790,9 +860,20 @@ async def list_tools():
                     "headful": {"type": "boolean", "description": "是否弹出可见窗口(登录/验证码/人工确认场景用)", "default": False},
                     "profile": {"type": "string", "description": "持久化登录态名称(如 login-taobao),同一名称复用 cookie/会话;留空则不持久化"},
                     "cdp_url": {"type": "string", "description": "连接已有 Chrome 的 CDP 调试地址(如 http://localhost:9222),复用日常已登录浏览器;与 profile/headless 互斥"},
-                    "task_id": {"type": "string", "description": "可选的连续任务编号；同一任务的会话、动作和结果使用同一编号"},
+                    "task_id": {"type": "string", "description": "可选任务编号;同一任务的会话、动作和结果使用同一编号,同一网页世界内的动作会继承它"},
                     "reuse_policy": {"type": "string", "enum": ["auto", "never"], "description": "会话复用策略:auto=同一任务优先复用,never=强制新建", "default": "auto"},
                     "idle_ttl_ms": {"type": "integer", "description": "空闲会话保留毫秒数,默认600000", "default": 600000},
+                    "task_goal": {"type": "string", "description": "可选任务目标,用于轨迹和候选图说明,不作为网页指令执行"},
+                    "workflow_id": {"type": "string", "description": "可选任务类型编号,用于把多次独立运行归入同一任务族"},
+                    "site_version": {"type": "string", "description": "可选网站版本或发布标记,未知时不要猜测"},
+                    "role": {"type": "string", "description": "可选账号角色,例如管理员或普通用户"},
+                    "permission_scope": {"type": "string", "description": "可选用户授权范围,只保存范围名称不保存凭据"},
+                    "graph_valid_until": {"type": "integer", "description": "可选候选图有效截止时间,Unix 时间戳;到期后图标记为 expired"},
+                    "business_state_rules": {"type": "array", "description": "可选显式业务状态规则;未知或多规则命中时不会猜测", "items": {"type": "object"}},
+                    "operation_contracts": {"type": "array", "description": "可选业务操作契约,包含前置状态、逻辑输入输出、所需角色、授权范围和适用网站版本", "items": {"type": "object"}},
+                    "site_adapter": {"type": "object", "description": "可选站点业务适配器;集中声明状态规则、操作契约、任务类型和网站版本", "additionalProperties": True},
+                    "site_adapter_file": {"type": "string", "description": "可选站点适配器 JSON 文件名;只能读取 mcp/site_adapters 受控目录,不能与 site_adapter 同时使用"},
+                    "enforce_contracts": {"type": "boolean", "description": "是否在 world_act 执行前强制检查业务操作契约;开启后,带 operation 的动作不满足前置条件时会被拦截", "default": False},
                 },
                 "required": ["url"],
             },
@@ -913,6 +994,152 @@ async def list_tools():
                     "limit": {"type": "integer", "description": "最多返回条数", "default": 20},
                 },
                 "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_business_state",
+            description="业务状态信道:用调用方声明的显式规则,把当前页面运行时状态投影为业务状态;没有规则或规则冲突时返回 unknown/ambiguous,不会猜测。",
+            inputSchema={
+                "type": "object",
+                "properties": {"world_id": {"type": "integer"}},
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_operation_check",
+            description="业务操作前置检查:判断当前业务状态是否满足某个操作契约;检查失败只返回原因,不执行动作。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "operation": {"type": "string", "description": "业务操作名,例如提交资料"},
+                },
+                "required": ["world_id", "operation"],
+            },
+        ),
+        types.Tool(
+            name="world_task_plan",
+            description="任务路径规划:从当前运行时状态出发,沿已观测的任务图寻找目标业务状态;默认只采用 verified(已通过回放与分支检查)边,allow_candidate=true 仅用于探索,不会执行动作。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "goal_state": {"type": "string", "description": "目标业务状态编号,例如 profile.complete"},
+                    "task_ids": {"type": "array", "description": "可选历史任务实例编号;明确提供后会把已归档轨迹加入规划来源", "items": {"type": "string"}},
+                    "max_steps": {"type": "integer", "description": "最多规划多少步,默认 8", "default": 8},
+                    "min_replays": {"type": "integer", "description": "规划时采用的独立回放次数阈值,默认 2"},
+                    "allow_candidate": {"type": "boolean", "description": "是否允许把 candidate/replayed(未完全验证)边用于探索性规划,默认 false", "default": False},
+                },
+                "required": ["world_id", "goal_state"],
+            },
+        ),
+        types.Tool(
+            name="world_graph_replay_check",
+            description="回放核对:把当前世界中的实际轨迹与指定任务图迁移边逐项比较;只返回通过或失败,不执行页面动作,不比较输入原文。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "edge_id": {"type": "string", "description": "world_graph 或 world_task_plan 返回的迁移边编号"},
+                    "trace_step": {"type": "integer", "description": "可选当前世界轨迹步骤编号;不填则核对最新轨迹"},
+                    "task_ids": {"type": "array", "description": "可选历史任务实例编号;用于找到指定迁移边", "items": {"type": "string"}},
+                    "min_replays": {"type": "integer", "description": "构图时使用的独立回放次数阈值,默认 2"},
+                },
+                "required": ["world_id", "edge_id"],
+            },
+        ),
+        types.Tool(
+            name="world_adapter_compare",
+            description="站点适配器兼容性检查:比较两个受控目录中的适配器版本,识别状态规则、操作契约、流程编号和网站版本变化;只读取文件,不执行网页动作。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "base_file": {"type": "string", "description": "基准适配器 JSON 文件名"},
+                    "candidate_file": {"type": "string", "description": "待检查适配器 JSON 文件名"},
+                },
+                "required": ["base_file", "candidate_file"],
+            },
+        ),
+        types.Tool(
+            name="world_trace",
+            description="任务轨迹信道:读取当前网页世界中已脱敏的动作前后状态、操作结果和证据引用;不保存填写文本原文。用于构建和审计任务运行时图。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "since": {"type": "integer", "description": "上次读到的轨迹步骤序号", "default": 0},
+                    "limit": {"type": "integer", "description": "最多返回轨迹条数", "default": 50},
+                },
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_graph",
+            description="候选任务运行时图:从已记录轨迹生成状态节点和迁移边。候选图只表示观测到的行为,不代表完整业务规则,也不把出现次数解释成概率。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "expected_outcomes": {"type": "array", "description": "可选预期结果分支,用于生命周期评估", "items": {"type": "string"}},
+                    "min_replays": {"type": "integer", "description": "可选独立回放次数阈值,默认 2", "default": 2},
+                },
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_trace_archive",
+            description="读取已归档任务轨迹:仅在明确开启本地轨迹归档后可用;按任务编号读取脱敏 JSONL 记录,可在网页世界关闭后审计。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "world_open 返回的任务实例编号"},
+                    "since": {"type": "integer", "description": "上次读到的轨迹步骤序号", "default": 0},
+                    "limit": {"type": "integer", "description": "最多返回轨迹条数", "default": 200},
+                },
+                "required": ["task_id"],
+            },
+        ),
+        types.Tool(
+            name="world_graph_archive",
+            description="从已归档任务轨迹生成候选图:用于网页世界关闭后的审计;不会把候选图自动升级为已验证图。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "world_open 返回的任务实例编号"},
+                    "goal": {"type": "string", "description": "可选任务目标说明"},
+                    "expected_outcomes": {"type": "array", "description": "可选预期结果分支", "items": {"type": "string"}},
+                    "min_replays": {"type": "integer", "description": "可选独立回放次数阈值,默认 2", "default": 2},
+                    "valid_until": {"type": "integer", "description": "可选有效截止时间,Unix 时间戳"},
+                },
+                "required": ["task_id"],
+            },
+        ),
+        types.Tool(
+            name="world_graph_assess",
+            description="评估候选图生命周期:检查独立回放次数、预期结果分支和有效期,只返回评估结果,不会自动发布图。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "world_id": {"type": "integer"},
+                    "expected_outcomes": {"type": "array", "description": "预期必须覆盖的页面结果,例如 progressed、errored、challenged", "items": {"type": "string"}},
+                    "min_replays": {"type": "integer", "description": "每条边至少需要多少条独立轨迹,默认 2", "default": 2},
+                },
+                "required": ["world_id"],
+            },
+        ),
+        types.Tool(
+            name="world_graph_bundle",
+            description="合并多个已归档任务实例生成候选图并评估,用于跨会话回放;任务编号必须由调用方明确提供。",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "task_ids": {"type": "array", "description": "要合并的任务实例编号列表", "items": {"type": "string"}},
+                    "goal": {"type": "string", "description": "可选任务目标说明"},
+                    "expected_outcomes": {"type": "array", "description": "预期必须覆盖的页面结果", "items": {"type": "string"}},
+                    "min_replays": {"type": "integer", "description": "每条边至少需要多少条独立轨迹,默认 2", "default": 2},
+                    "valid_until": {"type": "integer", "description": "可选有效截止时间,Unix 时间戳"},
+                },
+                "required": ["task_ids"],
             },
         ),
         types.Tool(
@@ -1182,6 +1409,13 @@ async def list_tools():
                     "wait_policy": {"type": "string", "enum": ["confirmed", "receipt"], "description": "confirmed=等待最终后果卡(默认),receipt=动作发出后立即返回编号"},
                     "verbose": {"type": "boolean", "description": "true 时返回全量深诊断状态卡(frames/forms/world 明细);默认轻量(URL/稳定态/登录态/弹窗)", "default": False},
                     "steps": {"type": "array", "description": "聚合执行:多步动作序列 [{kind,id,text|key|fields,...}, ...],任一步 errored 即停", "items": {"type": "object"}},
+                    "operation": {"type": "string", "description": "可选业务操作名,例如填写资料或提交;不填写时使用低层动作名"},
+                    "operation_id": {"type": "string", "description": "可选操作编号,用于把相邻步骤绑定到同一业务操作"},
+                    "executor": {"type": "string", "description": "可选执行器标记,例如 world_act、webmcp 或授权接口"},
+                    "task_id": {"type": "string", "description": "可选任务实例编号,不填写时继承 world_open 的任务编号"},
+                    "enforce_contracts": {"type": "boolean", "description": "可选开启本次动作的契约强制检查;不会关闭 world_open 已开启的严格模式;带 operation 时失败则不点击页面", "default": False},
+                    "input_bindings": {"type": "array", "description": "可选输入数据绑定,只填写逻辑引用,例如 [{\"from\":\"填写资料.资料\",\"to\":\"提交资料.资料\"}]", "items": {"type": "object"}},
+                    "output_bindings": {"type": "array", "description": "可选输出数据绑定,只填写逻辑引用,不填写真实值,例如 [{\"name\":\"资料\",\"ref\":\"profile\"}]", "items": {"type": "object"}},
                 },
                 "required": ["world_id"],
             },
@@ -1360,7 +1594,7 @@ def _impl_with_status(name, args):
         except Exception:
             pass
     # 独立信道工具(world_state/digest/evidence/guide)自带信道结构,不再附加大 status
-    if name in {"world_state", "world_change_digest", "world_evidence", "world_guide"}:
+    if name in {"world_state", "world_business_state", "world_operation_check", "world_task_plan", "world_graph_replay_check", "world_adapter_compare", "world_change_digest", "world_evidence", "world_trace", "world_graph", "world_trace_archive", "world_graph_archive", "world_graph_assess", "world_graph_bundle", "world_guide"}:
         return result
     # 瘦身演进:默认协议工具(world_act, world_find, world_outcome)默认轻量 status;
     # 失败/存疑态(unchanged/uncertain/challenged/errored)或显式 verbose=true 时自动全量深诊断;
@@ -1598,10 +1832,32 @@ def _impl(name, args, before_signal=None):
         return _t_world_changes(args)
     if name == "world_state":
         return _t_world_state(args)
+    if name == "world_business_state":
+        return _t_world_business_state(args)
+    if name == "world_operation_check":
+        return _t_world_operation_check(args)
+    if name == "world_task_plan":
+        return _t_world_task_plan(args)
+    if name == "world_graph_replay_check":
+        return _t_world_graph_replay_check(args)
+    if name == "world_adapter_compare":
+        return _t_world_adapter_compare(args)
     if name == "world_change_digest":
         return _t_world_change_digest(args)
     if name == "world_evidence":
         return _t_world_evidence(args)
+    if name == "world_trace":
+        return _t_world_trace(args)
+    if name == "world_graph":
+        return _t_world_graph(args)
+    if name == "world_trace_archive":
+        return _t_world_trace_archive(args)
+    if name == "world_graph_archive":
+        return _t_world_graph_archive(args)
+    if name == "world_graph_assess":
+        return _t_world_graph_assess(args)
+    if name == "world_graph_bundle":
+        return _t_world_graph_bundle(args)
     if name == "world_guide":
         return _t_world_guide(args)
     if name == "world_click":
@@ -2149,6 +2405,14 @@ def _t_world_open(args):
     headful = bool(args.get("headful", False))
     profile = args.get("profile") or None
     cdp_url = args.get("cdp_url") or None
+    site_adapter_file = str(args.get("site_adapter_file") or "").strip()
+    if site_adapter_file and args.get("site_adapter") is not None:
+        raise ValueError("site_adapter_file 与 site_adapter 只能二选一")
+    site_adapter = (
+        load_site_adapter_file(site_adapter_file)
+        if site_adapter_file
+        else normalize_site_adapter(args.get("site_adapter"))
+    )
     reusable = _find_reusable_world(url, task_id, profile, cdp_url, headful, idle_ttl_ms) if reuse_policy == "auto" else None
     if reusable is not None:
         world = _world(reusable)
@@ -2379,6 +2643,27 @@ def _t_world_open(args):
     except Exception:
         pass
 
+    task_id = str(args.get("task_id") or new_id("task"))[:120]
+    task_goal = str(args.get("task_goal") or "")[:300]
+    trace_id = new_id("trace")
+    workflow_id = str(args.get("workflow_id") or site_adapter.get("workflow_id") or "")[:120]
+    site_version = str(args.get("site_version") or site_adapter.get("site_version") or "")[:160]
+    role = str(args.get("role") or "")[:120]
+    permission_scope = str(args.get("permission_scope") or "")[:200]
+    try:
+        graph_valid_until = int(args["graph_valid_until"]) if args.get("graph_valid_until") is not None else None
+    except (TypeError, ValueError):
+        graph_valid_until = None
+    raw_rules = args.get("business_state_rules")
+    if raw_rules is None:
+        raw_rules = site_adapter.get("state_rules")
+    raw_contracts = args.get("operation_contracts")
+    if raw_contracts is None:
+        raw_contracts = site_adapter.get("operation_contracts")
+    business_state_rules = normalize_state_rules(raw_rules)
+    operation_contracts = normalize_operation_contracts(raw_contracts)
+    enforce_contracts = bool(args.get("enforce_contracts", False))
+
     _worlds[wid] = {
         "handle": handle,
         "context": context,
@@ -2394,6 +2679,25 @@ def _t_world_open(args):
         # 操作证据信道只在当前网页世界内短暂保存,不落盘。
         "evidence_seq": 0,
         "evidence_log": [],
+        # 第一阶段任务运行时轨迹:只在当前网页世界内保存,由 world_trace/world_graph 读取。
+        "task_id": task_id,
+        "task_goal": task_goal,
+        "trace_id": trace_id,
+        "trace_log": [],
+        "trace_step_seq": 0,
+        "trace_persistence_enabled": persistence_enabled(),
+        "workflow_id": workflow_id,
+        "site_version": site_version,
+        "role": role,
+        "permission_scope": permission_scope,
+        "graph_valid_until": graph_valid_until,
+        "business_state_rules": business_state_rules,
+        "operation_contracts": operation_contracts,
+        "site_adapter": site_adapter,
+        "site_adapter_file": site_adapter_file or None,
+        "site_adapter_id": site_adapter.get("adapter_id"),
+        "site_adapter_version": site_adapter.get("adapter_version"),
+        "enforce_contracts": enforce_contracts,
         # 世界纪元:world_navigate 成功导航 +1;跨纪元旧 el_N 全部失效
         "epoch": 0,
         "network_errors": net_errors,
@@ -2453,7 +2757,18 @@ def _t_world_open(args):
                 "readiness": {"action": True, "terrain": "ready" if terrain_ready else "partial",
                               "stable": bool(stable_ready), "full_scan": full_scan,
                               "scan_revision": int(scan_state.get("revision", 0))},
-                "session": {"reused": False, "reuse_type": "new", "idle_ms": 0, "reuse_count": 0}})
+                "session": {"reused": False, "reuse_type": "new", "idle_ms": 0, "reuse_count": 0},
+                "task_id": task_id, "trace_id": trace_id,
+                "trace_persistence_enabled": persistence_enabled(),
+                "workflow_id": workflow_id, "site_version": site_version,
+                "role": role, "permission_scope": permission_scope,
+                "graph_valid_until": graph_valid_until,
+                "site_adapter_id": site_adapter.get("adapter_id") or None,
+                "site_adapter_version": site_adapter.get("adapter_version") or None,
+                "site_adapter_file": site_adapter_file or None,
+                "business_state_rule_count": len(business_state_rules),
+                "operation_contract_count": len(operation_contracts),
+                "enforce_contracts": enforce_contracts})
 
 
 def _t_world_entities(args):
@@ -2670,6 +2985,232 @@ def _t_world_state(args):
     })
 
 
+def _business_state_snapshot(wid):
+    w = _world(wid)
+    page_signal = _page_signal_snapshot(wid)
+    runtime_state = normalize_page_state(page_signal)
+    business = project_business_state(runtime_state, w.get("business_state_rules"))
+    # 业务状态一旦被明确匹配,它必须成为运行时状态身份的一部分。
+    # 否则两个页面事实相同但业务语义不同的节点会被错误合并。
+    if business.get("status") == "matched":
+        runtime_state["business_state"] = business["state_id"]
+        runtime_state["state_key"] = state_key(runtime_state)
+    return runtime_state, business
+
+
+def _t_world_business_state(args):
+    """读取当前页面状态对应的显式业务状态。"""
+    wid = int(args["world_id"])
+    w = _world(wid)
+    runtime_state, business = _business_state_snapshot(wid)
+    return _ok({
+        "world_id": wid,
+        "channel": "business-state",
+        "runtime_state": runtime_state,
+        "business_state": business,
+        "rule_count": len(w.get("business_state_rules") or []),
+        "source": "declared-rule",
+    })
+
+
+def _t_world_operation_check(args):
+    """只检查操作契约，不执行操作。"""
+    wid = int(args["world_id"])
+    operation = str(args.get("operation") or "").strip()
+    if not operation:
+        raise ValueError("operation 不能为空")
+    runtime_state, business = _business_state_snapshot(wid)
+    result = check_operation(
+        _world(wid).get("operation_contracts"),
+        operation,
+        business,
+        runtime_context=_runtime_context(_world(wid)),
+    )
+    return _ok({
+        "world_id": wid,
+        "channel": "operation-precondition-check",
+        "runtime_state": runtime_state,
+        "business_state": business,
+        "runtime_context": _runtime_context(_world(wid)),
+        "check": result,
+        "executed": False,
+    })
+
+
+def _graph_trace_source(w, args):
+    """收集当前世界及调用方明确指定的归档轨迹,按任务和步骤去除重复记录。"""
+    traces = list(w.get("trace_log", []))
+    requested_task_ids = []
+    for item in args.get("task_ids") or []:
+        task_id = str(item or "")[:120]
+        if task_id and task_id not in requested_task_ids and len(requested_task_ids) < 50:
+            requested_task_ids.append(task_id)
+    missing_task_ids = []
+    archived_trace_count = 0
+    known_trace_keys = {
+        (
+            str(trace.get("task_id") or ""),
+            str(trace.get("step_index") or ""),
+            str(trace.get("trace_id") or ""),
+        )
+        for trace in traces
+        if isinstance(trace, dict) and (trace.get("task_id") or trace.get("trace_id"))
+    }
+    if requested_task_ids:
+        if persistence_enabled():
+            for task_id in requested_task_ids[:50]:
+                rows = _trace_store.read(task_id, limit=1000)
+                if not rows:
+                    missing_task_ids.append(task_id)
+                    continue
+                for row in rows:
+                    trace_key = (
+                        str(row.get("task_id") or task_id),
+                        str(row.get("step_index") or ""),
+                        str(row.get("trace_id") or ""),
+                    )
+                    if trace_key in known_trace_keys:
+                        continue
+                    traces.append(row)
+                    known_trace_keys.add(trace_key)
+                    archived_trace_count += 1
+        else:
+            missing_task_ids = list(requested_task_ids)
+    return traces, {
+        "current_trace_count": len(w.get("trace_log", [])),
+        "archived_trace_count": archived_trace_count,
+        "task_ids": requested_task_ids,
+        "missing_task_ids": missing_task_ids,
+    }
+
+
+def _t_world_task_plan(args):
+    """从当前运行时状态沿任务图规划路径,不执行任何页面动作。"""
+    wid = int(args["world_id"])
+    w = _world(wid)
+    runtime_state, business = _business_state_snapshot(wid)
+    traces, source = _graph_trace_source(w, args)
+    graph = build_graph(
+        traces,
+        task_id=str(w.get("task_id") or ""),
+        goal=str(w.get("task_goal") or ""),
+        min_replays=int(args.get("min_replays", 2)),
+        valid_until=w.get("graph_valid_until"),
+        context=_runtime_context(w),
+    )
+    plan = plan_graph(
+        graph,
+        runtime_state.get("state_key"),
+        str(args.get("goal_state") or ""),
+        max_steps=int(args.get("max_steps", 8)),
+        allow_candidate=bool(args.get("allow_candidate", False)),
+        current_business_state=business.get("state_id"),
+    )
+    return _ok({
+        "world_id": wid,
+        "channel": "task-plan",
+        "runtime_state": runtime_state,
+        "business_state": business,
+        "graph_status": graph.get("status"),
+        "plan": plan,
+        "executed": False,
+        "source": {
+            "trace_count": graph.get("trace_count", 0),
+            **source,
+            "graph": "当前世界内存轨迹及调用方明确指定的归档轨迹",
+        },
+    })
+
+
+def _t_world_graph_replay_check(args):
+    """将当前世界的一条实际轨迹与指定图边逐项核对,不执行动作。"""
+    wid = int(args["world_id"])
+    w = _world(wid)
+    traces, source = _graph_trace_source(w, args)
+    graph = build_graph(
+        traces,
+        task_id=str(w.get("task_id") or ""),
+        goal=str(w.get("task_goal") or ""),
+        min_replays=int(args.get("min_replays", 2)),
+        valid_until=w.get("graph_valid_until"),
+        context=_runtime_context(w),
+    )
+    edge_id = str(args.get("edge_id") or "")[:160]
+    edge = next(
+        (item for item in graph.get("edges", [])
+         if str(item.get("edge_id") or "") == edge_id),
+        None,
+    )
+    current_traces = list(w.get("trace_log", []))
+    trace_step = args.get("trace_step")
+    if trace_step is None:
+        trace = current_traces[-1] if current_traces else None
+    else:
+        try:
+            wanted_step = int(trace_step)
+        except (TypeError, ValueError):
+            wanted_step = -1
+        trace = next(
+            (item for item in current_traces
+             if int(item.get("step_index", -1)) == wanted_step),
+            None,
+        )
+    if not edge:
+        replay = {
+            "status": "no_edge",
+            "passed": False,
+            "edge_id": edge_id or None,
+            "reason": "没有找到指定的任务图迁移边",
+        }
+    elif not trace:
+        replay = {
+            "status": "no_trace",
+            "passed": False,
+            "edge_id": edge_id,
+            "reason": "当前世界没有可核对的实际轨迹",
+        }
+    else:
+        replay = validate_replay_step(trace, edge)
+    return _ok({
+        "world_id": wid,
+        "channel": "task-replay-check",
+        "edge_id": edge_id or None,
+        "graph_status": graph.get("status"),
+        "replay": replay,
+        "expected_edge": edge,
+        "trace": trace,
+        "executed": False,
+        "source": {**source, "graph": "当前世界内存轨迹及调用方明确指定的归档轨迹"},
+    })
+
+
+def _t_world_adapter_compare(args):
+    """比较两个受控目录中的站点业务适配器,只读文件不操作网页。"""
+    base_file = str(args.get("base_file") or "").strip()
+    candidate_file = str(args.get("candidate_file") or "").strip()
+    if not base_file or not candidate_file:
+        raise ValueError("base_file 和 candidate_file 都不能为空")
+    base = load_site_adapter_file(base_file)
+    candidate = load_site_adapter_file(candidate_file)
+    return _ok({
+        "channel": "site-adapter-compatibility",
+        "base_file": base_file,
+        "candidate_file": candidate_file,
+        "base_adapter": {
+            "adapter_id": base.get("adapter_id"),
+            "adapter_version": base.get("adapter_version") or None,
+            "signature": base.get("signature"),
+        },
+        "candidate_adapter": {
+            "adapter_id": candidate.get("adapter_id"),
+            "adapter_version": candidate.get("adapter_version") or None,
+            "signature": candidate.get("signature"),
+        },
+        "comparison": compare_site_adapters(base, candidate),
+        "executed": False,
+    })
+
+
 def _t_world_change_digest(args):
     """变化摘要信道:读取变化但不把原始事件列表发给智能体。"""
     wid = args["world_id"]
@@ -2790,6 +3331,41 @@ def _record_action_evidence(wid, action, args, before, result):
         network_errors = []
         console_errors = []
     w["evidence_seq"] = int(w.get("evidence_seq", 0)) + 1
+    if args.get("task_id"):
+        w["task_id"] = str(args.get("task_id"))[:120]
+    w["trace_step_seq"] = int(w.get("trace_step_seq", 0)) + 1
+    trace_entry = None
+    try:
+        trace_entry = build_trace_entry(
+            trace_id=str(w.get("trace_id") or new_id("trace")),
+            task_id=str(w.get("task_id") or new_id("task")),
+            step_index=int(w["trace_step_seq"]),
+            action=action,
+            args=args,
+            before=before,
+            after=after,
+            payload=payload,
+            evidence_seq=int(w["evidence_seq"]),
+            world_epoch=int(w.get("epoch", 0)),
+            context=_runtime_context(w),
+        )
+        attach_business_runtime(
+            trace_entry,
+            w.get("business_state_rules"),
+            w.get("operation_contracts"),
+        )
+        w.setdefault("trace_log", []).append(trace_entry)
+        if len(w["trace_log"]) > 200:
+            del w["trace_log"][:-200]
+    except Exception:
+        # 轨迹是附加信道，不能影响既有操作证据的记录和返回。
+        pass
+    if persistence_enabled() and trace_entry is not None:
+        try:
+            _trace_store.append(str(w.get("task_id") or ""), trace_entry)
+        except Exception:
+            # 本地归档失败不能阻断当前动作；world_trace 仍可读取内存轨迹。
+            pass
     entry = {
         "evidence_seq": w["evidence_seq"],
         "channel": "operation-evidence",
@@ -2803,6 +3379,9 @@ def _record_action_evidence(wid, action, args, before, result):
         "confidence": confidence,
         "why": why,
         "runtime_signals": network_errors + console_errors,
+        "task_id": w.get("task_id"),
+        "trace_id": w.get("trace_id"),
+        "trace_step": int(w["trace_step_seq"]),
     }
     log = w.setdefault("evidence_log", [])
     log.append(entry)
@@ -2827,6 +3406,208 @@ def _t_world_evidence(args):
         "latest": int(w.get("evidence_seq", 0)),
         "has_more": len(all_items) > len(items),
         "evidence": items,
+    })
+
+
+def _t_world_trace(args):
+    """读取当前世界的脱敏任务轨迹。"""
+    wid = int(args["world_id"])
+    since = max(0, int(args.get("since", 0)))
+    limit = max(1, min(int(args.get("limit", 50)), 200))
+    w = _world(wid)
+    all_items = [
+        item for item in w.get("trace_log", [])
+        if int(item.get("step_index", 0)) > since
+    ]
+    items = all_items[:limit]
+    next_since = int(items[-1].get("step_index", since)) if items else since
+    latest = max(
+        (int(item.get("step_index", 0)) for item in w.get("trace_log", [])),
+        default=0,
+    )
+    return _ok({
+        "world_id": wid,
+        "channel": "task-trace",
+        "schema_version": "0.1",
+        "task_id": w.get("task_id"),
+        "trace_id": w.get("trace_id"),
+        "task_goal": w.get("task_goal") or None,
+        "persistence_enabled": persistence_enabled(),
+        "runtime_context": _runtime_context(w),
+        "graph_valid_until": w.get("graph_valid_until"),
+        "from": since,
+        "to": next_since,
+        "latest": latest,
+        "has_more": len(all_items) > len(items),
+        "traces": items,
+        "security": {
+            "input_values": "已省略",
+            "input_digest": "仅保存单向 SHA-256 摘要前缀",
+            "page_free_text": "不参与状态身份判断",
+        },
+    })
+
+
+def _t_world_graph(args):
+    """从当前世界轨迹即时生成候选任务运行时图。"""
+    wid = int(args["world_id"])
+    w = _world(wid)
+    graph = build_graph(
+        list(w.get("trace_log", [])),
+        task_id=str(w.get("task_id") or ""),
+        goal=str(w.get("task_goal") or ""),
+        expected_outcomes=args.get("expected_outcomes"),
+        min_replays=int(args.get("min_replays", 2)),
+        valid_until=w.get("graph_valid_until"),
+        context=_runtime_context(w),
+    )
+    return _ok({
+        "world_id": wid,
+        "channel": "task-runtime-graph",
+        "graph": graph,
+        "source": {
+            "trace_id": w.get("trace_id"),
+            "evidence_latest": int(w.get("evidence_seq", 0)),
+            "world_epoch": int(w.get("epoch", 0)),
+        },
+    })
+
+
+def _t_world_trace_archive(args):
+    """读取关闭网页世界后仍可访问的脱敏轨迹。"""
+    task_id = str(args.get("task_id") or "")[:120]
+    if not task_id:
+        raise ValueError("task_id 不能为空")
+    if not persistence_enabled():
+        return _ok({
+            "channel": "task-trace-archive",
+            "enabled": False,
+            "task_id": task_id,
+            "traces": [],
+            "why": "本地轨迹归档默认关闭;请明确设置 AGENT_TASK_RUNTIME_PERSIST=1",
+        })
+    since = max(0, int(args.get("since", 0)))
+    limit = max(1, min(int(args.get("limit", 200)), 1000))
+    rows = [
+        item for item in _trace_store.read(task_id, limit=limit)
+        if int(item.get("step_index", 0)) > since
+    ]
+    next_since = int(rows[-1].get("step_index", since)) if rows else since
+    return _ok({
+        "channel": "task-trace-archive",
+        "schema_version": "0.1",
+        "enabled": True,
+        "task_id": task_id,
+        "from": since,
+        "to": next_since,
+        "traces": rows,
+        "storage": "本地 JSONL 追加式归档",
+    })
+
+
+def _t_world_graph_archive(args):
+    """从已归档轨迹生成关闭网页世界后的候选图。"""
+    task_id = str(args.get("task_id") or "")[:120]
+    if not task_id:
+        raise ValueError("task_id 不能为空")
+    if not persistence_enabled():
+        return _ok({
+            "channel": "task-runtime-graph-archive",
+            "enabled": False,
+            "task_id": task_id,
+            "graph": build_graph([], task_id=task_id, goal=str(args.get("goal") or ""),
+                                 expected_outcomes=args.get("expected_outcomes"),
+                                 min_replays=int(args.get("min_replays", 2)),
+                                 valid_until=args.get("valid_until")),
+            "why": "本地轨迹归档默认关闭;请明确设置 AGENT_TASK_RUNTIME_PERSIST=1",
+        })
+    traces = _trace_store.read(task_id, limit=1000)
+    return _ok({
+        "channel": "task-runtime-graph-archive",
+        "enabled": True,
+        "task_id": task_id,
+        "graph": build_graph(
+            traces,
+            task_id=task_id,
+            goal=str(args.get("goal") or ""),
+            expected_outcomes=args.get("expected_outcomes"),
+            min_replays=int(args.get("min_replays", 2)),
+            valid_until=args.get("valid_until"),
+        ),
+        "source": {"trace_count": len(traces), "storage": "本地 JSONL 追加式归档"},
+    })
+
+
+def _t_world_graph_assess(args):
+    """评估当前网页世界的候选图,不执行动作也不发布图。"""
+    wid = int(args["world_id"])
+    w = _world(wid)
+    graph = build_graph(
+        list(w.get("trace_log", [])),
+        task_id=str(w.get("task_id") or ""),
+        goal=str(w.get("task_goal") or ""),
+        expected_outcomes=args.get("expected_outcomes"),
+        min_replays=int(args.get("min_replays", 2)),
+        valid_until=w.get("graph_valid_until"),
+        context=_runtime_context(w),
+    )
+    return _ok({
+        "world_id": wid,
+        "channel": "task-runtime-graph-assessment",
+        "graph_status": graph.get("status"),
+        "lifecycle": graph.get("lifecycle"),
+        "graph": graph,
+        "publishable": False,
+        "why": "评估接口只生成审查结果,不会自动发布候选图",
+    })
+
+
+def _t_world_graph_bundle(args):
+    """合并多个已归档任务实例,用于跨会话回放评估。"""
+    raw_ids = args.get("task_ids")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise ValueError("task_ids 必须是非空列表")
+    task_ids = []
+    for item in raw_ids[:50]:
+        task_id = str(item or "")[:120]
+        if task_id and task_id not in task_ids:
+            task_ids.append(task_id)
+    if not task_ids:
+        raise ValueError("task_ids 不能全部为空")
+    if not persistence_enabled():
+        return _ok({
+            "channel": "task-runtime-graph-bundle",
+            "enabled": False,
+            "task_ids": task_ids,
+            "graph": build_graph([], task_id="bundle", goal=str(args.get("goal") or ""),
+                                 expected_outcomes=args.get("expected_outcomes"),
+                                 min_replays=int(args.get("min_replays", 2)),
+                                 valid_until=args.get("valid_until")),
+            "why": "本地轨迹归档默认关闭;请明确设置 AGENT_TASK_RUNTIME_PERSIST=1",
+        })
+    traces = []
+    missing = []
+    for task_id in task_ids:
+        rows = _trace_store.read(task_id, limit=1000)
+        if not rows:
+            missing.append(task_id)
+        traces.extend(rows)
+    graph = build_graph(
+        traces,
+        task_id="bundle",
+        goal=str(args.get("goal") or ""),
+        expected_outcomes=args.get("expected_outcomes"),
+        min_replays=int(args.get("min_replays", 2)),
+        valid_until=args.get("valid_until"),
+    )
+    return _ok({
+        "channel": "task-runtime-graph-bundle",
+        "enabled": True,
+        "task_ids": task_ids,
+        "missing_task_ids": missing,
+        "graph": graph,
+        "source": {"task_count": len(task_ids), "trace_count": len(traces)},
+        "publishable": False,
     })
 
 
@@ -3958,7 +4739,7 @@ def _page_signal_snapshot(wid, fast=False):
             """() => {
                 const pick = (role) => agentWorld.query.findEntities({
                     role, inViewport: true, maxResults: 8
-                }).map(e => ({ id: e.id, name: e.name, text: e.text }));
+                }).map(e => ({ id: e.id, name: e.name, text: e.text, role }));
                 return {
                     dialogs: pick('dialog').concat(pick('alertdialog')),
                     menus: pick('menu')
@@ -3968,6 +4749,46 @@ def _page_signal_snapshot(wid, fast=False):
         ) or {}
     except Exception:
         overlays = {}
+    try:
+        form_fields = _evaluate(
+            wid,
+            """() => [...document.querySelectorAll('input, textarea, [contenteditable=\"true\"]')]
+                .map((node, index) => {
+                    const el = agentWorld._runtime.world.elements.get(node);
+                    const value = node.value !== undefined ? String(node.value || '') : String(node.textContent || '');
+                    return {
+                        id: el ? el.id : (node.id || ''),
+                        name: node.getAttribute('name') || '',
+                        type: node.getAttribute('type') || node.tagName.toLowerCase(),
+                        role: node.getAttribute('role') || '',
+                        placeholder: node.getAttribute('placeholder') || '',
+                        filled: value.length > 0
+                    };
+                }).slice(0, 30)""",
+        ) or []
+    except Exception:
+        form_fields = []
+    probes = {}
+    for spec in (w.get("site_adapter") or {}).get("state_probes", []) or []:
+        if not isinstance(spec, dict):
+            continue
+        probe_id = spec.get("id")
+        query = dict(spec.get("query") or {})
+        if not probe_id or not query:
+            continue
+        if "in_viewport" in query:
+            query["inViewport"] = query.pop("in_viewport")
+        try:
+            matches = _evaluate(
+                wid,
+                "(f) => agentWorld.query.findEntities(f)",
+                query,
+            ) or []
+            probes[str(probe_id)[:120]] = (
+                len(matches) if spec.get("mode") == "count" else bool(matches)
+            )
+        except Exception:
+            probes[str(probe_id)[:120]] = False
     try:
         title = w["page"].title()[:200]
     except Exception:
@@ -3994,6 +4815,8 @@ def _page_signal_snapshot(wid, fast=False):
         "changes_seq": world_state.get("changesSeq", 0),
         "dialogs": overlays.get("dialogs", []) or core.get("dialogs", []) or [],
         "menus": overlays.get("menus", []) or [],
+        "form_fields": form_fields,
+        "probes": probes,
         "_net_err_cursor": len(net_errors),
         "_console_err_cursor": len(console_errors),
         "scan_revision": scan_revision,
@@ -4706,6 +5529,40 @@ def _errored_card(wid, action, args, before_signal, exc):
         _err_card["sources"] = _sources_for_card(_err_card)
     except Exception:
         pass
+    # 异常动作也必须进入轨迹,否则失败分支会从任务图中消失。
+    error_trace = None
+    try:
+        if args.get("task_id"):
+            w["task_id"] = str(args.get("task_id"))[:120]
+        w["trace_step_seq"] = int(w.get("trace_step_seq", 0)) + 1
+        error_trace = build_trace_entry(
+            trace_id=str(w.get("trace_id") or new_id("trace")),
+            task_id=str(w.get("task_id") or new_id("task")),
+            step_index=int(w["trace_step_seq"]),
+            action=action,
+            args=args,
+            before=before,
+            after=after,
+            payload=_err_card,
+            evidence_seq=int(w.get("evidence_seq", 0)),
+            world_epoch=int(w.get("epoch", 0)),
+            context=_runtime_context(w),
+        )
+        attach_business_runtime(
+            error_trace,
+            w.get("business_state_rules"),
+            w.get("operation_contracts"),
+        )
+        w.setdefault("trace_log", []).append(error_trace)
+        if len(w["trace_log"]) > 200:
+            del w["trace_log"][:-200]
+    except Exception:
+        pass
+    if persistence_enabled() and error_trace is not None:
+        try:
+            _trace_store.append(str(w.get("task_id") or ""), error_trace)
+        except Exception:
+            pass
     return _ok(_err_card)
 
 
@@ -5951,6 +6808,41 @@ def _act_one(wid, step, before_signal):
     return result
 
 
+def _contract_gate(wid, action_args, before_signal=None):
+    """严格模式的执行前闸门:契约失败时记录 errored,但不触碰页面。"""
+    w = _world(wid)
+    if not (w.get("enforce_contracts") or bool(action_args.get("enforce_contracts"))):
+        return None
+    operation = str(action_args.get("operation") or "").strip()
+    # 兼容已有低层调用:没有声明业务 operation 时仍允许原有 world_act 行为。
+    # 一旦声明 operation,严格模式就不能绕过契约。
+    if not operation:
+        return None
+    _, business = _business_state_snapshot(wid)
+    check = check_operation(
+        w.get("operation_contracts"),
+        operation,
+        business,
+        runtime_context=_runtime_context(w),
+    )
+    if check.get("allowed"):
+        return None
+    reason = f"业务操作 {operation} 未通过前置检查: {check.get('reason', '未知原因')}"
+    card = _errored_card(
+        wid,
+        "world_act.contract",
+        action_args,
+        before_signal,
+        ValueError(reason),
+    )
+    payload = _result_payload(card)
+    if payload:
+        payload["contract_check"] = check
+        payload["executed"] = False
+        return _ok(payload)
+    return card
+
+
 def _t_world_find(args):
     """默认协议:按条件定位构件(替代 world_entities/world_resolve 的日常用法)。
 
@@ -6077,7 +6969,12 @@ def _t_world_act(args, before_signal=None):
         queued = _task_enqueue_actions(wid, steps)
         cards = []
         for idx, step in enumerate(steps):
+            # 聚合动作的任务身份沿用外层；每一步仍可单独声明 operation，避免把
+            # “填写”和“提交”错误合并成一个业务操作。
             step = dict(step)
+            for metadata_key in ("task_id", "executor"):
+                if metadata_key not in step and args.get(metadata_key) is not None:
+                    step[metadata_key] = args[metadata_key]
             step["_action_id"] = queued[idx]["action_id"]
             step["_before_page_tokens"] = list(_known_page_tokens(wid))
             _task_mark_queue(wid, idx, "executing", started_at=int(time.time() * 1000))
@@ -6086,6 +6983,11 @@ def _t_world_act(args, before_signal=None):
             except Exception:
                 before = None
             try:
+                blocked = _contract_gate(wid, step, before)
+                if blocked is not None:
+                    card = _result_payload(blocked)
+                    cards.append(card)
+                    break
                 _verify_action_precondition(wid, step)
                 res = _act_one(wid, step, before)
                 card = _result_payload(res)
@@ -6134,6 +7036,9 @@ def _t_world_act(args, before_signal=None):
         except Exception:
             before_signal = None
     try:
+        blocked = _contract_gate(wid, args, before_signal)
+        if blocked is not None:
+            return blocked
         _verify_action_precondition(wid, args)
         return _act_one(wid, args, before_signal)
     except Exception as e:

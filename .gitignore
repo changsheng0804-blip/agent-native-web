@@ -2,6 +2,7 @@
 mcp/profiles/
 mcp/screenshots/
 mcp/memory/
+mcp/runtime_traces/
 __pycache__/
 *.pyc
 
