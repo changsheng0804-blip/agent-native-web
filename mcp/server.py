@@ -2607,6 +2607,8 @@ def _change_digest(events):
               如 CAD 图纸上的 004# 圆孔——编号即一切属性的入口,无需猜。
     强信号口径:_DIGEST_HIGH_ROLES(弹窗/菜单/选项/组合框/输入框等几乎必是操作结果的角色),
     外壳(button/link/navigation)降权避免重型 SPA 重渲染"假新增"刷屏。
+    批量信号例外:同批大量 remove(+update)是整页替换/导航的最强证据,不经过
+    单条语义降权(实测:导航后 563 remove + 1437 update 曾全 medium,key 为空)。
     """
     counts = {"add": 0, "remove": 0, "update": 0, "visibility": 0}
     key = []  # 高价值强 ID 引用(操作结果的直接证据)
@@ -2621,6 +2623,13 @@ def _change_digest(events):
                 "semantic": evt.get("semantic"),
                 "name": evt.get("name"),
             })
+    if counts["remove"] >= 100 and counts["update"] >= counts["remove"]:
+        key.insert(0, {
+            "type": "bulk",
+            "semantic": "page-replacement",
+            "counts": {"remove": counts["remove"], "update": counts["update"]},
+            "note": "大量移除+更新(整页替换/导航或全量重绘)",
+        })
     return {"counts": counts, "key": key[:10]}
 
 
