@@ -78,6 +78,11 @@ SCOPES = {
     "test_assumption_b_shadow.py": ["shadow", "kernel"],
     "test_shadow_dynamic.py": ["shadow", "observer"],
     "test_fill_clear_and_text.py": ["fill", "observer"],
+    "test_task_runtime.py": ["task-runtime"],
+    "test_business_runtime.py": ["task-runtime"],
+    "test_site_adapter.py": ["task-runtime"],
+    "test_task_runtime_integration.py": ["task-runtime"],
+    "test_task_runtime_matrix.py": ["task-runtime"],
     # real 组
     "test_map.py": ["map", "navigation"],
     "test_map_drill.py": ["map"],
@@ -139,6 +144,11 @@ GROUPS = {
             "test_shadow_dynamic.py", # Shadow DOM 动态感知(运行期新增/点击,预期通过)
             "test_fill_clear_and_text.py", # fill 清空语义 + 纯文本变更感知(弱模型验证发现的两个缺陷)
             "test_silent_failure.py",  # 网络与控制台静默失败监听(借鉴 Chrome DevTools MCP:422/500/console.error)
+            "test_task_runtime.py",             # 任务图运行时:生命周期/迁移/回放(离线)
+            "test_business_runtime.py",         # 业务状态投影与操作契约(离线)
+            "test_site_adapter.py",             # 站点适配器受控加载(离线)
+            "test_task_runtime_integration.py", # 任务图浏览器闭环(本地夹具,任务图合入)
+            "test_task_runtime_matrix.py",      # 固定覆盖矩阵与非法迁移拦截(任务图合入)
         ],
     },
     "real": {

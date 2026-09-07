@@ -14,3 +14,6 @@ mcp/quality_report.md
 mcp/validate_report.md
 mcp/verify_record.md
 mcp/experiments/artifacts/
+
+# Python 虚拟环境
+.venv/

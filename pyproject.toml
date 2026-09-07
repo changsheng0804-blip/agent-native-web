@@ -1,0 +1,19 @@
+[project]
+name = "agent-native-web"
+version = "0.1.0"
+description = "Agent-Native Web —— 让智能体在网页世界中获得快速、准确、无歧义的反馈(MCP 服务器 + 浏览器扩展内核)"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0",
+    "playwright>=1.40",
+    "pillow>=10.0",   # 视觉 diff 证据与 SoM 标注;缺失会导致 server.py 启动即崩溃
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["mcp/poc", "mcp/experiments", "extension", "tests"]
+
+[tool.ruff.lint]
+# 先只启用正确性检查(E9 语法/F8xx 未定义名),历史代码不做风格大改
+select = ["E9", "F63", "F7", "F82"]
