@@ -3,7 +3,7 @@
 > 状态：先做项，已按真卡定稿，不是愿望单。
 > 真卡来源：新鲜 master 实测（`tests/fixtures/form_names.html` fill → progressed；`challenge_overlay.html` 点 Continue → challenged），原始卡存档于验证机 `receipt_cards.json`。
 > 对应代码：`mcp/server.py::_outcome_card`、`_errored_card`、`_t_world_outcome`；消费规范：`skills/agent-world/SKILL.md` §三/§四。
-> 配套方向文档：`探索方向-地图公地与小票标准.md` §2。
+> 配套方向文档：`docs/archive/探索方向-地图公地与小票标准.md` §2（已归档；方向判据见 `核心命题-反馈闭环是第一杠杆.md`）。
 
 ## 1. 一句话定位（防埋没声明）
 
