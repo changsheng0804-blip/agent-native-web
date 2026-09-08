@@ -23,16 +23,10 @@ try:
 except ImportError:
     from mcp.task_runtime import TraceStore
 
-try:
-    from aw_core import (
-        _page_node_identity,
-        _same_origin,
-    )
-except ImportError:
-    from mcp.aw_core import (
-        _page_node_identity,
-        _same_origin,
-    )
+from aw_core import (
+    _page_node_identity,
+    _same_origin,
+)
 
 # ── 世界注册表状态(与上层模块共享同一对象;_next_world_id 留守 server.py)──
 _worlds = {}

@@ -4,66 +4,32 @@
 自 mcp/server.py 拆出(Step 4 特性簇),行为不变;依赖:aw_core/aw_runtime(aw_core ← aw_runtime ← 本簇)。
 """
 import collections, json, threading, time
-try:
-    from aw_core import (
-    ACTION_EVIDENCE_PRE_S,
-    ASSUMPTION_INTERVAL_S,
-    ASSUMPTION_RECHECK_S,
-    TIMELINE_MAX,
-    _evidence_norm_url,
-    _signal_delta,
-    )
-except ImportError:
-    from mcp.aw_core import (
-    ACTION_EVIDENCE_PRE_S,
-    ASSUMPTION_INTERVAL_S,
-    ASSUMPTION_RECHECK_S,
-    TIMELINE_MAX,
-    _evidence_norm_url,
-    _signal_delta,
-    )
-try:
-    from aw_runtime import (
-    _evaluate,
-    _ok,
-    _page_signal_snapshot,
-    _result_payload,
-    _runtime_context,
-    _world,
-    _worlds,
-    )
-except ImportError:
-    from mcp.aw_runtime import (
-    _evaluate,
-    _ok,
-    _page_signal_snapshot,
-    _result_payload,
-    _runtime_context,
-    _world,
-    _worlds,
-    )
-try:
-    from task_runtime import (
-    TraceStore,
-    build_trace_entry,
-    new_id,
-    persistence_enabled,
-    )
-except ImportError:
-    from mcp.task_runtime import (
-    TraceStore,
-    build_trace_entry,
-    new_id,
-    persistence_enabled,
-    )
-try:
-    from business_runtime import (
-    attach_business_runtime,
-    )
-except ImportError:
-    from mcp.business_runtime import (
-    attach_business_runtime,
-    )
+from aw_core import (
+ACTION_EVIDENCE_PRE_S,
+ASSUMPTION_INTERVAL_S,
+ASSUMPTION_RECHECK_S,
+TIMELINE_MAX,
+_evidence_norm_url,
+_signal_delta,
+)
+from aw_runtime import (
+_evaluate,
+_ok,
+_page_signal_snapshot,
+_result_payload,
+_runtime_context,
+_world,
+_worlds,
+)
+from task_runtime import (
+TraceStore,
+build_trace_entry,
+new_id,
+persistence_enabled,
+)
+from business_runtime import (
+attach_business_runtime,
+)
 
 
 _trace_store = TraceStore()

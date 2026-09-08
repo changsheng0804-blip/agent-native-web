@@ -3,76 +3,35 @@
 
 自 mcp/server.py 拆出(Step 4 特性簇),行为不变;依赖方向:aw_core ← aw_runtime ← 本簇。
 """
-try:
-    from aw_runtime import (
-    _ok,
-    _page_signal_snapshot,
-    _result_payload,
-    _runtime_context,
-    _world,
-    )
-except ImportError:
-    from mcp.aw_runtime import (
-    _ok,
-    _page_signal_snapshot,
-    _result_payload,
-    _runtime_context,
-    _world,
-    )
-try:
-    from aw_timeline import (
-    _trace_store,
-    )
-except ImportError:
-    from mcp.aw_timeline import (
-    _trace_store,
-    )
-try:
-    from aw_outcome import (
-    _errored_card,
-    )
-except ImportError:
-    from mcp.aw_outcome import (
-    _errored_card,
-    )
-try:
-    from task_runtime import (
-    build_graph,
-    normalize_page_state,
-    persistence_enabled,
-    plan_graph,
-    state_key,
-    validate_replay_step,
-    )
-except ImportError:
-    from mcp.task_runtime import (
-    build_graph,
-    normalize_page_state,
-    persistence_enabled,
-    plan_graph,
-    state_key,
-    validate_replay_step,
-    )
-try:
-    from business_runtime import (
-    check_operation,
-    project_business_state,
-    )
-except ImportError:
-    from mcp.business_runtime import (
-    check_operation,
-    project_business_state,
-    )
-try:
-    from site_adapter import (
-    compare_site_adapters,
-    load_site_adapter_file,
-    )
-except ImportError:
-    from mcp.site_adapter import (
-    compare_site_adapters,
-    load_site_adapter_file,
-    )
+from aw_runtime import (
+_ok,
+_page_signal_snapshot,
+_result_payload,
+_runtime_context,
+_world,
+)
+from aw_timeline import (
+_trace_store,
+)
+from aw_outcome import (
+_errored_card,
+)
+from task_runtime import (
+build_graph,
+normalize_page_state,
+persistence_enabled,
+plan_graph,
+state_key,
+validate_replay_step,
+)
+from business_runtime import (
+check_operation,
+project_business_state,
+)
+from site_adapter import (
+compare_site_adapters,
+load_site_adapter_file,
+)
 
 
 def _business_state_snapshot(wid):

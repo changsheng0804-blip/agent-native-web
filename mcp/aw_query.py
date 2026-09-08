@@ -4,54 +4,28 @@
 自 mcp/server.py 拆出(Step 4 特性簇),行为不变;依赖方向:aw_core ← aw_runtime ← 本簇。
 """
 import json, time
-try:
-    from aw_core import (
-    SOURCE_FACT,
-    SOURCE_UNTRUSTED,
-    _DIGEST_HIGH_ROLES,
-    _entity_match,
-    _event_importance,
-    )
-except ImportError:
-    from mcp.aw_core import (
-    SOURCE_FACT,
-    SOURCE_UNTRUSTED,
-    _DIGEST_HIGH_ROLES,
-    _entity_match,
-    _event_importance,
-    )
-try:
-    from aw_runtime import (
-    PROFILES_DIR,
-    _activate_new_page,
-    _evaluate,
-    _evaluate_query_retry,
-    _expire_idle_sessions,
-    _ok,
-    _page_signal_snapshot,
-    _resolve_id,
-    _task_public,
-    _task_update,
-    _world,
-    _world_pages_summary,
-    _worlds,
-    )
-except ImportError:
-    from mcp.aw_runtime import (
-    PROFILES_DIR,
-    _activate_new_page,
-    _evaluate,
-    _evaluate_query_retry,
-    _expire_idle_sessions,
-    _ok,
-    _page_signal_snapshot,
-    _resolve_id,
-    _task_public,
-    _task_update,
-    _world,
-    _world_pages_summary,
-    _worlds,
-    )
+from aw_core import (
+SOURCE_FACT,
+SOURCE_UNTRUSTED,
+_DIGEST_HIGH_ROLES,
+_entity_match,
+_event_importance,
+)
+from aw_runtime import (
+PROFILES_DIR,
+_activate_new_page,
+_evaluate,
+_evaluate_query_retry,
+_expire_idle_sessions,
+_ok,
+_page_signal_snapshot,
+_resolve_id,
+_task_public,
+_task_update,
+_world,
+_world_pages_summary,
+_worlds,
+)
 
 
 def _t_world_entities(args):
