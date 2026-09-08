@@ -45,5 +45,5 @@
   同时在 `next.suggested` 中直接给出友好提示。
 
 ### 2.3 测试回归与规范更新
-- [`mcp/test_protocol.py`](../mcp/test_protocol.py): 增加 `handoff`、弹窗阻挡自愈 `recipes`、执行处方按键退出、并发调用零异常等 8 项新断言，总项数达 32/32 全过。
-- [`skills/agent-world/SKILL.md`](../skills/agent-world/SKILL.md): 补充 `recipes` 与 `handoff` 在决策树中的判定与消费准则。
+- [`mcp/test_protocol.py`](../../mcp/test_protocol.py): 增加 `handoff`、弹窗阻挡自愈 `recipes`、执行处方按键退出、并发调用零异常等 8 项新断言，总项数达 32/32 全过。
+- [`skills/agent-world/SKILL.md`](../../skills/agent-world/SKILL.md): 补充 `recipes` 与 `handoff` 在决策树中的判定与消费准则。

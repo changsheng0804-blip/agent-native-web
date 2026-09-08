@@ -1,8 +1,8 @@
 # 评估报告：统一时间线真实任务 A/B
 
 日期：2026-09-06
-运行器：[run_timeline_ab.py](../mcp/experiments/run_timeline_ab.py)（5 轮全量结果）
-数据：[timeline_ab_report.json](../mcp/experiments/artifacts/timeline_ab_report.json)
+运行器：[run_timeline_ab.py](../../mcp/experiments/run_timeline_ab.py)（5 轮全量结果）
+数据：`timeline_ab_report.json`（`mcp/experiments/artifacts/`，运行时产物，已移出仓库）
 模型：Kimi K2.7（llm_agent.py，OpenAI 兼容），MAX_STEPS=15
 
 ## 1. 实验设计

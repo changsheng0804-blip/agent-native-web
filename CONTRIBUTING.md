@@ -1,7 +1,7 @@
 # 贡献与工程协作约定（多智能体适用）
 
 ## 项目核心（不可破坏的红线）
-- 对外协议默认 6 词:`open → guide → find → act → outcome -> close`;每次动作返回统一后果卡(`page_outcome` 五态)。
+- 对外协议默认 6 词:`open → guide → find → act → outcome → close`;每次动作返回统一后果卡(`page_outcome` 五态)。
 - 旧 `world_*` 工具保留并标记 `[内部/调试]`;`AGENT_WORLD_LITE=1` 只暴露 6 词。
 - `validate_closed_loop` 的 FP=0 一票否决("没生效"误报"成功"即失败)。
 - 修改 `extension/engine|content|api` 后必须:`python extension/scripts/build_all_in_one.py` + `node --check extension/all-in-one.js`。
@@ -30,12 +30,19 @@
 
 ## 测试与门禁
 - 日常:`python mcp/run_quality.py --scope <守护面>`;提交合并前 offline 全量必须全绿:
-  `python mcp/run_quality.py`(串行约 13 分钟 / `--parallel 3` 约 5-6 分钟)。
-- 新增离线测试必须注册进 `mcp/run_quality.py` 的 offline 组并标注守护面。
+  `python mcp/run_quality.py`(串行,未基准测试 / `--parallel 3` 约 3 分钟,建议以并行为准)。
+- 新增离线测试必须注册进 `mcp/run_quality.py` 的 offline 组并标注守护面;修改
+  `run_quality.py` 的 GROUPS 后必须同步更新根 README 的门禁数字(offline/real 项数)。
+- CI 已含 ruff 正确性检查(`mcp/` 下 E9/F63/F7/F82,规则见 pyproject.toml),提交前可用
+  `ruff check mcp` 本地自查。
 - 真实网站测试失败先怀疑网络/反爬,人工判断后再改代码。
 
 ## 依赖
 - 依赖统一声明在 `pyproject.toml`;新增 import 第三方库时必须同步登记。
+- `mcp/` 内部按分层组织,依赖只允许自下而上(被依赖层不得反向引用上层):
+  `aw_core` ← `aw_runtime` ← {`aw_status`, `aw_query`, `aw_timeline`} ← `aw_outcome` ←
+  `aw_taskgraph` ← `aw_actions`;`aw_guide` 依赖 `aw_query`(归属查询面);
+  `server.py` 是唯一调度入口,负责组装各层并注册 MCP 工具。
 
 ## 仓库卫生
 - 运行时产物(profiles/screenshots/memory/runtime_traces/artifacts/报告)一律不入库,已由 .gitignore 覆盖。

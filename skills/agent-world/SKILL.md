@@ -23,7 +23,7 @@ description: Comprehensive Web Navigation, Scraping, Form Filling, and Multi-ste
 ## 二、标准操作流程 (Playbook)
 
 **默认协议只有 6 个词:open → guide → find → act → outcome → close。**
-其余 19 个工具(entities/click/fill/state/changes…)全部标记为 [内部/调试],
+其余 34 个工具(entities/click/fill/state/changes…)全部标记为 [内部/调试],
 仅在需要逃生/深挖时使用;弱模型只学这一条环。
 
 ```

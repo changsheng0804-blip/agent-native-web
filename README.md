@@ -18,8 +18,8 @@ Agent-Native Web（智能体原生网页）让智能体可以在网页世界中�
 - [完整项目指南](docs/项目指南与架构.md)
 - [MCP 服务器](mcp/server.py)
 - [站点业务适配器](mcp/site_adapters/)
-- [真实站点任务图闭环验证报告](docs/archive/真实站点任务图闭环验证 GitHub.md)
-- [真实站点任务图 A/B 对照报告](docs/archive/A-B对照基准 GitHub.md)
+- [真实站点任务图闭环验证报告](docs/archive/真实站点任务图闭环验证%20GitHub.md)
+- [真实站点任务图 A/B 对照报告](docs/archive/A-B对照基准%20GitHub.md)
 - [浏览器扩展内核](extension/)
 - [智能体技能包](skills/agent-world/SKILL.md)
 - [测试夹具](tests/fixtures/)
@@ -30,7 +30,7 @@ Agent-Native Web（智能体原生网页）让智能体可以在网页世界中�
 ## 快速运行
 
 ```bash
-pip install mcp playwright
+pip install "mcp>=1.29,<2" playwright pillow
 playwright install chromium
 python mcp/server.py
 ```
@@ -43,8 +43,8 @@ python mcp/server.py
 
 | 层 | 内容 | 耗时 | 何时跑 |
 |---|---|---|---|
-| **offline** | 本地夹具 19 项(快、稳定、不联网) | 串行约 14 分钟 / 并行 ×3 约 5 分钟 | 改代码后、提交合并前 |
-| **real** | 真实网站 18 项(GitHub/闲鱼等) | 慢,受网络/反爬影响 | 只做真站功能验证时 |
+| **offline** | 本地夹具 32 项(快、稳定、不联网) | 串行未基准测试 / 并行 ×3 约 3 分钟 | 改代码后、提交合并前 |
+| **real** | 真实网站 20 项(GitHub/闲鱼等) | 慢,受网络/反爬影响 | 只做真站功能验证时 |
 | **special** | 特殊环境(CDP/有头窗口) | — | 按需手动 |
 
 日常节奏(建议规矩):
@@ -57,8 +57,8 @@ python mcp/run_quality.py --scope judgment,challenge
 # 只跑一个脚本
 python mcp/run_quality.py --only test_protocol.py
 # 提交合并前 → 全量 offline(必跑,全绿才合)
-python mcp/run_quality.py                          # 串行,约 13 分钟
-python mcp/run_quality.py --parallel 3             # 并行,约 5-6 分钟(内存够用建议 3)
+python mcp/run_quality.py                          # 串行,未基准测试(建议以 --parallel 3 为准)
+python mcp/run_quality.py --parallel 3             # 并行 ×3,约 3 分钟(内存够用建议 3)
 # 查看全部守护面与别名
 python mcp/run_quality.py --list
 ```

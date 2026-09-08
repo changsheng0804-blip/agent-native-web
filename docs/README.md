@@ -5,7 +5,7 @@
 - [项目定位-WebMCP](项目定位-WebMCP.md) —— 与 WebMCP 提案的互补定位
 - [小票标准-page_receipt-v0.1](小票标准-page_receipt-v0.1.md) —— 统一后果卡(小票)规格 R1-R4
 - [安全边界-IPI防御](安全边界-IPI防御.md) —— 间接提示词注入的边界与限制
-- [任务运行时图-第一阶段契约 Task Runtime Graph Phase 1 Contract](任务运行时图-第一阶段契约 Task Runtime Graph Phase 1 Contract.md) —— 任务图运行时的第一阶段契约
+- [任务运行时图-第一阶段契约 Task Runtime Graph Phase 1 Contract](任务运行时图-第一阶段契约%20Task%20Runtime%20Graph%20Phase%201%20Contract.md) —— 任务图运行时的第一阶段契约
 
 ## 探索方向（活跃研究方向）
 - [探索方向-实时页面信道与操作反馈](探索方向-实时页面信道与操作反馈.md)
