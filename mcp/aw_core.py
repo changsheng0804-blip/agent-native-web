@@ -167,6 +167,30 @@ def _evidence_norm_url(url):
         return str(url)[:160]
 
 
+def _nav_url(url):
+    """导航判定用的 URL 规范形:剥离 fragment(hash)。
+
+    纯 hash 变化(`/page` → `/page#tab2`)是同一文档内的锚点跳转,不是导航。
+    以往用整串 URL 比较,`#tab2` 会被判成 progressed/navigation,让 agent 误以为
+    已跳转并去读"新页"(实测复现:aw_hash_fixture.html#tab2)。
+    fragment 在导航语义上不改变文档,因此从判定键中剔除。
+    """
+    raw = str(url or "")
+    try:
+        p = urlsplit(raw)
+        # 无 fragment 时原样返回,保留 query(表单提交常靠 query 变化体现)
+        return f"{p.scheme}://{p.netloc}{p.path}?{p.query}" if p.query else f"{p.scheme}://{p.netloc}{p.path}"
+    except Exception:
+        return raw.split("#", 1)[0]
+
+
+def _nav_url_changed(before_url, after_url):
+    """URL 是否发生了**导航级**变化(fragment-only 变化不算)。"""
+    if not before_url or not after_url:
+        return bool(before_url) != bool(after_url)
+    return _nav_url(before_url) != _nav_url(after_url)
+
+
 def _signal_items(signal, key):
     return signal.get(key, []) if isinstance(signal, dict) else []
 
@@ -360,8 +384,13 @@ def _build_click_effect(before_rows, after_rows, url_changed=False, before_dialo
         observed.append({"type": "add", "id": r[0], "semantic": r[1], "name": r[2]})
 
     # 全页新出现 dialog/menu 兜底(远距弹窗 F1 修复)
+    # 但两者证据强度不同(FP 收紧):
+    #   dialog/alertdialog 是模态接管(aria-modal),几乎必为本次动作引发 → 可判 effected
+    #   menu 是非模态浮层,可能由悬停/后台脚本/其它控件触发 → 单独出现只能判 changed(uncertain)
     before_d = set((d[0] for d in before_dialogs or []))
-    new_dialogs = [d for d in (after_dialogs or []) if d[0] not in before_d]
+    new_overlay_items = [d for d in (after_dialogs or []) if d[0] not in before_d]
+    new_dialogs = [d for d in new_overlay_items if d[1] in ("dialog", "alertdialog")]
+    new_menus = [d for d in new_overlay_items if d[1] == "menu"]
     # 全页消失的 dialog(按键关闭弹窗兜底)
     after_d = set((d[0] for d in after_dialogs or []))
     gone_dialogs = [d for d in (before_dialogs or []) if d[0] not in after_d]
@@ -413,6 +442,22 @@ def _build_click_effect(before_rows, after_rows, url_changed=False, before_dialo
             "verdict": "effected",
             "confidence": "high",
             "why": f"目标自身状态变化: {label} 翻转",
+            "observed": observed,
+            "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
+        }
+    # 仅新增非模态 menu(无 dialog):证据不足以判"生效"——菜单可能由悬停/后台脚本触发,
+    # 与本次点击无因果关系。降级为 changed(→ uncertain,让 agent 复核一次),不报假成功。
+    # 必须在 key_rows 之前判断:menu 属于 _IMPORTANT_ROLES,否则会被"关键构件"分支
+    # 抢先判成 effected(实测风险:点失效按钮但页面另处弹出无关菜单 → 假成功)。
+    if new_menus:
+        names = "、".join(f"{_ROLE_LABEL.get(d[1], d[1])} {d[2]}" for d in new_menus[:5])
+        for d in new_menus[:8]:
+            if not any(o["id"] == d[0] for o in observed):
+                observed.append({"type": "add", "id": d[0], "semantic": d[1], "name": d[2]})
+        return {
+            "verdict": "changed",
+            "confidence": "medium",
+            "why": f"页面出现新的菜单(非模态,无法确认由本次动作引发): {names}",
             "observed": observed,
             "region_changed": {"new": len(new_rows), "gone": len(gone_rows)},
         }

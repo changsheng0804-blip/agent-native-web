@@ -51,13 +51,14 @@ async def main():
             assert no_change["feedback"]["overlays"]["changed"] is False
             print("1.无副作用标题: no-change, 全局信号一致")
 
-            # 2. 点击目标附近没有关键构件,但 URL 发生变化
+            # 2. 点击目标附近没有关键构件,但 URL 发生**真实导航**(query 变化 → 整页重载)
+            #    注:纯 hash 锚点(#target)不是导航,不应触发全局 URL 纠正(见 test_nav_and_reconcile.py)
             await call(session, "world_eval", {
                 "world_id": wid,
                 "expression": """() => {
                     const a = document.createElement('a');
                     a.id = 'global-feedback-nav';
-                    a.href = '#global-feedback-target';
+                    a.href = '?global-feedback-target=1';
                     a.textContent = '全局跳转测试';
                     a.style.display = 'block';
                     document.body.appendChild(a);
@@ -72,7 +73,7 @@ async def main():
             assert navigated["effect"]["verdict"] == "effected"
             assert navigated["effect"]["confidence"] == "high"
             assert navigated["feedback"]["page"]["url_changed"] is True
-            assert navigated["feedback"]["page"]["after_url"].endswith("#global-feedback-target")
+            assert "global-feedback-target=1" in navigated["feedback"]["page"]["after_url"]
             print("2.URL 跳转: effected/high, 捕获整体 URL 变化")
 
             # 3. 弹窗出现在目标区域之外

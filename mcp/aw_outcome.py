@@ -10,6 +10,7 @@ STYLE_DIFF_PROPS,
 STYLE_SNAPSHOT_MAX,
 _anomaly_from_counts,
 _build_click_effect,
+_nav_url_changed,
 _signal_delta,
 _sources_for_card,
 )
@@ -155,7 +156,7 @@ def _build_page_outcome(wid, before_signal, after_signal, submit_trigger=False, 
             "high",
             f"浏览器打开目标页面失败: {after_url_fact[:160]}",
         )
-    url_changed = before_signal.get("url") != after_signal.get("url")
+    url_changed = _nav_url_changed(before_signal.get("url"), after_signal.get("url"))
     effect = effect or {}
     verdict = effect.get("verdict")
 
@@ -296,12 +297,15 @@ def _finalize_click_result(wid, ret, before_signal, after_signal=None):
     """
     if after_signal is None:
         after_signal = _page_signal_snapshot(wid)
-    url_changed = before_signal.get("url") != after_signal.get("url")
+    url_changed = _nav_url_changed(before_signal.get("url"), after_signal.get("url"))
     title_changed = before_signal.get("title") != after_signal.get("title")
     dialog_delta = _signal_delta(before_signal, after_signal, "dialogs")
     menu_delta = _signal_delta(before_signal, after_signal, "menus")
     new_overlays = dialog_delta["new"] + menu_delta["new"]
     gone_overlays = dialog_delta["gone"] + menu_delta["gone"]
+    # FP 收紧:只有模态 dialog 才足以把"全页出现新浮层"当作生效证据。
+    # 单独新增的 menu 是非模态浮层(悬停/后台脚本都可能触发),不足以归因到本次动作。
+    new_modal_overlays = [x for x in dialog_delta["new"] if (x.get("semantic") in ("dialog", "alertdialog"))]
     feedback = {
         "source": "global-page-state",
         "page": {
@@ -347,18 +351,19 @@ def _finalize_click_result(wid, ret, before_signal, after_signal=None):
             "confidence": "high",
             "why": f"页面整体发生导航: URL 从 {before_signal.get('url')} 变为 {after_signal.get('url')}",
         })
-    elif new_overlays and (not effect or effect.get("verdict") != "effected"):
+    elif new_modal_overlays and (not effect or effect.get("verdict") != "effected"):
+        # 仅模态弹窗(dialog/alertdialog)可把局部 no-change 纠正为全局生效。
         if effect:
             effect["local_verdict"] = effect.get("verdict")
             effect["local_why"] = effect.get("why")
         else:
             effect = {"observed": [], "region_changed": {"new": 0, "gone": 0}}
             ret["effect"] = effect
-        names = "、".join((x.get("name") or x.get("text") or x.get("id", "")) for x in new_overlays[:4])
+        names = "、".join((x.get("name") or x.get("text") or x.get("id", "")) for x in new_modal_overlays[:4])
         effect.update({
             "verdict": "effected",
             "confidence": "high",
-            "why": f"页面整体出现新的弹窗/菜单: {names}",
+            "why": f"页面整体出现新的弹窗: {names}",
         })
     return ret
 
@@ -421,7 +426,7 @@ def _outcome_card(wid, action, args, ret, before_signal):
     # evaluate 阻塞等待新文档(实测 GitHub 可拖 ~18s);后果卡由 URL 事实判定。
     _navigated = False
     try:
-        _navigated = bool(w["page"].url and before and (w["page"].url != before.get("url")))
+        _navigated = bool(w["page"].url and before and _nav_url_changed(before.get("url"), w["page"].url))
     except Exception:
         _navigated = False
     # 在转到新标签页后旧 el_N 不再存在，但后果卡仍应保留目标身份。
@@ -458,7 +463,7 @@ def _outcome_card(wid, action, args, ret, before_signal):
         # (GitHub 实测导航期间 evaluate 可阻塞 ~20s,动作反馈被拖慢;URL 变化是导航强证据)
         fast_after = False
         try:
-            fast_after = (w["page"].url != (before or {}).get("url"))
+            fast_after = _nav_url_changed((before or {}).get("url"), w["page"].url)
         except Exception:
             fast_after = False
         after = _page_signal_snapshot(int(wid), fast=fast_after)
@@ -648,7 +653,7 @@ def _errored_card(wid, action, args, before_signal, exc):
         "page": {
             "before_url": before.get("url"),
             "after_url": after.get("url") or before.get("url"),
-            "url_changed": bool(before.get("url") and before.get("url") != (after.get("url") or before.get("url"))),
+            "url_changed": _nav_url_changed(before.get("url"), after.get("url") or before.get("url")),
             "state": after.get("state", "unknown"),
             "anomaly": _err_anomaly,
         },
@@ -936,7 +941,7 @@ def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500, disappear
             current_url = w["page"].url
         except Exception:
             current_url = ""
-        if current_url and current_url != url_before:
+        if current_url and _nav_url_changed(url_before, current_url):
             return {
                 "verdict": "effected",
                 "confidence": "high",
@@ -962,7 +967,7 @@ def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500, disappear
             # 聪明早停:已看到"决定性证据"(弹窗出现/URL变/状态翻转/关键构件/值进框)就直接返回,
             # 不必再等 0.4s 稳定——弹窗都弹出来了,等稳定是白等(对持续变化页收益最大)
             if rows:
-                early = _build_click_effect(before_rows, rows, w["page"].url != url_before,
+                early = _build_click_effect(before_rows, rows, _nav_url_changed(url_before, w["page"].url),
                                             before_dialogs, dialogs,
                                             before_target_state, target_state,
                                             disappear_ok, fill_verified)
@@ -979,7 +984,7 @@ def _wait_click_effect(wid, snap_before, url_before, max_wait_ms=2500, disappear
             stop_reason = "stable"
             break
     total_ms = int((time.time() - t_start) * 1000)
-    url_changed = w["page"].url != url_before
+    url_changed = _nav_url_changed(url_before, w["page"].url)
     if last_rows is None:
         try:
             last_rows, last_dialogs, last_target_state = _click_region_after(wid, region, page_id)

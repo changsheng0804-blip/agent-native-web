@@ -64,13 +64,14 @@ async def main():
             no_change = await call(session, "world_click", {"world_id": wid, "id": heading["entities"][0]["id"]})
             assert no_change["effect"]["verdict"] == "no-change"
 
-            # 再验证独立证据信道能记录 URL 跳转。
+            # 再验证独立证据信道能记录**真实导航**(query 变化 → 整页重载)。
+            # 注:纯 hash 锚点不是导航(见 test_nav_and_reconcile.py A1)。
             await call(session, "world_eval", {
                 "world_id": wid,
                 "expression": """() => {
                     const a = document.createElement('a');
                     a.id = 'channel-nav';
-                    a.href = '#channel-target';
+                    a.href = '?channel-target=1';
                     a.textContent = '信道跳转';
                     document.body.appendChild(a);
                     return true;
@@ -119,7 +120,7 @@ async def main():
             print("3.操作证据信道: 独立记录无变化、跳转和弹窗")
 
             latest = await call(session, "world_state", {"world_id": wid})
-            assert latest["state"]["url"].endswith("#channel-target")
+            assert "channel-target=1" in latest["state"]["url"]
             await call(session, "world_close", {"world_id": wid})
             print("\n✅ 三条独立信道通过:状态、变化摘要、操作证据互不混入整页 status")
 
