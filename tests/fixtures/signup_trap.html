@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>注册 — 演示账户</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f6f7f9; margin: 0; padding: 40px 20px; }
+  .card { max-width: 380px; margin: 0 auto; background: #fff; border: 1px solid #e3e6ea;
+          border-radius: 10px; padding: 28px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  h1 { font-size: 19px; margin: 0 0 6px; }
+  .sub { color: #6b7280; font-size: 13px; margin-bottom: 20px; }
+  label { display: block; font-size: 13px; color: #374151; margin: 14px 0 5px; }
+  input { width: 100%; box-sizing: border-box; padding: 9px 11px; border: 1px solid #d1d5db;
+          border-radius: 6px; font-size: 14px; }
+  button { width: 100%; margin-top: 22px; padding: 11px; background: #2563eb; color: #fff;
+           border: none; border-radius: 6px; font-size: 15px; cursor: pointer; }
+  button:disabled { background: #93b4f5; }
+  #status { margin-top: 16px; font-size: 14px; min-height: 20px; }
+  .ok { color: #15803d; }
+  .err { color: #b91c1c; }
+  .hint { margin-top: 18px; font-size: 12px; color: #9ca3af; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>创建账户</h1>
+    <div class="sub">注册后即可使用演示环境</div>
+
+    <label for="email">邮箱</label>
+    <input id="email" name="email" type="email" placeholder="you@example.com" value="taken@example.com">
+
+    <label for="password">密码</label>
+    <input id="password" name="password" type="password" placeholder="至少 8 位" value="demo-pass-123">
+
+    <button id="submit">提交注册</button>
+    <div id="status"></div>
+    <div class="hint">已有账户？<a href="#" onclick="return false">直接登录</a></div>
+  </div>
+
+  <script>
+    // 前端乐观更新:点击后立刻显示成功,不等待后端结果。
+    // 后端实际对该邮箱返回 422(邮箱已被占用)。
+    document.getElementById('submit').addEventListener('click', function () {
+      var btn = this;
+      var st = document.getElementById('status');
+      btn.disabled = true;
+      st.className = '';
+      st.textContent = '';
+
+      fetch('/api/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: document.getElementById('email').value,
+          password: document.getElementById('password').value
+        })
+      }).catch(function () { /* 前端不处理错误 */ });
+
+      // 乐观 UI:不等响应就报成功
+      st.className = 'ok';
+      st.textContent = '✅ 注册成功!请查收验证邮件。';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,3 @@
+{"mode": "structure", "status": "done", "steps": 1, "elapsed_ms": 8219, "final_text": "不确定", "tool_sequence": ["world_act"], "tokens_in": 977, "tokens_out": 129, "verdict": "uncertain", "ground_truth": [{"path": "/api/signup", "status": 422}]}
+{"mode": "no-verdict", "status": "done", "steps": 1, "elapsed_ms": 7856, "final_text": "失败：该邮箱已被注册。", "tool_sequence": ["world_act"], "tokens_in": 1239, "tokens_out": 90, "verdict": "failure", "ground_truth": [{"path": "/api/signup", "status": 422}]}
+{"mode": "full", "status": "done", "steps": 1, "elapsed_ms": 8354, "final_text": "失败：该邮箱已被注册。", "tool_sequence": ["world_act"], "tokens_in": 1223, "tokens_out": 135, "verdict": "failure", "ground_truth": [{"path": "/api/signup", "status": 422}]}
