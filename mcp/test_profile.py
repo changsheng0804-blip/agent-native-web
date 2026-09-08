@@ -52,6 +52,40 @@ async def main():
                 session.call_tool("world_close", {"world_id": wid}), timeout=15
             )
 
+            # 1.5 MCP storage_state 恢复链路(独立进程 cookie DB 之外的核心验证):
+            #    open → 世界内设 cookie → close(导出 storage_state.json) → reopen → 世界内断言 cookie 可见
+            r = await asyncio.wait_for(
+                session.call_tool("world_open", {"url": LOCAL, "wait_ms": 1000, "profile": PROFILE_NAME}),
+                timeout=60,
+            )
+            wid = json.loads(r.content[0].text)["world_id"]
+            ev = await asyncio.wait_for(
+                session.call_tool("world_eval", {"world_id": wid, "expression":
+                    "() => { document.cookie = 'agentworld_test=hello; path=/; expires=Fri, 31 Dec 2027 23:59:59 GMT'; return document.cookie; }"}),
+                timeout=20,
+            )
+            print("MCP 世界内设置 cookie:", json.loads(ev.content[0].text).get("result"))
+            await asyncio.wait_for(
+                session.call_tool("world_close", {"world_id": wid}), timeout=15
+            )
+            r = await asyncio.wait_for(
+                session.call_tool("world_open", {"url": LOCAL, "wait_ms": 1000, "profile": PROFILE_NAME}),
+                timeout=60,
+            )
+            wid = json.loads(r.content[0].text)["world_id"]
+            ev2 = await asyncio.wait_for(
+                session.call_tool("world_eval", {"world_id": wid, "expression":
+                    "() => document.cookie"}),
+                timeout=20,
+            )
+            restored = str(json.loads(ev2.content[0].text).get("result") or "")
+            print("MCP 重开后世界内 cookie:", restored)
+            assert COOKIE_MARKER in restored, f"MCP storage_state 恢复链路失效: {restored}"
+            await asyncio.wait_for(
+                session.call_tool("world_close", {"world_id": wid}), timeout=15
+            )
+            print("MCP storage_state 恢复链路 OK")
+
             # 2. 用 Playwright 直连同 profile 设置持久 cookie。
             code = """
 import sys
