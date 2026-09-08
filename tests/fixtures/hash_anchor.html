@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>hash 锚点测试页</title>
+<style>
+  body { font-family: sans-serif; padding: 24px; }
+  section { height: 600px; border: 1px solid #ccc; margin: 12px 0; }
+  a { display: inline-block; padding: 8px 16px; background: #eef; margin-right: 8px; }
+</style>
+</head>
+<body>
+  <h1>hash 锚点页</h1>
+  <p>点击下面的链接只会在同一文档内跳转到锚点(URL 只多出 #tab2),不是导航。
+     若工具把这种变化判成 navigation/progressed,就是假成功。</p>
+  <a id="go-tab" href="#tab2">跳到第二段</a>
+  <section id="tab1"><h2>第一段</h2><p>内容一</p></section>
+  <section id="tab2"><h2>第二段</h2><p>内容二</p></section>
+</body>
+</html>

@@ -339,6 +339,20 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 
 
 # 动作类工具:统一走 before_signal + 证据记录 + 统一后果卡(阶段 A)
+def _cache_outcome_card(wid, result):
+    """把后果卡写入 world 缓存,供 world_outcome 幂等重读。
+
+    成功路径与异常路径共用同一出口——errored 卡已 mint evidence_seq,
+    若不缓存就会形成"对账黑洞"(world_outcome 返回 none,失败在协议层消失)。
+    """
+    try:
+        payload = _result_payload(result)
+        if payload and payload.get("channel") == "outcome":
+            _world(int(wid))["last_outcome_card"] = payload
+    except Exception:
+        pass
+
+
 def _impl_with_status(name, args):
     if _lite_mode() and name not in CANONICAL_TOOLS:
         raise ValueError(f"AGENT_WORLD_LITE 模式只开放 6 个默认工具({sorted(CANONICAL_TOOLS)});{name} 是内部/调试工具,请勿在 LITE 会话调用")
@@ -384,9 +398,14 @@ def _impl_with_status(name, args):
             traceback.print_exc()
             try:
                 _task_finish_action(int(wid), name, args, None, error=e, before_signal=before_signal)
-                return _inject_status(_errored_card(int(wid), name, args, before_signal, e), wid)
+                card = _inject_status(_errored_card(int(wid), name, args, before_signal, e), wid)
             except Exception:
-                return _errored_card(int(wid), name, args, before_signal, e)
+                card = _errored_card(int(wid), name, args, before_signal, e)
+            # 对账黑洞修复:errored 卡已 mint evidence_seq,必须与成功卡一样进入缓存,
+            # 否则 world_outcome(since=旧seq) 会返回 none,把失败动作在协议层藏掉,
+            # 弱模型会以为"什么都没发生"并重复执行。
+            _cache_outcome_card(wid, card)
+            return card
         raise
     if name in ACTION_NAMES and wid is not None and before_signal is not None:
         try:
@@ -407,12 +426,7 @@ def _impl_with_status(name, args):
             pass
     # 阶段 B:动作出口的后果卡缓存,供 world_outcome 幂等读取(world_act 内部已记录证据,这里只缓存卡)
     if name in ACTION_NAMES or name == "world_act":
-        try:
-            payload = _result_payload(result)
-            if payload and payload.get("channel") == "outcome":
-                _world(int(wid))["last_outcome_card"] = payload
-        except Exception:
-            pass
+        _cache_outcome_card(wid, result)
     # 独立信道工具(world_state/digest/evidence/guide)自带信道结构,不再附加大 status
     if name in {"world_state", "world_business_state", "world_operation_check", "world_task_plan", "world_graph_replay_check", "world_adapter_compare", "world_change_digest", "world_evidence", "world_trace", "world_graph", "world_trace_archive", "world_graph_archive", "world_graph_assess", "world_graph_bundle", "world_guide"}:
         return result

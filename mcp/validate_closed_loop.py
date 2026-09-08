@@ -279,6 +279,29 @@ def classify(truth, verdict):
         return "AMs"
 
 
+def classify_page_outcome(truth, page_outcome):
+    """主标签口径(agent 实际消费的字段)的同一套 TP/TN/FP/FN 分类。
+
+    为什么需要第二个分类器:agent 只读 page_outcome,而 effect.verdict 是它的
+    内部依据。只测 verdict 会让"verdict 正确但映射到主标签错误"的缺陷漏网。
+    映射规则(见 aw_outcome._build_page_outcome):
+      progressed ← effected/visual-effected
+      unchanged  ← no-change
+      uncertain  ← changed/unknown
+      errored / challenged ← 另有来源
+    """
+    mapping = {
+        "progressed": "effected",
+        "unchanged": "no-change",
+        "uncertain": "changed",
+    }
+    if page_outcome in ("errored", "challenged", "none"):
+        # 这两态是"未获得生效判定"或"被拦截",truth 生效时按 FN 记(漏报),
+        # truth 未生效时按 TN 记(正确拒绝);主标签口径下它们不属于 TP。
+        return "TN" if not truth else "FN"
+    return classify(truth, mapping.get(page_outcome))
+
+
 async def truth_check(session, wid, mode, text=None):
     """Truth oracle:返回 (truth, detail)。mode: dialog / dialog_gone / tab-b-selected / url_change / input_value / none"""
     if mode == "none":
@@ -400,12 +423,17 @@ async def run_case(session, case):
     verdict = effect.get("verdict") if effect else None
     confidence = effect.get("confidence") if effect else None
     cls = classify(truth, verdict)
+    # 主标签口径:agent 实际读的是 page_outcome,必须同矩阵守护(见 classify_page_outcome)
+    page_outcome = r.get("page_outcome")
+    cls_po = classify_page_outcome(truth, page_outcome)
     why = effect.get("why", "") if effect else "(无 effect,看 URL/truth)"
 
     await call(session, "world_close", {"world_id": wid})
     return {
         "name": name,
         "class": cls,
+        "class_page_outcome": cls_po,
+        "page_outcome": page_outcome,
         "verdict": verdict,
         "confidence": confidence,
         "truth": truth,
@@ -594,22 +622,33 @@ async def main():
             print(f"TP={tp} TN={tn} FP={fp} FN={fn} AM={am} AMs={ams} SKIP={skips}")
             print(f"准确率(TP+TN)/评分场景 = {acc:.0f}%  (通过线:≥80% 且 FP=0)")
 
+            # 主标签口径汇总(agent 实际消费 page_outcome,不是 effect.verdict)
+            po_scored = [r for r in results if r["class"] != "SKIP" and r.get("class_page_outcome")]
+            po_fp = sum(1 for r in po_scored if r["class_page_outcome"] == "FP")
+            po_fn = sum(1 for r in po_scored if r["class_page_outcome"] == "FN")
+            po_ok = sum(1 for r in po_scored if r["class_page_outcome"] in ("TP", "TN"))
+            po_acc = po_ok / len(po_scored) * 100 if po_scored else 0
+            print(f"[主标签口径 page_outcome] 评分场景={len(po_scored)} FP={po_fp} FN={po_fn} 准确率={po_acc:.0f}%")
+
             # 写报告
             lines = ["# 实时闭环反馈 · 实战验证报告\n"]
             lines.append(f"> 日期:{time.strftime('%Y-%m-%d %H:%M:%S %z')} · 通过线:TP+TN ≥ 80% 且 FP=0\n")
             lines.append(f"## 结果\n")
-            lines.append("| 场景 | 分类 | verdict | confidence | truth |")
-            lines.append("|---|---|---|---|---|")
+            lines.append("| 场景 | 分类(verdict) | 分类(page_outcome) | page_outcome | verdict | confidence | truth |")
+            lines.append("|---|---|---|---|---|---|---|")
             for r in results:
-                lines.append(f"| {r['name']} | {r['class']} | {r['verdict']} | {r['confidence']} | {r['truth']} |")
+                lines.append(f"| {r['name']} | {r['class']} | {r.get('class_page_outcome', '-')} | {r.get('page_outcome', '-')} | {r['verdict']} | {r['confidence']} | {r['truth']} |")
             lines.append("")
-            lines.append(f"**汇总**: TP={tp} TN={tn} FP={fp} FN={fn} AM={am} AMs={ams} SKIP={skips}")
-            lines.append(f"**准确率**: {acc:.0f}% (通过线:≥80% 且 FP=0)")
+            lines.append(f"**汇总(verdict 口径)**: TP={tp} TN={tn} FP={fp} FN={fn} AM={am} AMs={ams} SKIP={skips}")
+            lines.append(f"**准确率(verdict)**: {acc:.0f}% (通过线:≥80% 且 FP=0)")
+            lines.append(f"**汇总(主标签口径 page_outcome)**: 评分场景={len(po_scored)} FP={po_fp} FN={po_fn} 准确率={po_acc:.0f}%")
             lines.append("")
             lines.append("## 失败模式清单\n")
             for r in results:
                 if r["class"] in ("FP", "FN", "AM", "AMs"):
                     lines.append(f"- **{r['class']}** {r['name']}: verdict={r['verdict']} truth={r['truth']} → {r.get('why', '')}")
+                if r.get("class_page_outcome") in ("FP", "FN"):
+                    lines.append(f"- **主标签 {r['class_page_outcome']}** {r['name']}: page_outcome={r.get('page_outcome')} truth={r['truth']}")
             lines.append("")
             lines.append("## 逐场景细节\n")
             for r in results:
@@ -629,13 +668,13 @@ async def main():
             report.write_text("\n".join(lines), encoding="utf-8")
             print(f"\n报告已写入: {report}")
 
-            if fp > 0:
-                print("\n⚠️ 出现 FP:暂停横向扩展,需先收紧判定(见方案第八节)")
+            if fp > 0 or po_fp > 0:
+                print("\n⚠️ 出现 FP(verdict 或主标签口径):暂停横向扩展,需先收紧判定(见方案第八节)")
                 return 1
-            elif acc >= 80:
-                print("\n✅ 通过线达标:可考虑横向复制(fill/press 带 effect)")
+            elif acc >= 80 and po_acc >= 80:
+                print("\n✅ 通过线达标(verdict 与主标签双口径):可考虑横向复制(fill/press 带 effect)")
             else:
-                print(f"\n❌ 通过线未达标:准确率 {acc:.0f}% < 80%")
+                print(f"\n❌ 通过线未达标:准确率 verdict {acc:.0f}% / page_outcome {po_acc:.0f}% < 80%")
                 return 1
             return 0
 

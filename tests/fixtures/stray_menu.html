@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>无关菜单误报测试页</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; }
+  #dead-btn { padding: 10px 20px; }
+  /* 非模态菜单:role=menu,默认隐藏,由"后台脚本"触发(与按钮无因果关系) */
+  #stray-menu {
+    position: fixed; top: 300px; left: 600px;
+    background: #fff; border: 1px solid #999; padding: 8px;
+    display: none;
+  }
+  #stray-menu[open] { display: block; }
+</style>
+</head>
+<body>
+  <h1>无关菜单误报测试</h1>
+  <p>点击下面的按钮不会有任何效果;但 800ms 后页面会在别处弹出一个无关的非模态菜单
+     (模拟悬停/后台脚本触发)。若工具把"页面出现新菜单"当作本次点击生效,就是假成功。</p>
+
+  <button id="dead-btn">点我没有任何效果</button>
+
+  <div id="stray-menu" role="menu" aria-label="无关菜单">
+    <div role="menuitem">无关选项 A</div>
+    <div role="menuitem">无关选项 B</div>
+  </div>
+
+  <div id="status">尚未点击</div>
+
+  <script>
+    // 按钮:只改自身文本,不产生任何"生效"证据(结果 div 也不动)
+    document.getElementById('dead-btn').addEventListener('click', function() {
+      // 故意什么都不做——点击无副作用
+    });
+    // 后台脚本:与点击无因果关系,延时弹出无关菜单
+    setTimeout(function() {
+      document.getElementById('stray-menu').setAttribute('open', '');
+    }, 800);
+  </script>
+</body>
+</html>

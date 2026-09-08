@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>外部事实五反例(核心命题 §2.2)</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; max-width: 720px; }
+  .case { border: 1px solid #ccc; border-radius: 6px; padding: 12px; margin: 14px 0; }
+  .case h3 { margin: 0 0 8px; font-size: 15px; }
+  .case p { margin: 4px 0; font-size: 13px; color: #555; }
+  .status { font-weight: bold; }
+  .ok { color: #1a7f37; }
+  .bad { color: #c0392b; }
+  button { padding: 6px 14px; }
+  code { background: #f5f5f5; padding: 1px 4px; }
+</style>
+</head>
+<body>
+  <h1>外部事实五反例</h1>
+  <p>这五个场景的共同点:<strong>成功信号不在任何观察里</strong>。
+     模型再强也无法从页面上推出真相——这是 observability / evidence 问题,不是 intelligence 问题。</p>
+  <p>本页用于 A6 基准:先固化"当前判不出",作为 Runtime 必须补上的四类缺失事实的验收基准。</p>
+
+  <!-- ① 页面显示成功,后台请求其实 422 -->
+  <div class="case" id="case1">
+    <h3>① 显示成功但后端 422</h3>
+    <p>点击后页面立刻显示"注册成功",但 XHR 实际返回 422(账号已存在)。</p>
+    <button id="btn1">提交注册</button>
+    <div id="status1" class="status">尚未提交</div>
+  </div>
+
+  <!-- ② 按钮变灰,但请求后来 rollback -->
+  <div class="case" id="case2">
+    <h3>② 按钮变灰但请求 rollback</h3>
+    <p>点击后按钮变灰(乐观 UI),1 秒后后端回滚,按钮恢复且出现错误提示。</p>
+    <button id="btn2">确认支付</button>
+    <div id="status2" class="status">尚未操作</div>
+  </div>
+
+  <!-- ③ POST 202 后异步失败 -->
+  <div class="case" id="case3">
+    <h3>③ 202 后异步失败</h3>
+    <p>提交返回 202 Accepted(排队中),3 秒后后台任务失败——窗口内的观察全部是"正常"。</p>
+    <button id="btn3">提交任务</button>
+    <div id="status3" class="status">尚未提交</div>
+  </div>
+
+  <!-- ④ DOM 值 ≠ 权威账本值 -->
+  <div class="case" id="case4">
+    <h3>④ DOM 显示值与账本值不一致</h3>
+    <p>页面上余额显示 ¥100,但权威账本(后端)是 ¥0。DOM 的值是缓存的、过期的。</p>
+    <div>页面显示余额:<span id="dom-balance">¥100</span></div>
+    <div>权威账本(需外部接口才可见):<span id="ledger" class="bad" style="display:none">¥0</span>
+      <button id="btn4" style="font-size:12px">(模拟:查询账本)</button>
+    </div>
+  </div>
+
+  <!-- ⑤ 页面变化非本动作引起 -->
+  <div class="case" id="case5">
+    <h3>⑤ 页面变化非本动作引起(websocket 后台刷新)</h3>
+    <p>点击下面的按钮没有任何效果;但页面每 700ms 由"后台推送"更新一次计数。观察到的变化与点击无关。</p>
+    <button id="btn5">点我(无副作用)</button>
+    <div>后台推送计数:<span id="push-count">0</span></div>
+  </div>
+
+  <script>
+    // ① 显示成功但 422
+    document.getElementById('btn1').addEventListener('click', function () {
+      var st = document.getElementById('status1');
+      st.textContent = '✅ 注册成功!';
+      st.className = 'status ok';
+      // 后台请求实际失败(422)
+      fetch('data:application/json,{"error":"email_taken"}', { method: 'POST' })
+        .catch(function () {});
+      var xhr = new XMLHttpRequest();
+      try {
+        xhr.open('POST', '?simulate=422', true);
+        xhr.send();
+      } catch (e) {}
+    });
+
+    // ② 乐观 UI 后 rollback
+    document.getElementById('btn2').addEventListener('click', function () {
+      var btn = this;
+      var st = document.getElementById('status2');
+      btn.disabled = true;
+      btn.style.opacity = '0.5';
+      st.textContent = '处理中…';
+      st.className = 'status';
+      setTimeout(function () {
+        // 后端回滚
+        btn.disabled = false;
+        btn.style.opacity = '';
+        st.textContent = '❌ 支付失败,已回滚';
+        st.className = 'status bad';
+      }, 1000);
+    });
+
+    // ③ 202 后异步失败
+    document.getElementById('btn3').addEventListener('click', function () {
+      var st = document.getElementById('status3');
+      st.textContent = '✅ 已提交,任务排队中(202)';
+      st.className = 'status ok';
+      setTimeout(function () {
+        st.textContent = '❌ 后台任务失败(3 秒后)';
+        st.className = 'status bad';
+      }, 3000);
+    });
+
+    // ④ 账本查询
+    document.getElementById('btn4').addEventListener('click', function () {
+      document.getElementById('ledger').style.display = 'inline';
+    });
+
+    // ⑤ 后台推送(与点击无因果关系)
+    var n = 0;
+    setInterval(function () {
+      n += 1;
+      document.getElementById('push-count').textContent = String(n);
+    }, 700);
+  </script>
+</body>
+</html>
