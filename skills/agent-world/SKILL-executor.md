@@ -213,5 +213,5 @@ status.auth.loggedIn = false 且 URL 含 login/signin/auth ?
 ## 八、与其他文件的关系
 
 - 通用版:[SKILL.md](./SKILL.md)(orchestrator/强模型用,原则性)
-- 设计依据:[docs/探索方向-弱模型复杂场景.md](../docs/探索方向-弱模型复杂场景.md)
+- 设计依据:[docs/核心命题-反馈闭环是第一杠杆.md](../../docs/核心命题-反馈闭环是第一杠杆.md)、[docs/archive/探索方向-弱模型复杂场景.md](../../docs/archive/探索方向-弱模型复杂场景.md)(已归档)
 - page_outcome 实现:server.py `_build_page_outcome`(progressed/challenged/errored/uncertain/unchanged)
