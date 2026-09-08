@@ -51,10 +51,13 @@ Agent World MCP Server
 """
 import asyncio
 import json
+import logging
 import time
 import traceback
 import uuid
 from urllib.parse import urlsplit
+
+logger = logging.getLogger("agent-world.server")
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -588,7 +591,8 @@ def _t_world_open(args):
                     context.clear_cookies()
                     context.add_cookies(state["cookies"])
             except Exception as e:
-                print(f"[world] storage state 恢复失败: {e}")
+                # stdio 的 stdout 是 MCP 协议流,运行时诊断走 logging(stderr)
+                logger.warning("storage state 恢复失败: %s", e)
         handle = context
         page = context.pages[0] if context.pages else context.new_page()
     else:
