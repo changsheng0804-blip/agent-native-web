@@ -4,30 +4,16 @@
 自 mcp/server.py 拆出(Step 4 特性簇),行为不变;依赖方向:aw_core ← aw_runtime ← 本簇。
 """
 import json
-try:
-    from aw_core import (
-    AUTH_COOKIE_HINTS,
-    _anomaly_from_counts,
-    )
-except ImportError:
-    from mcp.aw_core import (
-    AUTH_COOKIE_HINTS,
-    _anomaly_from_counts,
-    )
-try:
-    from aw_runtime import (
-    _evaluate,
-    _task_public,
-    _world,
-    _worlds,
-    )
-except ImportError:
-    from mcp.aw_runtime import (
-    _evaluate,
-    _task_public,
-    _world,
-    _worlds,
-    )
+from aw_core import (
+AUTH_COOKIE_HINTS,
+_anomaly_from_counts,
+)
+from aw_runtime import (
+_evaluate,
+_task_public,
+_world,
+_worlds,
+)
 
 
 def _auth_status(wid):

@@ -7,92 +7,44 @@ import base64, json, time
 from urllib.parse import urlsplit
 import mcp.types as types
 from PIL import Image, ImageChops, ImageDraw, ImageStat
-try:
-    from aw_core import (
-    _sources_for_card,
-    )
-except ImportError:
-    from mcp.aw_core import (
-    _sources_for_card,
-    )
-try:
-    from aw_runtime import (
-    SCREENSHOT_DIR,
-    _activate_new_page,
-    _ensure_page_runtime,
-    _evaluate,
-    _evaluate_query_retry,
-    _has_new_page,
-    _known_page_tokens,
-    _ok,
-    _page_signal_snapshot,
-    _record_route_memory,
-    _resolve_id,
-    _result_payload,
-    _task_enqueue_actions,
-    _task_mark_queue,
-    _verify_action_precondition,
-    _wait_world_ready,
-    _world,
-    )
-except ImportError:
-    from mcp.aw_runtime import (
-    SCREENSHOT_DIR,
-    _activate_new_page,
-    _ensure_page_runtime,
-    _evaluate,
-    _evaluate_query_retry,
-    _has_new_page,
-    _known_page_tokens,
-    _ok,
-    _page_signal_snapshot,
-    _record_route_memory,
-    _resolve_id,
-    _result_payload,
-    _task_enqueue_actions,
-    _task_mark_queue,
-    _verify_action_precondition,
-    _wait_world_ready,
-    _world,
-    )
-try:
-    from aw_timeline import (
-    _record_action_evidence,
-    )
-except ImportError:
-    from mcp.aw_timeline import (
-    _record_action_evidence,
-    )
-try:
-    from aw_outcome import (
-    _anomaly_check,
-    _click_region_snapshot,
-    _errored_card,
-    _occlusion_attach,
-    _occlusion_probe,
-    _outcome_card,
-    _region_snapshot_at,
-    _wait_click_effect,
-    )
-except ImportError:
-    from mcp.aw_outcome import (
-    _anomaly_check,
-    _click_region_snapshot,
-    _errored_card,
-    _occlusion_attach,
-    _occlusion_probe,
-    _outcome_card,
-    _region_snapshot_at,
-    _wait_click_effect,
-    )
-try:
-    from aw_taskgraph import (
-    _contract_gate,
-    )
-except ImportError:
-    from mcp.aw_taskgraph import (
-    _contract_gate,
-    )
+from aw_core import (
+_sources_for_card,
+)
+from aw_runtime import (
+SCREENSHOT_DIR,
+_activate_new_page,
+_ensure_page_runtime,
+_evaluate,
+_evaluate_query_retry,
+_has_new_page,
+_known_page_tokens,
+_ok,
+_page_signal_snapshot,
+_record_route_memory,
+_resolve_id,
+_result_payload,
+_task_enqueue_actions,
+_task_mark_queue,
+_verify_action_precondition,
+_wait_world_ready,
+_world,
+)
+from aw_timeline import (
+_record_action_evidence,
+)
+from aw_outcome import (
+_anomaly_check,
+_click_region_snapshot,
+_errored_card,
+_occlusion_attach,
+_occlusion_probe,
+_outcome_card,
+_region_snapshot_at,
+_wait_click_effect,
+)
+from aw_taskgraph import (
+_contract_gate,
+)
 
 
 def _build_locator(w, ent):

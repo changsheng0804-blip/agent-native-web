@@ -5,76 +5,36 @@
 """
 import json, math, time
 from PIL import Image, ImageChops, ImageStat
-try:
-    from aw_core import (
-    STYLE_DIFF_PROPS,
-    STYLE_SNAPSHOT_MAX,
-    _anomaly_from_counts,
-    _build_click_effect,
-    _signal_delta,
-    _sources_for_card,
-    )
-except ImportError:
-    from mcp.aw_core import (
-    STYLE_DIFF_PROPS,
-    STYLE_SNAPSHOT_MAX,
-    _anomaly_from_counts,
-    _build_click_effect,
-    _signal_delta,
-    _sources_for_card,
-    )
-try:
-    from aw_runtime import (
-    SCREENSHOT_DIR,
-    VISUAL_RMS_THRESHOLD,
-    _activate_new_page,
-    _evaluate,
-    _ok,
-    _page_signal_snapshot,
-    _resolve_id,
-    _runtime_context,
-    _world,
-    )
-except ImportError:
-    from mcp.aw_runtime import (
-    SCREENSHOT_DIR,
-    VISUAL_RMS_THRESHOLD,
-    _activate_new_page,
-    _evaluate,
-    _ok,
-    _page_signal_snapshot,
-    _resolve_id,
-    _runtime_context,
-    _world,
-    )
-try:
-    from aw_timeline import (
-    _trace_store,
-    )
-except ImportError:
-    from mcp.aw_timeline import (
-    _trace_store,
-    )
-try:
-    from task_runtime import (
-    build_trace_entry,
-    new_id,
-    persistence_enabled,
-    )
-except ImportError:
-    from mcp.task_runtime import (
-    build_trace_entry,
-    new_id,
-    persistence_enabled,
-    )
-try:
-    from business_runtime import (
-    attach_business_runtime,
-    )
-except ImportError:
-    from mcp.business_runtime import (
-    attach_business_runtime,
-    )
+from aw_core import (
+STYLE_DIFF_PROPS,
+STYLE_SNAPSHOT_MAX,
+_anomaly_from_counts,
+_build_click_effect,
+_signal_delta,
+_sources_for_card,
+)
+from aw_runtime import (
+SCREENSHOT_DIR,
+VISUAL_RMS_THRESHOLD,
+_activate_new_page,
+_evaluate,
+_ok,
+_page_signal_snapshot,
+_resolve_id,
+_runtime_context,
+_world,
+)
+from aw_timeline import (
+_trace_store,
+)
+from task_runtime import (
+build_trace_entry,
+new_id,
+persistence_enabled,
+)
+from business_runtime import (
+attach_business_runtime,
+)
 
 
 def _is_submit_trigger(wid, target_id, key=None):

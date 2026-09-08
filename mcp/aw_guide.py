@@ -4,48 +4,24 @@
 自 mcp/server.py 拆出(Step 4 特性簇),行为不变;依赖方向:aw_core ← aw_runtime ← 本簇。
 """
 import re, time
-try:
-    from aw_core import (
-    _guide_terms,
-    _page_node_identity,
-    )
-except ImportError:
-    from mcp.aw_core import (
-    _guide_terms,
-    _page_node_identity,
-    )
-try:
-    from aw_runtime import (
-    _evaluate,
-    _evaluate_query_retry,
-    _ok,
-    _page_signal_snapshot,
-    _result_payload,
-    _route_hint,
-    _task_public,
-    _task_update,
-    _world,
-    )
-except ImportError:
-    from mcp.aw_runtime import (
-    _evaluate,
-    _evaluate_query_retry,
-    _ok,
-    _page_signal_snapshot,
-    _result_payload,
-    _route_hint,
-    _task_public,
-    _task_update,
-    _world,
-    )
-try:
-    from aw_query import (
-    _t_world_change_digest,
-    )
-except ImportError:
-    from mcp.aw_query import (
-    _t_world_change_digest,
-    )
+from aw_core import (
+_guide_terms,
+_page_node_identity,
+)
+from aw_runtime import (
+_evaluate,
+_evaluate_query_retry,
+_ok,
+_page_signal_snapshot,
+_result_payload,
+_route_hint,
+_task_public,
+_task_update,
+_world,
+)
+from aw_query import (
+_t_world_change_digest,
+)
 
 
 def _expand_candidates(wid, max_results=8):

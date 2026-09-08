@@ -159,7 +159,6 @@ GROUPS = {
             "test_task_runtime_integration.py", # 任务图浏览器闭环(本地夹具,任务图合入)
             "test_task_runtime_matrix.py",      # 固定覆盖矩阵与非法迁移拦截(任务图合入)
             "experiments/test_server_premise.py",  # 决策前提监视(assume/ack/status 工具层,order_form 夹具)
-            "experiments/test_server_timeline.py", # 统一时间线(因果窗口/前提入账/静默失败)
             "test_layers.py",                # world_layers 图层视图(结构/语义/空间/交互/名字)
         ],
     },
@@ -180,6 +179,7 @@ GROUPS = {
             "test_frames.py",         # 多 frame 感知(闲鱼)
             "test_compare.py",        # profile 对比(闲鱼)
             "test_official.py",       # 官方页面抽查(HN)
+            "experiments/test_server_timeline.py",  # 时间线集成(本地夹具+example.com 探测,触网归 real)
             "test_action_layer.py",   # 行动层降级链路(GF)
             "test_fingerprint_real.py",  # 指纹真站六站体检
             "test_map_real.py",       # 地图真站六站体检
