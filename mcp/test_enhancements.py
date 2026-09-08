@@ -3,6 +3,7 @@
 1. world_fill 支持 type_delay_ms (逐字打字 locator-sequential-type)
 2. world_batch_fill 批量填表 (单次交互填充多个字段,逐字段容错)
 3. world_click 遮挡检测与状态感知
+4. batch_fill 不得把单字段未生效误聚合为 progressed
 """
 import asyncio
 import json
@@ -16,6 +17,7 @@ from mcp.client.stdio import stdio_client
 
 SERVER = str(Path(__file__).resolve().parent / "server.py")
 DYN_URI = (Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "dyn.html").as_uri()
+REJECT_URI = (Path(__file__).resolve().parent.parent / "tests" / "fixtures" / "fill_reject.html").as_uri()
 
 
 async def call(session, name, args, timeout=30):
@@ -58,12 +60,38 @@ async def main():
             print(f"   状态卡 forms={st.get('forms')}")
             assert len(st.get("forms", [])) >= 2, "状态卡应感知到已填写的表单字段"
 
-            # 5. 点击 + 遮挡诊断(本地页无遮挡,应无 obscured_note)
+            # 5. 回归:单字段 fill 未生效时,batch_fill 不得因为调用未抛异常就标记成功。
+            rr = await call(session, "world_open", {"url": REJECT_URI, "wait_ms": 500})
+            reject_wid = rr["world_id"]
+            single = await call(session, "world_fill", {
+                "world_id": reject_wid,
+                "id": "input.拒绝输入",
+                "text": "never-sticks",
+            })
+            print(f"5a. 单字段拒绝输入: page_outcome={single.get('page_outcome')} method={single.get('method')}")
+            assert single.get("page_outcome") != "progressed", (
+                "回归夹具必须先证明单字段没有真正生效;若这里 progressed,请先检查夹具/后果卡判定"
+            )
+
+            batch = await call(session, "world_batch_fill", {
+                "world_id": reject_wid,
+                "fields": [
+                    {"id": "input.拒绝输入", "text": "never-sticks"},
+                ],
+            })
+            print(f"5b. 批量拒绝输入: page_outcome={batch.get('page_outcome')} ok_count={batch.get('ok_count')}")
+            assert batch.get("page_outcome") != "progressed", (
+                "batch_fill 不得把单字段非 progressed 结果聚合为 progressed"
+            )
+            assert batch.get("ok_count") == 0, "未生效字段不得计入 ok_count"
+            await call(session, "world_close", {"world_id": reject_wid})
+
+            # 6. 点击 + 遮挡诊断(本地页无遮挡,应无 obscured_note)
             r = await call(session, "world_click", {"world_id": wid, "id": "button.搜索"})
-            print(f"4. 点击按钮: method={r.get('method')}, clicked={r.get('clicked')}, obscured_note={r.get('obscured_note')}")
+            print(f"6. 点击按钮: method={r.get('method')}, clicked={r.get('clicked')}, obscured_note={r.get('obscured_note')}")
 
             await call(session, "world_close", {"world_id": wid})
-            print("5. 测试全部通过!")
+            print("7. 测试全部通过!")
 
 
 if __name__ == "__main__":
