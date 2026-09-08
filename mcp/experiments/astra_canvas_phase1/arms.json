@@ -1,0 +1,63 @@
+{
+  "schema_version": "1.0",
+  "arms": {
+    "A": {
+      "name": "Astra Native",
+      "purpose": "纯视觉 + Computer Use 基线",
+      "model_input": {
+        "vision": true,
+        "screenshots": true,
+        "structured_canvas_state": false
+      },
+      "actions": {
+        "computer_use": true,
+        "structured_observe": false,
+        "structured_act": false,
+        "structured_verify": false
+      },
+      "judge_visibility": "Harness 可在 run 结束后读取隐藏 ground truth，但不得把 observe/verify 结果注入模型。"
+    },
+    "B": {
+      "name": "Structured",
+      "purpose": "仅使用 Agent-native 结构化闭环",
+      "model_input": {
+        "vision": false,
+        "screenshots": false,
+        "structured_canvas_state": true
+      },
+      "actions": {
+        "computer_use": false,
+        "structured_observe": true,
+        "structured_act": true,
+        "structured_verify": true
+      },
+      "judge_visibility": "Harness 可保存截图作为实验留证，但截图不得成为模型推理输入。"
+    },
+    "C": {
+      "name": "Hybrid",
+      "purpose": "视觉 + Computer Use + Agent-native 结构化闭环",
+      "model_input": {
+        "vision": true,
+        "screenshots": true,
+        "structured_canvas_state": true
+      },
+      "actions": {
+        "computer_use": true,
+        "structured_observe": true,
+        "structured_act": true,
+        "structured_verify": true
+      },
+      "judge_visibility": "不得在 prompt 中暗示优先使用视觉或结构化工具，让模型自行选择。"
+    }
+  },
+  "fairness": {
+    "same_task_instruction": true,
+    "same_initial_state": true,
+    "same_success_ground_truth": true,
+    "same_time_budget": true,
+    "same_step_budget": true,
+    "fresh_model_context_each_run": true,
+    "no_prompt_changes_after_first_valid_run": true,
+    "no_silent_retries": true
+  }
+}
