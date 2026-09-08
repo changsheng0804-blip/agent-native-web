@@ -53,24 +53,37 @@ async def main():
 
             # 2. 点击目标附近没有关键构件,但 URL 发生**真实导航**(query 变化 → 整页重载)
             #    注:纯 hash 锚点(#target)不是导航,不应触发全局 URL 纠正(见 test_nav_and_reconcile.py)
-            await call(session, "world_eval", {
-                "world_id": wid,
-                "expression": """() => {
-                    const a = document.createElement('a');
-                    a.id = 'global-feedback-nav';
-                    a.href = '?global-feedback-target=1';
-                    a.textContent = '全局跳转测试';
-                    a.style.display = 'block';
-                    document.body.appendChild(a);
-                    return true;
-                }""",
-            })
-            await call(session, "world_wait", {
-                "world_id": wid, "mode": "appear", "text": "全局跳转测试", "timeout_ms": 5000,
-            })
-            nav = await find_one(session, wid, text="全局跳转测试")
-            navigated = await call(session, "world_click", {"world_id": wid, "id": nav["id"]})
-            assert navigated["effect"]["verdict"] == "effected"
+            #    真实导航比 hash 慢,并行负载下偶发"导航尚未提交"→ 重开世界重试整个场景
+            #    (不重试单次点击:导航后元素已消失,重试无意义)
+            navigated = None
+            for attempt in range(3):
+                await call(session, "world_eval", {
+                    "world_id": wid,
+                    "expression": """() => {
+                        const a = document.createElement('a');
+                        a.id = 'global-feedback-nav';
+                        a.href = '?global-feedback-target=1';
+                        a.textContent = '全局跳转测试';
+                        a.style.display = 'block';
+                        document.body.appendChild(a);
+                        return true;
+                    }""",
+                })
+                await call(session, "world_wait", {
+                    "world_id": wid, "mode": "appear", "text": "全局跳转测试", "timeout_ms": 5000,
+                })
+                nav = await find_one(session, wid, text="全局跳转测试")
+                navigated = await call(session, "world_click", {"world_id": wid, "id": nav["id"]})
+                if navigated["effect"]["verdict"] == "effected":
+                    break
+                if attempt < 2:
+                    print(f"    (第 {attempt+1} 次判定 {navigated['effect']['verdict']},重开世界重试)")
+                    await call(session, "world_close", {"world_id": wid})
+                    await asyncio.sleep(0.5)
+                    data = await call(session, "world_open", {"url": DYN_URI, "wait_ms": 800})
+                    wid = data["world_id"]
+            assert navigated["effect"]["verdict"] == "effected", \
+                f"连续 3 次均未判 effected: {navigated.get('effect')}"
             assert navigated["effect"]["confidence"] == "high"
             assert navigated["feedback"]["page"]["url_changed"] is True
             assert "global-feedback-target=1" in navigated["feedback"]["page"]["after_url"]

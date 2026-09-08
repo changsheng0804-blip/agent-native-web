@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>账户中心</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f6f7f9; margin: 0; padding: 40px 20px; }
+  .card { max-width: 420px; margin: 0 auto; background: #fff; border: 1px solid #e3e6ea;
+          border-radius: 10px; padding: 28px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  h1 { font-size: 18px; margin: 0 0 18px; }
+  .row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #f0f2f4; }
+  .row:last-of-type { border-bottom: none; }
+  .label { color: #6b7280; font-size: 14px; }
+  .value { font-weight: 600; font-size: 15px; }
+  button { margin-top: 18px; width: 100%; padding: 10px; background: #2563eb; color: #fff;
+           border: none; border-radius: 6px; font-size: 14px; cursor: pointer; }
+  #refresh-status { margin-top: 12px; font-size: 13px; color: #6b7280; min-height: 18px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>账户中心</h1>
+    <div class="row"><span class="label">账户</span><span class="value">demo@example.com</span></div>
+    <div class="row"><span class="label">可用余额</span><span class="value" id="balance">¥100</span></div>
+    <button id="refresh">刷新余额</button>
+    <div id="refresh-status"></div>
+  </div>
+
+  <script>
+    // 页面上显示的是上一次同步时的缓存值。
+    // 点击"刷新余额"只是重新渲染本地缓存,不向后端账本查询。
+    document.getElementById('refresh').addEventListener('click', function () {
+      var st = document.getElementById('refresh-status');
+      st.textContent = '已刷新(缓存)';
+      // 故意不请求 /api/ledger —— 真实账本与页面显示可能不一致
+    });
+  </script>
+</body>
+</html>

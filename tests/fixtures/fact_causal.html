@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>订单确认</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f6f7f9; margin: 0; padding: 40px 20px; }
+  .card { max-width: 440px; margin: 0 auto; background: #fff; border: 1px solid #e3e6ea;
+          border-radius: 10px; padding: 28px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  .sub { color: #6b7280; font-size: 13px; margin-bottom: 18px; }
+  .row { display: flex; justify-content: space-between; padding: 9px 0; font-size: 14px; }
+  .label { color: #6b7280; }
+  button { margin-top: 16px; width: 100%; padding: 11px; background: #2563eb; color: #fff;
+           border: none; border-radius: 6px; font-size: 15px; cursor: pointer; }
+  .panel { margin-top: 20px; padding: 12px; background: #f9fafb; border: 1px solid #e5e7eb;
+           border-radius: 6px; font-size: 13px; color: #374151; }
+  .panel .live { font-weight: 600; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>订单确认</h1>
+    <div class="sub">请核对后提交</div>
+
+    <div class="row"><span class="label">商品</span><span>演示商品 A</span></div>
+    <div class="row"><span class="label">数量</span><span>1</span></div>
+    <div class="row"><span class="label">应付</span><span>¥128.00</span></div>
+
+    <button id="submit">提交订单</button>
+
+    <div class="panel">
+      实时状态(服务端推送):<br>
+      订单编号:<span class="live" id="order-no">—</span><br>
+      当前状态:<span class="live" id="order-state">待提交</span><br>
+      更新时间:<span class="live" id="order-time">—</span>
+    </div>
+  </div>
+
+  <script>
+    // 提交按钮:不产生任何请求,也不改变订单状态。
+    document.getElementById('submit').addEventListener('click', function () {
+      // 故意什么都不做
+    });
+
+    // 服务端推送(模拟 websocket):与本页面操作无关,持续更新状态面板。
+    // 这会让"页面发生了变化"这个观察成立,但变化并非由点击引起。
+    var seq = 0;
+    var states = ['待提交', '待提交', '待提交', '待提交'];
+    setInterval(function () {
+      seq += 1;
+      document.getElementById('order-no').textContent = 'ORD-' + (100000 + seq);
+      document.getElementById('order-state').textContent = states[seq % states.length];
+      document.getElementById('order-time').textContent =
+        new Date().toLocaleTimeString('zh-CN', { hour12: false });
+    }, 900);
+  </script>
+</body>
+</html>
