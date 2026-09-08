@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent-native-web/astra-canvas-phase1/result.schema.json",
+  "title": "Astra Canvas Phase 1 Run Result",
+  "type": "object",
+  "required": [
+    "run_id",
+    "task_id",
+    "arm",
+    "model",
+    "invalid_run",
+    "claimed_success",
+    "success",
+    "false_positive",
+    "elapsed_ms",
+    "steps",
+    "metrics",
+    "final_ground_truth"
+  ],
+  "properties": {
+    "run_id": {"type": "string"},
+    "task_id": {"const": "canvas-center-star-v1"},
+    "arm": {"enum": ["A", "B", "C"]},
+    "model": {"type": "string"},
+    "model_version": {"type": ["string", "null"]},
+    "harness": {"type": ["string", "null"]},
+    "started_at": {"type": ["string", "null"]},
+    "invalid_run": {"type": "boolean"},
+    "invalid_reason": {"type": ["string", "null"]},
+    "claimed_success": {"type": "boolean"},
+    "success": {"type": "boolean"},
+    "false_positive": {"type": "boolean"},
+    "elapsed_ms": {"type": "integer", "minimum": 0},
+    "steps": {"type": "integer", "minimum": 0},
+    "metrics": {
+      "type": "object",
+      "required": [
+        "total_actions",
+        "corrections",
+        "computer_use_actions",
+        "screenshots",
+        "structured_observations",
+        "structured_actions",
+        "verify_calls"
+      ],
+      "properties": {
+        "total_actions": {"type": "integer", "minimum": 0},
+        "corrections": {"type": "integer", "minimum": 0},
+        "computer_use_actions": {"type": "integer", "minimum": 0},
+        "screenshots": {"type": "integer", "minimum": 0},
+        "structured_observations": {"type": "integer", "minimum": 0},
+        "structured_actions": {"type": "integer", "minimum": 0},
+        "verify_calls": {"type": "integer", "minimum": 0},
+        "input_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "output_tokens": {"type": ["integer", "null"], "minimum": 0}
+      },
+      "additionalProperties": true
+    },
+    "final_ground_truth": {
+      "type": "object",
+      "required": ["center_error_px", "star_inside_circle"],
+      "properties": {
+        "center_error_px": {"type": "number", "minimum": 0},
+        "star_inside_circle": {"type": "boolean"}
+      },
+      "additionalProperties": true
+    },
+    "tool_sequence": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "final_text": {"type": ["string", "null"]},
+    "raw_trace_path": {"type": ["string", "null"]},
+    "notes": {"type": ["string", "null"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"invalid_run": {"const": true}}},
+      "then": {"required": ["invalid_reason"]}
+    }
+  ],
+  "additionalProperties": true
+}
