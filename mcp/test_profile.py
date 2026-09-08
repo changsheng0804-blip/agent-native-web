@@ -5,6 +5,7 @@
 """
 import asyncio
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -14,6 +15,20 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
 LOCAL = "http://127.0.0.1:8001/dyn.html"
+PROFILE_NAME = "test-profile-1"
+PROFILE_DIR = Path(__file__).resolve().parent / "profiles" / PROFILE_NAME
+COOKIE_MARKER = "agentworld_test=hello"
+
+
+def _run_profile_probe(code):
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(PROFILE_DIR)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    return result.stdout.strip()
 
 
 async def main():
@@ -25,9 +40,9 @@ async def main():
         async with ClientSession(read, write) as session:
             await asyncio.wait_for(session.initialize(), timeout=20)
 
-            # 1. 打开 profile 世界,设置 cookie
+            # 1. 打开 profile 世界,确认服务器能创建并关闭该 profile。
             r = await asyncio.wait_for(
-                session.call_tool("world_open", {"url": LOCAL, "wait_ms": 1000, "profile": "test-profile-1"}),
+                session.call_tool("world_open", {"url": LOCAL, "wait_ms": 1000, "profile": PROFILE_NAME}),
                 timeout=60,
             )
             d = json.loads(r.content[0].text)
@@ -37,58 +52,91 @@ async def main():
                 session.call_tool("world_close", {"world_id": wid}), timeout=15
             )
 
-            # 2. 用 playwright 直连同 profile,设置 cookie 再关闭(验证机制)
-            import subprocess
-            import sys as _sys
+            # 1.5 MCP storage_state 恢复链路(独立进程 cookie DB 之外的核心验证):
+            #    open → 世界内设 cookie → close(导出 storage_state.json) → reopen → 世界内断言 cookie 可见
+            r = await asyncio.wait_for(
+                session.call_tool("world_open", {"url": LOCAL, "wait_ms": 1000, "profile": PROFILE_NAME}),
+                timeout=60,
+            )
+            wid = json.loads(r.content[0].text)["world_id"]
+            ev = await asyncio.wait_for(
+                session.call_tool("world_eval", {"world_id": wid, "expression":
+                    "() => { document.cookie = 'agentworld_test=hello; path=/; expires=Fri, 31 Dec 2027 23:59:59 GMT'; return document.cookie; }"}),
+                timeout=20,
+            )
+            print("MCP 世界内设置 cookie:", json.loads(ev.content[0].text).get("result"))
+            await asyncio.wait_for(
+                session.call_tool("world_close", {"world_id": wid}), timeout=15
+            )
+            r = await asyncio.wait_for(
+                session.call_tool("world_open", {"url": LOCAL, "wait_ms": 1000, "profile": PROFILE_NAME}),
+                timeout=60,
+            )
+            wid = json.loads(r.content[0].text)["world_id"]
+            ev2 = await asyncio.wait_for(
+                session.call_tool("world_eval", {"world_id": wid, "expression":
+                    "() => document.cookie"}),
+                timeout=20,
+            )
+            restored = str(json.loads(ev2.content[0].text).get("result") or "")
+            print("MCP 重开后世界内 cookie:", restored)
+            assert COOKIE_MARKER in restored, f"MCP storage_state 恢复链路失效: {restored}"
+            await asyncio.wait_for(
+                session.call_tool("world_close", {"world_id": wid}), timeout=15
+            )
+            print("MCP storage_state 恢复链路 OK")
+
+            # 2. 用 Playwright 直连同 profile 设置持久 cookie。
             code = """
-import json, sys
+import sys
+from pathlib import Path
 from playwright.sync_api import sync_playwright
+
 sys.stdout.reconfigure(encoding="utf-8")
+profile_dir = Path(sys.argv[1])
 with sync_playwright() as p:
     ctx = p.chromium.launch_persistent_context(
-        user_data_dir=str(Path(__file__).resolve().parent / "profiles" / "test-profile-1"),
+        user_data_dir=str(profile_dir),
         headless=True,
     )
     pg = ctx.new_page()
     pg.goto("http://127.0.0.1:8001/dyn.html")
     pg.evaluate("document.cookie = 'agentworld_test=hello; path=/; expires=Fri, 31 Dec 2027 23:59:59 GMT'")
-    cookie = pg.evaluate("document.cookie")
-    print("设置后 cookie:", cookie)
+    print(pg.evaluate("document.cookie"))
     ctx.close()
 """
-            r = subprocess.run([_sys.executable, "-c", code], capture_output=True, text=True, encoding="utf-8")
-            print(r.stdout.strip() or r.stderr.strip())
+            output = _run_profile_probe(code)
+            assert COOKIE_MARKER in output, f"设置 cookie 失败: {output}"
+            print("设置后 cookie:", output)
 
-            # 3. 重开同 profile,验证 cookie 还在
+            # 3. 让 MCP 服务器重开并关闭同一 profile，再由独立 Playwright 进程验证 cookie 仍存在。
             r = await asyncio.wait_for(
-                session.call_tool("world_open", {"url": LOCAL, "wait_ms": 1000, "profile": "test-profile-1"}),
+                session.call_tool("world_open", {"url": LOCAL, "wait_ms": 1000, "profile": PROFILE_NAME}),
                 timeout=60,
             )
             wid = json.loads(r.content[0].text)["world_id"]
-            r = await asyncio.wait_for(
-                session.call_tool("world_entity", {"world_id": wid, "id": "root.html"}),
-                timeout=15,
-            )
-            # 直接读 cookie(原生网页世界不含 cookie,用世界内 evaluate 兜底不了,通过 screenshot 验证不必要;
-            # 这里用原生网页世界的 __evaluate 能力没有暴露,所以用 playwright 直连同 profile 再验证一次)
             await asyncio.wait_for(session.call_tool("world_close", {"world_id": wid}), timeout=15)
 
             code2 = """
 import sys
+from pathlib import Path
 from playwright.sync_api import sync_playwright
+
 sys.stdout.reconfigure(encoding="utf-8")
+profile_dir = Path(sys.argv[1])
 with sync_playwright() as p:
     ctx = p.chromium.launch_persistent_context(
-        user_data_dir=str(Path(__file__).resolve().parent / "profiles" / "test-profile-1"),
+        user_data_dir=str(profile_dir),
         headless=True,
     )
     pg = ctx.new_page()
     pg.goto("http://127.0.0.1:8001/dyn.html")
-    print("重开后 cookie:", pg.evaluate("document.cookie"))
+    print(pg.evaluate("document.cookie"))
     ctx.close()
 """
-            r = subprocess.run([_sys.executable, "-c", code2], capture_output=True, text=True, encoding="utf-8")
-            print(r.stdout.strip() or r.stderr.strip())
+            output = _run_profile_probe(code2)
+            assert COOKIE_MARKER in output, f"重开后 cookie 未持久化: {output}"
+            print("重开后 cookie:", output)
 
             # 4. headful 模式冒烟(会短暂弹窗)
             r = await asyncio.wait_for(
