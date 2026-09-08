@@ -31,7 +31,7 @@ jobs:
       - name: 门禁冒烟(协议收口)
         run: python mcp/run_quality.py --only test_protocol.py --report mcp/quality_protocol.md
       - name: 门禁冒烟(小票标准)
-        if: !cancelled()
+        if: ${{ !cancelled() }}
         run: python mcp/run_quality.py --only test_receipt.py --report mcp/quality_receipt.md
       - name: 上传门禁报告(失败时)
         if: failure()
