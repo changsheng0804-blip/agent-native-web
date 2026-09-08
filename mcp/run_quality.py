@@ -72,6 +72,7 @@ SCOPES = {
     "test_stray_menu_fp.py": ["judgment", "action", "fp"],
     "test_nav_and_reconcile.py": ["judgment", "navigation", "reconcile"],
     "test_external_facts.py": ["judgment", "observability", "runtime"],
+    "test_false_success_demo.py": ["judgment", "demo", "runtime"],
     "test_receipt.py": ["judgment", "receipt"],
     "test_receipt_metrics.py": ["judgment", "receipt"],
     "test_protocol.py": ["protocol", "kernel"],
@@ -150,6 +151,7 @@ GROUPS = {
             "test_stray_menu_fp.py",   # A5 假成功守护:无关非模态菜单不得判 progressed
             "test_nav_and_reconcile.py",  # A1/A2 回归:hash 不算导航 + errored 卡进对账
             "test_external_facts.py",  # A6 基准:外部事实五反例(observability 而非 intelligence)
+            "test_false_success_demo.py",  # B2 守护:假成功对照演示的三个场景持续成立
             "test_receipt.py",         # 小票标准v0.1:全字段/sources/handoff/对账(R1)
             "test_receipt_metrics.py", # R4:小票回答旧验证#九度量(FP/FN/定位与操作时间/恢复出口)
             "test_challenge_overlay.py",  # 挑战遮罩复刻(Step 1 的验收场景;page_outcome 已实现,守护不回归)

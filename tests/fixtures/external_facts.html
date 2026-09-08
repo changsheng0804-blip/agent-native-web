@@ -32,7 +32,7 @@
   <!-- ② 按钮变灰,但请求后来 rollback -->
   <div class="case" id="case2">
     <h3>② 按钮变灰但请求 rollback</h3>
-    <p>点击后按钮变灰(乐观 UI),1 秒后后端回滚,按钮恢复且出现错误提示。</p>
+    <p>点击后按钮变灰(乐观 UI),后端返回 500 后回滚,按钮恢复且出现错误提示。</p>
     <button id="btn2">确认支付</button>
     <div id="status2" class="status">尚未操作</div>
   </div>
@@ -40,7 +40,7 @@
   <!-- ③ POST 202 后异步失败 -->
   <div class="case" id="case3">
     <h3>③ 202 后异步失败</h3>
-    <p>提交返回 202 Accepted(排队中),3 秒后后台任务失败——窗口内的观察全部是"正常"。</p>
+    <p>提交返回 202 Accepted(排队中),3 秒后后台任务失败(轮询得到 500)——窗口内的观察全部是"正常"。</p>
     <button id="btn3">提交任务</button>
     <div id="status3" class="status">尚未提交</div>
   </div>
@@ -79,7 +79,7 @@
       } catch (e) {}
     });
 
-    // ② 乐观 UI 后 rollback
+    // ② 乐观 UI 后 rollback(真实后端 500)
     document.getElementById('btn2').addEventListener('click', function () {
       var btn = this;
       var st = document.getElementById('status2');
@@ -87,23 +87,26 @@
       btn.style.opacity = '0.5';
       st.textContent = '处理中…';
       st.className = 'status';
+      fetch('?simulate=500', { method: 'POST' }).catch(function () {});
       setTimeout(function () {
-        // 后端回滚
+        // 后端回滚(3 秒后,晚于动作窗口,朴素读法在动作返回时看不到)
         btn.disabled = false;
         btn.style.opacity = '';
         st.textContent = '❌ 支付失败,已回滚';
         st.className = 'status bad';
-      }, 1000);
+      }, 3000);
     });
 
-    // ③ 202 后异步失败
+    // ③ 202 后异步失败(提交 202,3 秒后轮询得到 500)
     document.getElementById('btn3').addEventListener('click', function () {
       var st = document.getElementById('status3');
       st.textContent = '✅ 已提交,任务排队中(202)';
       st.className = 'status ok';
+      fetch('?simulate=202', { method: 'POST' }).catch(function () {});
       setTimeout(function () {
         st.textContent = '❌ 后台任务失败(3 秒后)';
         st.className = 'status bad';
+        fetch('?poll=task&simulate=500', { method: 'POST' }).catch(function () {});
       }, 3000);
     });
 
