@@ -91,6 +91,7 @@ from aw_core import (
 from aw_runtime import (  # noqa: F401
     SCREENSHOT_DIR,
     PROFILES_DIR,
+    _safe_profile_dir,
     VISUAL_RMS_THRESHOLD,
     ALL_IN_ONE,
     INJECT_JS,
@@ -574,7 +575,7 @@ def _t_world_open(args):
         page = context.pages[0] if context.pages else context.new_page()
         handle = browser
     elif profile:
-        profile_dir = PROFILES_DIR / str(profile)
+        profile_dir = _safe_profile_dir(profile)  # 路径约束:拒绝 ../ 与分隔符逃逸(#14)
         profile_dir.mkdir(parents=True, exist_ok=True)
         # 持久化上下文:cookie/会话按 profile 名复用
         context = pw.chromium.launch_persistent_context(
