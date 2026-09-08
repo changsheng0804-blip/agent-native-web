@@ -3,9 +3,7 @@
 
 自 mcp/server.py 拆出(Step 4 特性簇),行为不变;依赖方向:aw_core ← aw_runtime ← 本簇。
 """
-import json, logging, time
-
-logger = logging.getLogger("agent-world.query")
+import json, time
 from aw_core import (
 SOURCE_FACT,
 SOURCE_UNTRUSTED,
@@ -376,8 +374,7 @@ def _t_world_close(args):
                 state = w["context"].storage_state()
                 state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
-            # stdio 的 stdout 是 MCP 协议流,运行时诊断走 logging(stderr)
-            logger.warning("storage state 保存失败: %s", e)
+            print(f"[world] storage state 保存失败: {e}")
         try:
             w["handle"].close()
         except Exception:
