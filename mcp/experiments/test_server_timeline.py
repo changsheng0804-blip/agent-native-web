@@ -120,6 +120,18 @@ async def main():
             assert any(int(s) >= 400 for s in tl4.get("statuses", {})), tl4.get("statuses")
             ok(f"4xx 入账: {tl4.get('statuses')}")
 
+            # 6. requestfailed 事件类型:连接失败(无 4xx、无 DOM 变化)→ failures 非空 → 静默失败标注
+            #    (回归 64662ee:生产端发 requestfailed,消费端曾写 failed 导致永不匹配)
+            await call(session, "world_eval", {"world_id": wid, "expression":
+                "() => { fetch('http://127.0.0.1:1/no-listener').catch(() => {}); return true; }"}, timeout=20)
+            await asyncio.sleep(1.5)
+            await call(session, "world_entities", {"world_id": wid, "role": "input", "max_results": 3}, timeout=30)
+            tl5 = await call(session, "world_timeline", {"world_id": wid, "since": tl4["cursor"]}, timeout=30)
+            assert "requestfailed" in tl5.get("counts", {}), f"requestfailed 未入账: {tl5.get('counts')}"
+            assert tl5.get("failures"), f"requestfailed 未进 failures: {tl5.get('counts')}"
+            assert tl5.get("silent_failures"), f"连接失败无 DOM 变化应标注静默失败: {tl5.get('silent_failures')}"
+            ok(f"requestfailed→静默失败: {json.dumps(tl5.get('silent_failures'), ensure_ascii=False)}")
+
             await call(session, "world_close", {"world_id": wid}, timeout=15)
             print(f"\n全部通过 ✅ ({PASS} 项)")
 
