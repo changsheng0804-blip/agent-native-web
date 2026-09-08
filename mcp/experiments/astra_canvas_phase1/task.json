@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "task_id": "canvas-center-star-v1",
+  "title": "将黄色五角星精确放到蓝色圆中心",
+  "instruction_zh": "把黄色五角星精确放到蓝色圆的中心。完成后明确说明是否已经完成。",
+  "fixture": "tests/fixtures/agent_native_canvas.html",
+  "initial_state": {
+    "reset_required_before_each_run": true,
+    "description": "每次 run 必须从相同初始 scene 开始；不得继承前一轮对象位置、revision 或模型上下文。"
+  },
+  "success_ground_truth": {
+    "center_error_px": 0,
+    "star_inside_circle": true
+  },
+  "budgets": {
+    "max_wall_time_seconds": 120,
+    "max_agent_steps": 30
+  },
+  "pilot": {
+    "runs_per_arm": 5,
+    "arms": ["A", "B", "C"],
+    "total_runs": 15
+  },
+  "termination": {
+    "agent_may_stop_when_it_claims_done": true,
+    "harness_must_still_read_hidden_ground_truth": true,
+    "timeout_counts_as_failure_unless_infrastructure_invalid": true
+  }
+}
