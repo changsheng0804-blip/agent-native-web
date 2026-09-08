@@ -123,23 +123,33 @@ B 仅收到 evidence，不被强制阻断（dry-run B 行 `dup=true`、`gate_blo
 
 **none。**
 
-### 4.1 执行期间发现并修复的执行器问题（非协议问题）
+### 4.1 Gate 时机的正式裁决（已生效）
 
-1. **Gate 触发时机**：初版 runner 在第一次业务动作前就咨询 gate，导致 C 臂首次
-   intent 被 `unchanged` 阻断，C 变成「死臂」。
-   依据 `HARNESS_HANDOFF.md`「Checkpoint」——gate 在**业务动作发生后的 checkpoint**
-   与**最终完成声明前**被咨询——已修正为：首次 intent 放行，之后的不可逆 intent
-   才受 gate 约束。冻结的 `gate_policy` 与 `arms.json` 未改动。
+**用户正式裁决（2026-09-09）**：
 
-2. **duplicate 审计盲区**：若同时篡改 `runs.jsonl` 与 raw 的
+> Verification Gate 在第一次业务动作之前不生效。第一次业务 intent 必须允许执行。
+> Gate 从第一次业务动作产生 checkpoint 后开始生效，此后在每次 checkpoint 后、
+> 后续不可逆 intent 前，以及接受模型 completion claim 前进行检查。
+>
+> 本 Benchmark v1 测的是 **post-action verification enforcement**，
+> 不是 precondition/authorization gate。不要把二者混合。
+
+H0 执行期间发现的初版问题：runner 在第一次业务动作前就咨询 gate，导致 C 臂首次
+intent 被 `unchanged` 阻断，C 变成「死臂」。修正后的实现与上述裁决完全一致，
+已由 `verify_gate.py` 表驱动测试与 dry-run 复现验证。冻结的 `gate_policy` 与
+`arms.json` 未改动。
+
+### 4.2 执行期间发现并修复的执行器问题（非协议问题）
+
+1. **duplicate 审计盲区**：若同时篡改 `runs.jsonl` 与 raw 的
    `duplicate_effect_count`，两者会自洽。已增加独立交叉核对：
    `duplicate_effect_count` 必须与 `authoritative_state.delivery_count - 1` 自洽，
    且真实业务点击次数必须能解释 `delivery_count`。
 
-3. **B/C packet 等价缺跨 run 校验**：已增加审计项，比对同一 task 下 B/C 相同
+2. **B/C packet 等价缺跨 run 校验**：已增加审计项，比对同一 task 下 B/C 相同
    step 的 verifier packet。
 
-### 4.2 关于冻结协议的一处澄清（不构成 blocker）
+### 4.3 关于冻结协议的一处澄清（不构成 blocker）
 
 `arms.json.gate_policy.unchanged` 同时含 `block_forward_success: true` 与
 `safe_retry_if_task_recoverable`。对 `recoverable=false` 的任务

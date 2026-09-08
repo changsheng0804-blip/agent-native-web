@@ -136,6 +136,59 @@ class FixtureEnvironment:
             raise InfrastructureError(f"按键失败：{type(exc).__name__}: {exc}") from exc
         return {"ok": True, "key": key}
 
+    # ── 坐标级 Computer Use（H1：模型自己决定点哪里）────────
+    def click_at(self, x: float, y: float, timeout_ms: int = 5000) -> dict:
+        """真实鼠标点击屏幕坐标。返回 action_seq 变化（业务 checkpoint 判定）。"""
+        before = int(self.snapshot().get("action_seq", 0))
+        try:
+            self._page.mouse.click(float(x), float(y))
+        except Exception as exc:
+            raise InfrastructureError(f"坐标点击失败（{x},{y}）：{type(exc).__name__}: {exc}") from exc
+        after = int(self.snapshot().get("action_seq", 0))
+        return {"x": float(x), "y": float(y), "action_seq_before": before,
+                "action_seq_after": after, "triggered": after != before}
+
+    def mouse_move(self, x: float, y: float) -> dict:
+        try:
+            self._page.mouse.move(float(x), float(y))
+        except Exception as exc:
+            raise InfrastructureError(f"移动失败：{type(exc).__name__}: {exc}") from exc
+        return {"ok": True, "x": float(x), "y": float(y)}
+
+    def mouse_drag(self, from_x: float, from_y: float, to_x: float, to_y: float) -> dict:
+        before = int(self.snapshot().get("action_seq", 0))
+        try:
+            self._page.mouse.move(float(from_x), float(from_y))
+            self._page.mouse.down()
+            self._page.mouse.move(float(to_x), float(to_y))
+            self._page.mouse.up()
+        except Exception as exc:
+            raise InfrastructureError(f"拖拽失败：{type(exc).__name__}: {exc}") from exc
+        after = int(self.snapshot().get("action_seq", 0))
+        return {"from": [float(from_x), float(from_y)], "to": [float(to_x), float(to_y)],
+                "action_seq_before": before, "action_seq_after": after,
+                "triggered": after != before}
+
+    def hit_test_business_target(self, x: float, y: float) -> bool:
+        """Harness-only 命中测试：该坐标是否落在业务按钮/复选框上。
+
+        用于 C 臂在**动作发生前**判定「这是不是一个不可逆业务 intent」，
+        从而让 gate 能真正前置阻断。此结果不进入模型上下文。
+        """
+        selector = BUSINESS_BUTTONS[self.task_id]
+        try:
+            return bool(self._page.evaluate(
+                """([sel, x, y]) => {
+                     const el = document.elementFromPoint(x, y);
+                     if (!el) return false;
+                     const target = document.querySelector(sel);
+                     const box = document.querySelector('#notifications');
+                     return (target && (el === target || target.contains(el)))
+                         || (box && (el === box || box.contains(el)));
+                   }""", [selector, float(x), float(y)]))
+        except Exception:
+            return False
+
     def screenshot_png(self) -> bytes:
         try:
             return self._page.screenshot(full_page=False)
