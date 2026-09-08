@@ -58,14 +58,15 @@ async def main():
             print("1.任务导览: 找到相关区域、候选入口和已确认路径")
 
             clicked = await call(session, "world_click", {"world_id": wid, "id": candidate["id"]})
-            # CI 慢环境加固:effect 窗口(2.5s)可能错过锚点 hash 导航(渐进扫描重建
-            # 注入元素时);URL hash 是确定性事实,双通道验证点击确实生效(断言不弱化)。
-            if clicked["effect"]["verdict"] != "effected":
-                st = await call(session, "world_state", {"world_id": wid})
-                assert "#guide-target" in str(st.get("url", "")), (
-                    f"点击后既无 effect 也无 hash 跳转: {clicked.get('effect')} url={st.get('url')}"
-                )
-                print("  (effect 窗口错过,URL hash 确认跳转)")
+            # CI 慢环境加固:effect 窗口(2.5s)在渐进扫描重建期间可能只报 changed
+            # (区域有新元素)而未捕获锚点 hash 导航;URL hash 是确定性跳转证据,
+            # 断言测试本意("点击任务入口 → 页面跳转"),不依赖 effect 窗口。
+            st = await call(session, "world_state", {"world_id": wid})
+            st_url = ((st.get("state") or {}).get("url")) or ""
+            assert "#guide-target" in st_url, (
+                f"点击任务入口后未跳转: effect={clicked.get('effect', {}).get('verdict')} "
+                f"url={st_url}"
+            )
             since_change = guide["next_cursors"]["change_since"]
             since_evidence = guide["next_cursors"]["evidence_since"]
             refreshed = await call(session, "world_guide", {
