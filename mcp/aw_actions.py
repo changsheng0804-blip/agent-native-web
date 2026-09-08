@@ -491,14 +491,21 @@ def _t_world_batch_fill(args, before_signal=None):
             res = _t_world_fill(sub_args)
             if res and res[0].type == "text":
                 data = json.loads(res[0].text)
-                results.append({"id": fid, "target": data.get("filled"), "method": data.get("method"), "ok": True})
+                # 子字段生效判定(回归 #13):JSON 可解析 ≠ 生效。
+                # 单字段 page_outcome=unchanged(如输入被页面同步清空)时,
+                # 不得计为 ok——否则批量层把假成功聚合为 progressed。
+                sub_po = data.get("page_outcome")
+                field_ok = sub_po == "progressed"
+                results.append({"id": fid, "target": data.get("filled"),
+                                "method": data.get("method"), "ok": field_ok,
+                                "page_outcome": sub_po})
         except Exception as e:
             results.append({"id": fid, "ok": False, "error": f"{type(e).__name__}: {str(e)[:150]}"})
     _refresh_core_status(wid)
     ok_count = sum(1 for r in results if r.get("ok"))
     ret = {"world_id": wid, "batch_count": len(results), "ok_count": ok_count, "results": results}
 
-    # 统一后果卡(聚合判定):全过→progressed;部分过→uncertain;全败→errored
+    # 统一后果卡(聚合判定):全过→progressed;部分过/有存疑→uncertain;全败→errored
     w = _world(wid)
     try:
         before = before_signal or _page_signal_snapshot(wid)
@@ -508,9 +515,11 @@ def _t_world_batch_fill(args, before_signal=None):
         after = _page_signal_snapshot(wid)
     except Exception:
         after = {}
-    if ok_count == len(results) and len(results) > 0:
+    # 存疑字段(uncertain/challenged)不得作为确定成功,也不得被吞成普通成功
+    has_uncertain = any(str(r.get("page_outcome")) in ("uncertain", "challenged") for r in results)
+    if ok_count == len(results) and len(results) > 0 and not has_uncertain:
         po, conf, wh = "progressed", "high", f"批量填入 {ok_count}/{len(results)} 字段全部成功"
-    elif ok_count > 0:
+    elif ok_count > 0 or has_uncertain:
         po, conf, wh = "uncertain", "medium", f"批量填入部分成功({ok_count}/{len(results)} 个字段)"
     else:
         po, conf, wh = "errored", "high", "批量填入全部失败"
