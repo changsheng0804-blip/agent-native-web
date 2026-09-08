@@ -13,6 +13,7 @@ _event_importance,
 )
 from aw_runtime import (
 PROFILES_DIR,
+_safe_profile_dir,
 _activate_new_page,
 _evaluate,
 _evaluate_query_retry,
@@ -368,7 +369,8 @@ def _t_world_close(args):
         try:
             # 导出会话状态(session cookie 也保留),供同 profile 重开时恢复登录态
             if w.get("profile") and w.get("context"):
-                state_file = PROFILES_DIR / str(w["profile"]) / "storage_state.json"
+                # 路径约束与 open 端一致(回归 #14:保存端曾直接拼接外部字符串)
+                state_file = _safe_profile_dir(w["profile"]) / "storage_state.json"
                 state = w["context"].storage_state()
                 state_file.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
         except Exception as e:
