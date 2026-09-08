@@ -16,6 +16,8 @@ Agent-Native Web（智能体原生网页）让智能体可以在网页世界中�
 ## 快速入口
 
 - [完整项目指南](docs/项目指南与架构.md)
+- [管理规则与待决事项](docs/项目治理-governance.md)
+- [本次工程复查报告](docs/工程复查-audit-20260907.md)
 - [MCP 服务器](mcp/server.py)
 - [站点业务适配器](mcp/site_adapters/)
 - [真实站点任务图闭环验证报告](docs/archive/真实站点任务图闭环验证%20GitHub.md)
@@ -30,8 +32,8 @@ Agent-Native Web（智能体原生网页）让智能体可以在网页世界中�
 ## 快速运行
 
 ```bash
-pip install "mcp>=1.29,<2" playwright pillow
-playwright install chromium
+python -m pip install -r 依赖锁定-requirements.txt
+python -m playwright install chromium
 python mcp/server.py
 ```
 
@@ -43,7 +45,7 @@ python mcp/server.py
 
 | 层 | 内容 | 耗时 | 何时跑 |
 |---|---|---|---|
-| **offline** | 本地夹具 32 项(快、稳定、不联网) | 串行未基准测试 / 并行 ×3 约 3 分钟 | 改代码后、提交合并前 |
+| **offline** | 本地夹具与工程入口 33 项(快、稳定、不联网) | 并行 ×3 基线约 3 分钟，随环境变化 | 改代码后、提交合并前 |
 | **real** | 真实网站 20 项(GitHub/闲鱼等) | 慢,受网络/反爬影响 | 只做真站功能验证时 |
 | **special** | 特殊环境(CDP/有头窗口) | — | 按需手动 |
 
@@ -64,6 +66,8 @@ python mcp/run_quality.py --list
 ```
 
 **门禁纪律**:offline 全量必须全绿;`validate_closed_loop` 的 FP=0 一票否决(把"没生效"误报成"成功"即失败);真实网站测试失败不一定是代码问题(网络/反爬),需人工判断。
+
+GitHub 自动验收在 Python 3.10、3.12 上运行完整离线组，并核对依赖、文档链接、模块依赖方向和扩展合并文件。主分支以“工程验收”汇总结果作为合并条件。安装与复查步骤见[贡献约定](CONTRIBUTING.md)。
 
 ## 项目核心
 

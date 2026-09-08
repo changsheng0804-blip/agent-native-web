@@ -5,8 +5,8 @@
 ## 运行
 
 ```bash
-pip install mcp playwright pillow
-playwright install chromium
+python -m pip install -r ../依赖锁定-requirements.txt
+python -m playwright install chromium
 python server.py
 ```
 

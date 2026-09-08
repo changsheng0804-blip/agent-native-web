@@ -1,0 +1,19 @@
+name: 改进建议
+description: 说明要解决的任务、范围与验收方式
+title: '[改进] '
+labels: ['改进']
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: 任务与问题
+      description: 当前流程遇到什么困难，改进对哪类任务有价值？
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收方式与边界
+      description: 如何证明问题得到解决，有哪些场景不在本次范围内？
+    validations:
+      required: true
