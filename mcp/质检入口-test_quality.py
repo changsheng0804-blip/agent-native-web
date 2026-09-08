@@ -45,7 +45,7 @@ class QualitySelectionTests(unittest.TestCase):
     def test_invalid_cli_arguments_exit_before_tests(self):
         for args in (['--parallel', '0'], ['--parallel', '-1'],
                      ['--only', 'test_protocol.py', '--scope', 'kernel'],
-                     ['--scope', 'fill,typo']):
+                     ['--scope', 'fill,typo'], ['--scope', ''], ['--only', '']):
             with self.subTest(args=args):
                 result = subprocess.run([sys.executable, quality.__file__, *args],
                                         capture_output=True, timeout=10)

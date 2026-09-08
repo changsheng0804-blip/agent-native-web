@@ -359,7 +359,9 @@ def main():
     args = ap.parse_args()
     if args.parallel < 1:
         ap.error("--parallel 必须为正整数")
-    if args.only and (args.scope or args.real or args.all):
+    if args.only is not None and not args.only.strip():
+        ap.error("--only 不能为空")
+    if args.only is not None and (args.scope is not None or args.real or args.all):
         ap.error("--only 不能与 --scope、--real 或 --all 混用")
 
     # --report 覆盖默认报告路径(默认 mcp/quality_report.md)
@@ -382,7 +384,7 @@ def main():
     if args.only:
         targets = [args.only]
         groups_run = [f"only:{args.only}"]
-    elif args.scope:
+    elif args.scope is not None:
         try:
             targets, selected_groups = select_scope(args.scope, args.real or args.all, args.all)
         except ValueError as exc:
