@@ -85,7 +85,9 @@ from aw_core import (
     TRACKED_ACTION_NAMES,
     _evidence_norm_url,
     _guide_terms,  # noqa: F401  仅 re-export 给 mcp/experiments/dbg_guide_terms.py
+    _apply_verdict_mode,
     _lite_mode,
+    _verdict_mode,
 )
 
 from aw_runtime import (  # noqa: F401
@@ -266,6 +268,24 @@ async def list_tools():
 
 
 # ── 工具实现 ─────────────────────────────────────────────────
+def _apply_verdict_mode_result(result):
+    """对工具返回结果应用消融模式(AGENT_WORLD_VERDICT_MODE)。
+
+    默认 full 时原样返回,零开销、零行为变化。
+    仅用于 C1 消融实验:同一模型、同一任务,只改返回值。
+    """
+    if _verdict_mode() == "full":
+        return result
+    try:
+        if not result or getattr(result[0], "type", None) != "text":
+            return result
+        payload = json.loads(result[0].text)
+        trimmed = _apply_verdict_mode(payload)
+        return [types.TextContent(type="text", text=json.dumps(trimmed, ensure_ascii=False, indent=2))] + list(result[1:])
+    except Exception:
+        return result
+
+
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     arguments = arguments or {}
@@ -304,7 +324,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
                         result = [types.TextContent(type="text", text=json.dumps(payload, ensure_ascii=False, indent=2))] + list(result[1:])
                     except Exception:
                         pass
-                return result
+                return _apply_verdict_mode_result(result)
             except Exception as e:
                 return _ok({"world_id": pending.get("world_id"), "channel": "outcome",
                             "page_outcome": "errored", "action_id": action_id,
@@ -332,7 +352,8 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
                         "action_id": action_id, "accepted": True, "confidence": "high",
                         "why": "动作已排入同一网页世界的有序执行队列"})
         # 全部在专用单一 executor 线程执行(Playwright 同步 API 强线程亲和)
-        return await asyncio.get_event_loop().run_in_executor(_pw_executor, _impl_with_status, name, arguments)
+        result = await asyncio.get_event_loop().run_in_executor(_pw_executor, _impl_with_status, name, arguments)
+        return _apply_verdict_mode_result(result)
     except Exception as e:
         traceback.print_exc()
         return [types.TextContent(type="text", text=f"错误: {e}")]

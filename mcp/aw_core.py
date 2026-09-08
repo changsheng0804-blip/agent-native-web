@@ -128,6 +128,87 @@ def _lite_mode():
     return os.environ.get("AGENT_WORLD_LITE", "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _verdict_mode():
+    """消融实验开关(默认 full = 正常行为)。
+
+      full  正常:返回完整后果卡(含 page_outcome 五态判定)
+      no-verdict  L1:剥掉合成判定,但保留原始证据(errors/网络状态码/observed/why)
+      structure   L0:只保留结构信息,剥掉判定与证据(模拟无验证层)
+
+    用途:C1 消融实验——同一模型、同一任务,只改返回值,比较假成功率。
+    只影响对外返回,不改变内部记录(轨迹/缓存仍是完整卡)。
+    """
+    return os.environ.get("AGENT_WORLD_VERDICT_MODE", "full").strip().lower()
+
+
+# L0 保留的字段(纯结构/事实,不含任何"生效性"信号)
+_STRUCTURE_ONLY_KEYS = {
+    "world_id", "channel", "target", "action", "page", "overlays",
+    "sources", "evidence_seq", "changes_seq", "world_epoch", "status", "task_state",
+    "matches", "count", "ambiguous", "entities", "entity", "url", "title",
+}
+# L1 保留(结构 + 原始证据),剥掉的是合成判定
+_VERDICT_KEYS = {"page_outcome", "situation", "confidence", "why", "next", "recipes", "handoff", "effect"}
+
+
+def _strip_status_verdict(status):
+    """剥掉状态卡里泄漏判定的字段(消融实验用)。
+
+    status.task.last_outcome.page_outcome 是**合成判定**的回声,
+    若不清掉,即使主卡已剥离判定,模型仍能从状态卡读到结论。
+    """
+    if not isinstance(status, dict):
+        return status
+    out = dict(status)
+    task = out.get("task")
+    if isinstance(task, dict):
+        task = dict(task)
+        task.pop("last_outcome", None)
+        out["task"] = task
+    return out
+
+
+def _apply_verdict_mode(payload):
+    """按 AGENT_WORLD_VERDICT_MODE 裁剪后果卡(消融实验用;full 时原样返回)。
+
+    只裁剪**对外返回**,内部轨迹/缓存仍保存完整卡,保证实验可审计。
+    """
+    mode = _verdict_mode()
+    if mode == "full" or not isinstance(payload, dict):
+        return payload
+    out = dict(payload)
+    if mode == "no-verdict":
+        # L1:剥掉合成判定,但保留原始证据(errors 是事实,不是判定)
+        for k in _VERDICT_KEYS:
+            out.pop(k, None)
+        errs = payload.get("errors")
+        if errs is None:
+            errs = (payload.get("situation") or {}).get("errors")
+        if errs:
+            out["errors"] = errs
+        # action_evidence 里的 decision 是**合成结论**(如"已生效,继续下一步"),
+        # 会泄漏判定口径;只保留原始网络/DOM 证据(requests/failures/transition)。
+        ae = out.get("action_evidence")
+        if isinstance(ae, dict):
+            ae = {k: v for k, v in ae.items() if k != "decision"}
+            out["action_evidence"] = ae
+        out["status"] = _strip_status_verdict(out.get("status"))
+        # sources 里的 effect.verdict / why 来源标注会暗示"有判定存在",一并清掉
+        src = out.get("sources")
+        if isinstance(src, dict):
+            out["sources"] = {k: v for k, v in src.items() if not k.startswith(("effect.", "why"))}
+        out["verdict_mode"] = "no-verdict"
+    elif mode == "structure":
+        # L0:只保留结构/事实,剥掉判定与证据
+        out = {k: v for k, v in out.items() if k in _STRUCTURE_ONLY_KEYS}
+        out["status"] = _strip_status_verdict(out.get("status"))
+        src = out.get("sources")
+        if isinstance(src, dict):
+            out["sources"] = {k: v for k, v in src.items() if not k.startswith(("effect.", "why"))}
+        out["verdict_mode"] = "structure"
+    return out
+
+
 def _same_origin(left, right):
     try:
         a, b = urlsplit(str(left or "")), urlsplit(str(right or ""))
