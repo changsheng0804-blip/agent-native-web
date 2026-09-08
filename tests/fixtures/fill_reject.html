@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>fill reject fixture</title>
+  <style>
+    body { font-family: sans-serif; padding: 24px; }
+    label { display: block; margin-bottom: 8px; }
+    input { width: 280px; padding: 8px; }
+  </style>
+</head>
+<body>
+  <label for="reject-input">拒绝输入</label>
+  <input
+    id="reject-input"
+    name="reject-input"
+    placeholder="拒绝输入"
+    aria-label="拒绝输入"
+    oninput="this.value = ''"
+  >
+  <p>该输入框会在 input 事件中同步清空，用于模拟“动作正常返回但值没有落地”的静默失败。</p>
+</body>
+</html>

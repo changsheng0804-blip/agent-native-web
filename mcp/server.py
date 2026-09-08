@@ -51,10 +51,13 @@ Agent World MCP Server
 """
 import asyncio
 import json
+import logging
 import time
 import traceback
 import uuid
 from urllib.parse import urlsplit
+
+logger = logging.getLogger("agent-world.server")
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -88,6 +91,7 @@ from aw_core import (
 from aw_runtime import (  # noqa: F401
     SCREENSHOT_DIR,
     PROFILES_DIR,
+    _safe_profile_dir,
     VISUAL_RMS_THRESHOLD,
     ALL_IN_ONE,
     INJECT_JS,
@@ -571,7 +575,7 @@ def _t_world_open(args):
         page = context.pages[0] if context.pages else context.new_page()
         handle = browser
     elif profile:
-        profile_dir = PROFILES_DIR / str(profile)
+        profile_dir = _safe_profile_dir(profile)  # 路径约束:拒绝 ../ 与分隔符逃逸(#14)
         profile_dir.mkdir(parents=True, exist_ok=True)
         # 持久化上下文:cookie/会话按 profile 名复用
         context = pw.chromium.launch_persistent_context(
@@ -588,7 +592,8 @@ def _t_world_open(args):
                     context.clear_cookies()
                     context.add_cookies(state["cookies"])
             except Exception as e:
-                print(f"[world] storage state 恢复失败: {e}")
+                # stdio 的 stdout 是 MCP 协议流,运行时诊断走 logging(stderr)
+                logger.warning("storage state 恢复失败: %s", e)
         handle = context
         page = context.pages[0] if context.pages else context.new_page()
     else:

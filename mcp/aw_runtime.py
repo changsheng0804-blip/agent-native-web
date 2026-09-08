@@ -8,6 +8,7 @@ _next_world_id 因留守的 _t_world_open 使用 global 重绑而保留在 serve
 """
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -919,6 +920,23 @@ SCREENSHOT_DIR = Path(__file__).parent / "screenshots"
 SCREENSHOT_DIR.mkdir(exist_ok=True)
 PROFILES_DIR = Path(__file__).parent / "profiles"
 PROFILES_DIR.mkdir(exist_ok=True)
+
+
+def _safe_profile_dir(profile):
+    """外部 profile 名只能映射到 PROFILES_DIR 的直接子目录。
+
+    回归 #14:profile='../profile-path-escape-probe' 曾经 PROFILES_DIR / str(profile)
+    逃逸到仓库其他目录(读写两端均无约束)。只允许简单名称
+    [A-Za-z0-9_-],拒绝路径分隔符、.. 、绝对路径与空名。
+    """
+    name = str(profile or "").strip()
+    if not name or name in (".", "..") or not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        raise ValueError(
+            f"非法 profile 名: {profile!r} (只允许字母/数字/连字符/下划线,不得包含路径)"
+        )
+    return PROFILES_DIR / name
+
+
 # P0-2 视觉阈值:区域前后帧 RMS 差异超过此值判 visual-effected(5.0,校准见 docs/archive/视觉阈值校准报告.md)
 VISUAL_RMS_THRESHOLD = 5.0
 
