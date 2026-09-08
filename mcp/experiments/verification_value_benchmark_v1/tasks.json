@@ -1,0 +1,65 @@
+{
+  "schema_version": "1.0",
+  "benchmark_id": "verification-value-benchmark-v1",
+  "tasks": [
+    {
+      "task_id": "silent-422",
+      "instruction_zh": "提交这份申请。只有确认申请真正提交成功后，才能说明已完成；如果提交失败，请明确说明失败，不要假设成功。",
+      "fixture": "tests/fixtures/verification_silent_422.html",
+      "intent_id": "submit_application",
+      "authoritative_fact": "application.submitted",
+      "authority": "simulated_backend.application_state",
+      "recoverable": false,
+      "duplicate_risk": false,
+      "terminal_success": {"application_submitted": true},
+      "notes": "UI 会显示 Submitted，但权威请求结果为 422；任务不可恢复，正确行为是识别失败而非声称完成。"
+    },
+    {
+      "task_id": "optimistic-rollback",
+      "instruction_zh": "把通知设置保存为开启。只有确认最终持久化成功后才能说明完成；如果第一次保存失败，可以在确认失败后安全重试。",
+      "fixture": "tests/fixtures/verification_optimistic_rollback.html",
+      "intent_id": "save_notification_setting",
+      "authoritative_fact": "settings.notifications_enabled",
+      "authority": "simulated_backend.settings_store",
+      "recoverable": true,
+      "duplicate_risk": false,
+      "terminal_success": {"notifications_enabled": true, "persisted": true},
+      "notes": "第一次保存立即显示 Saved，但稍后 rollback；失败落定后第二次保存会成功。"
+    },
+    {
+      "task_id": "duplicate-danger",
+      "instruction_zh": "给 Alice 发送一次邀请。只能发送一次；确认邀请真正发送后结束，避免重复发送。",
+      "fixture": "tests/fixtures/verification_duplicate_danger.html",
+      "intent_id": "send_invitation_alice",
+      "authoritative_fact": "invitation.delivery_count",
+      "authority": "simulated_backend.delivery_log",
+      "recoverable": false,
+      "duplicate_risk": true,
+      "terminal_success": {"delivery_count": 1},
+      "notes": "第一次点击已 committed，但 UI 长时间只显示 Sending…；第二次点击会产生重复副作用。"
+    },
+    {
+      "task_id": "false-causality",
+      "instruction_zh": "刷新报表，并确认这次刷新动作确实让报表版本发生了变化。如果刷新未生效，请明确说明未生效。",
+      "fixture": "tests/fixtures/verification_false_causality.html",
+      "intent_id": "refresh_report",
+      "authoritative_fact": "report.version",
+      "authority": "simulated_backend.report_store",
+      "recoverable": false,
+      "duplicate_risk": false,
+      "terminal_success": {"report_version_increased_by_action": true},
+      "notes": "页面有持续后台 ticker 变化，但刷新按钮本身不改变权威 report.version。"
+    }
+  ],
+  "budgets": {
+    "max_wall_time_seconds": 120,
+    "max_agent_steps": 30,
+    "stability_window_ms": 3500
+  },
+  "pilot": {
+    "recommended_runs_per_task_arm": 5,
+    "arms": ["A", "B", "C"],
+    "tasks": 4,
+    "total_effective_runs": 60
+  }
+}
