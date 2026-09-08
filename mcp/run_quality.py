@@ -54,6 +54,7 @@ TIMEOUT_OVERRIDES = {
 # 原则:改文档/README → 不用跑;改工具逻辑 → 该工具相关的 scope;改内核 → 全量。
 # 全部合法 scope 可用 run_quality.py --list 查看。
 SCOPES = {
+    "质检入口-test_quality.py": ["governance"],
     # 脚本名(不含参数) -> [守护面]
     "test_enhancements.py": ["fill", "forms", "action"],
     "test_ipi_filter.py": ["kernel", "visibility"],
@@ -127,6 +128,7 @@ GROUPS = {
         "desc": "本地夹具测试(不依赖网络,快速稳定)",
         "timeout": 180,
         "scripts": [
+            "质检入口-test_quality.py",  # 选择器失败关闭、离线边界与报告路径
             "test_enhancements.py",   # 逐字打字/批量填表容错/状态卡 forms
             "test_ipi_filter.py",     # IPI 伪隐藏过滤 5 类阻断
             "test_wait_event.py",     # 事件驱动等待(命中/超时)
@@ -200,6 +202,31 @@ GROUPS = {
 ORDER = ["offline", "real", "special"]
 
 
+def select_scope(value, include_real=False, include_special=False):
+    """有离线覆盖的守护面默认只跑离线；真实站点专属面可显式选择。"""
+    requested = [part.strip() for part in value.split(",") if part.strip()]
+    known = {scope for scopes in SCOPES.values() for scope in scopes}
+    unknown = set(requested) - known - set(SCOPE_ALIASES)
+    if not requested or unknown:
+        raise ValueError(f"未知或空守护面: {', '.join(sorted(unknown)) or value}（见 --list）")
+    wanted = {scope for part in requested for scope in SCOPE_ALIASES.get(part, [part])}
+    offline_faces = {scope for script in GROUPS['offline']['scripts']
+                     for scope in SCOPES.get(script.split()[0], [])}
+    # 按显式输入判断，避免 kernel 别名展开 identity 后意外访问真实网站。
+    exclusive = set(requested) - offline_faces - set(SCOPE_ALIASES)
+    groups = ['offline']
+    for group, enabled in [('real', include_real), ('special', include_special)]:
+        faces = {scope for script in GROUPS[group]['scripts']
+                 for scope in SCOPES.get(script.split()[0], [])}
+        if enabled or exclusive & faces:
+            groups.append(group)
+    targets = [script for group in groups for script in GROUPS[group]['scripts']
+               if wanted & set(SCOPES.get(script.split()[0], []))]
+    if not targets:
+        raise ValueError(f"守护面 {value} 没有匹配到任何测试")
+    return list(dict.fromkeys(targets)), groups
+
+
 # ── 前置检查:all-in-one.js 与分文件一致性 ─────────────────────
 def check_all_in_one():
     """复用构建脚本逻辑做纯对比(不写文件):manifest 顺序合并 vs 现有 all-in-one.js"""
@@ -269,7 +296,7 @@ def write_report(results, checks, groups_run, started):
     lines = [
         "# 质检报告 (Quality Gate)",
         "",
-        f"> 运行时间:{time.strftime('%Y-%m-%d %H:%M:%S')}  耗时合计:{sum(r['elapsed'] for r in results):.1f}s",
+        f"> 运行时间:{time.strftime('%Y-%m-%d %H:%M:%S %z')}  实际耗时:{time.time() - started:.1f}s；脚本耗时合计:{sum(r['elapsed'] for r in results):.1f}s",
         f"> 命令群组:{', '.join(groups_run)}",
         "",
         "## 汇总",
@@ -300,6 +327,7 @@ def write_report(results, checks, groups_run, started):
             lines.append(summarize_output(r["output"], r["status"]))
             lines.append("```")
             lines.append("")
+    REPORT.parent.mkdir(parents=True, exist_ok=True)
     REPORT.write_text("\n".join(lines), encoding="utf-8")
 
 
@@ -329,6 +357,10 @@ def main():
     ap.add_argument("--parallel", type=int, default=1, metavar="N",
                     help="并行跑 N 个测试(默认 1=串行;offline 全量建议 3,约 13 分钟→5 分钟。注意每个测试会拉起独立浏览器,内存有限时用 2)")
     args = ap.parse_args()
+    if args.parallel < 1:
+        ap.error("--parallel 必须为正整数")
+    if args.only and (args.scope or args.real or args.all):
+        ap.error("--only 不能与 --scope、--real 或 --all 混用")
 
     # --report 覆盖默认报告路径(默认 mcp/quality_report.md)
     if args.report:
@@ -351,35 +383,11 @@ def main():
         targets = [args.only]
         groups_run = [f"only:{args.only}"]
     elif args.scope:
-        # 展开别名 + 逗号分隔的面,收集覆盖这些面的所有测试。
-        # 只由 offline 组覆盖的面:只扫 offline 组。task-runtime 虽有两个真站
-        # 任务图测试(test_real_github_task_graph*.py),但它们还带 real-site 面,
-        # 要跑真站请显式 --scope real-site——避免 --scope task-runtime 误拉慢速真站。
-        offline_only_faces = {"fill", "forms", "action", "kernel", "observer", "visibility",
-                              "shadow", "ipi", "judgment", "challenge", "channels", "guide",
-                              "visual", "screenshot", "receipt", "task-runtime"}
-        wanted = set()
-        for part in [p.strip() for p in args.scope.split(",") if p.strip()]:
-            if part in SCOPE_ALIASES:
-                wanted.update(SCOPE_ALIASES[part])
-            elif part in {s for v in SCOPES.values() for s in v}:
-                wanted.add(part)
-            else:
-                print(f"⚠️ 未知 scope: {part}(见 --list 的守护面/别名)")
-        include_real = bool(wanted - offline_only_faces)
-        order = ORDER if include_real else ["offline"]
-        targets = []
-        for g in order:
-            for s in GROUPS[g]["scripts"]:
-                name = s.split()[0]
-                scopes = SCOPES.get(name, [])
-                if scopes and set(scopes) & wanted:
-                    targets.append(s)
-        targets = list(dict.fromkeys(targets))  # 去重保序
-        groups_run = [f"scope:{args.scope}" + ("(含real)" if include_real else "")]
-        if not targets:
-            print(f"❌ scope={args.scope} 没有匹配到任何测试")
-            sys.exit(2)
+        try:
+            targets, selected_groups = select_scope(args.scope, args.real or args.all, args.all)
+        except ValueError as exc:
+            ap.error(str(exc))
+        groups_run = [f"scope:{args.scope}", *selected_groups]
     elif args.all:
         targets = [s for g in ORDER for s in GROUPS[g]["scripts"]]
         groups_run = ORDER

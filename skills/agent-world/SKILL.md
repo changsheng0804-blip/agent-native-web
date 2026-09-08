@@ -1,6 +1,6 @@
 ---
 name: agent-world
-description: Comprehensive Web Navigation, Scraping, Form Filling, and Multi-step Interaction Skill powered by Agent-World MCP (Native Web World: CAD Blueprint + Video Changelog + Status Dashboard).
+description: 基于智能体原生网页工具的网页导览、信息提取、表单填写与多步骤交互技能，提供结构视图、实时变化和状态反馈。
 ---
 
 # Agent World 网页交互与自动化技能包

@@ -1747,7 +1747,13 @@ window.AgentRuntime = window.AgentRuntime || {};
       // 标签
       const label = document.createElement('span');
       label.style.cssText = `position:absolute;top:-14px;left:0;font-size:9px;font-family:monospace;color:${color};background:rgba(0,0,0,0.7);padding:1px 4px;border-radius:2px;white-space:nowrap;`;
-      label.textContent = el.semantic;
+      const roleNames = { navigation: '导航', button: '按钮', link: '链接', input: '输入框',
+        heading: '标题', banner: '页眉', contentinfo: '页脚', dialog: '对话框', card: '卡片',
+        content: '内容', img: '图片', tab: '选项卡', tablist: '选项卡组', menu: '菜单',
+        menuitem: '菜单项', list: '列表', listitem: '列表项', textbox: '文本框',
+        combobox: '组合框', checkbox: '复选框', radio: '单选框', option: '选项',
+        alert: '提示', alertdialog: '提示对话框', search: '搜索', form: '表单', region: '区域' };
+      label.textContent = roleNames[el.semantic] || '其他元素';
       div.appendChild(label);
       
       container.appendChild(div);

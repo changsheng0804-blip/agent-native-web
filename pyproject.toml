@@ -10,6 +10,9 @@ dependencies = [
     "httpx",          # mcp/experiments/llm_agent.py 直接 import(显式登记,原为传递依赖)
 ]
 
+[project.optional-dependencies]
+dev = ["ruff==0.15.6", "packaging>=24", "tomli>=2; python_version<'3.11'"]
+
 [tool.ruff]
 line-length = 120
 target-version = "py310"

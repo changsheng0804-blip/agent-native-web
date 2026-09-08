@@ -596,7 +596,7 @@ async def main():
 
             # 写报告
             lines = ["# 实时闭环反馈 · 实战验证报告\n"]
-            lines.append(f"> 日期:2026-08-31 · 通过线:TP+TN ≥ 80% 且 FP=0\n")
+            lines.append(f"> 日期:{time.strftime('%Y-%m-%d %H:%M:%S %z')} · 通过线:TP+TN ≥ 80% 且 FP=0\n")
             lines.append(f"## 结果\n")
             lines.append("| 场景 | 分类 | verdict | confidence | truth |")
             lines.append("|---|---|---|---|---|")

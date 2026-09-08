@@ -21,3 +21,7 @@ mcp/experiments/artifacts/
 # Python 虚拟环境
 .venv/
 uv.lock
+
+# 本地治理证据与自定义报告
+.治理证据-evidence/
+mcp/复查*-quality.md

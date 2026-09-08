@@ -1,4 +1,4 @@
-name: CI
+name: 工程验收
 
 on:
   push:
@@ -6,37 +6,61 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  smoke:
+  offline:
+    name: 离线验收 (${{ matrix.python }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.12']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.12"
-      - uses: actions/setup-node@v4
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: "20"
-      - name: 安装依赖
+          node-version: '22'
+      - name: 按锁定清单安装依赖
         run: |
-          pip install "mcp>=1.29,<2" playwright pillow
-          playwright install --with-deps chromium
-      - name: 扩展内核合并文件语法检查
-        run: node --check extension/all-in-one.js
-      - name: ruff 正确性检查
+          python -m pip install -r 依赖锁定-requirements.txt
+          python -m pip check
+          python -m playwright install --with-deps chromium
+      - name: 工程一致性与正确性检查
         run: |
-          pip install ruff
-          ruff check mcp
-      - name: 门禁冒烟(协议收口)
-        run: python mcp/run_quality.py --only test_protocol.py --report mcp/quality_protocol.md
-      - name: 门禁冒烟(小票标准)
+          python scripts/工程治理-check.py
+          python -m ruff check mcp scripts
+          node --check extension/all-in-one.js
+      - name: 完整离线门禁（包含零假成功验证）
+        run: python mcp/run_quality.py --parallel 3 --report .治理证据-evidence/离线验收-quality.md
+      - name: 保存验收证据
         if: ${{ !cancelled() }}
-        run: python mcp/run_quality.py --only test_receipt.py --report mcp/quality_receipt.md
-      - name: 上传门禁报告(失败时)
-        if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: quality-report
-          path: mcp/quality_*.md
-          if-no-files-found: ignore
+          name: 离线验收-python-${{ matrix.python }}
+          path: |
+            .治理证据-evidence/*.md
+            mcp/validate_report.md
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+
+  acceptance:
+    name: 工程验收
+    if: ${{ always() }}
+    needs: offline
+    runs-on: ubuntu-latest
+    steps:
+      - name: 核对全部验收结果
+        env:
+          RESULT: ${{ needs.offline.result }}
+        run: test "$RESULT" = success
