@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Agent-Native Canvas Lab</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; background: #f7f7f7; }
+    canvas { display: block; border: 1px solid #bbb; background: white; }
+    #note { max-width: 680px; color: #444; }
+  </style>
+</head>
+<body>
+  <h1>Agent-Native Canvas Lab</h1>
+  <p id="note">画布中的图形没有 DOM 子节点；结构状态由独立的 agentCanvas 世界接口提供。</p>
+  <canvas id="world" width="640" height="480"></canvas>
+
+<script>
+(() => {
+  const canvas = document.getElementById('world');
+  const ctx = canvas.getContext('2d');
+  const scene = { revision: 0, objects: [], events: [] };
+  let actionSeq = 0;
+
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function objectById(id) {
+    return scene.objects.find(o => o.id === id) || null;
+  }
+
+  function drawStar(x, y, radius, points, fill) {
+    ctx.beginPath();
+    for (let i = 0; i < points * 2; i += 1) {
+      const r = i % 2 === 0 ? radius : radius * 0.45;
+      const angle = -Math.PI / 2 + i * Math.PI / points;
+      const px = x + Math.cos(angle) * r;
+      const py = y + Math.sin(angle) * r;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    for (const obj of scene.objects) {
+      if (obj.type === 'circle') {
+        ctx.beginPath();
+        ctx.arc(obj.center[0], obj.center[1], obj.radius, 0, Math.PI * 2);
+        ctx.fillStyle = obj.fill;
+        ctx.fill();
+      } else if (obj.type === 'star') {
+        drawStar(obj.center[0], obj.center[1], obj.radius, obj.points, obj.fill);
+      }
+    }
+  }
+
+  function visualHash() {
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    let hash = 2166136261 >>> 0;
+    for (let i = 0; i < data.length; i += 97) {
+      hash ^= data[i];
+      hash = Math.imul(hash, 16777619) >>> 0;
+    }
+    return hash.toString(16).padStart(8, '0');
+  }
+
+  function relations() {
+    const circle = scene.objects.find(o => o.type === 'circle');
+    const star = scene.objects.find(o => o.type === 'star');
+    if (!circle || !star) return {};
+    const dx = star.center[0] - circle.center[0];
+    const dy = star.center[1] - circle.center[1];
+    const distance = Math.hypot(dx, dy);
+    return {
+      star_to_circle_center_delta: [dx, dy],
+      center_distance: distance,
+      star_inside_circle: distance + star.radius <= circle.radius,
+    };
+  }
+
+  function observe() {
+    return {
+      kind: 'agent-native-canvas',
+      revision: scene.revision,
+      canvas: { width: canvas.width, height: canvas.height },
+      objects: clone(scene.objects),
+      relations: relations(),
+      visual_hash: visualHash(),
+      last_event: scene.events.length ? clone(scene.events[scene.events.length - 1]) : null,
+    };
+  }
+
+  function commit(actionId, kind, beforeRevision, beforeHash, details) {
+    render();
+    const afterHash = visualHash();
+    const changed = scene.revision !== beforeRevision || afterHash !== beforeHash;
+    const event = {
+      action_id: actionId,
+      kind,
+      outcome: changed ? 'progressed' : 'unchanged',
+      before_revision: beforeRevision,
+      after_revision: scene.revision,
+      visual_hash_before: beforeHash,
+      visual_hash_after: afterHash,
+      details: details || {},
+    };
+    scene.events.push(event);
+    return clone(event);
+  }
+
+  function act(action) {
+    const actionId = `canvas_action_${++actionSeq}`;
+    const beforeRevision = scene.revision;
+    const beforeHash = visualHash();
+    const kind = String(action && action.kind || '');
+
+    try {
+      if (kind === 'reset') {
+        if (scene.objects.length) {
+          scene.objects = [];
+          scene.revision += 1;
+        }
+        return commit(actionId, kind, beforeRevision, beforeHash);
+      }
+
+      if (kind === 'create_circle') {
+        if (!action.id || objectById(action.id)) throw new Error('circle id 缺失或重复');
+        scene.objects.push({
+          id: String(action.id), type: 'circle',
+          center: [Number(action.center[0]), Number(action.center[1])],
+          radius: Number(action.radius), fill: String(action.fill),
+        });
+        scene.revision += 1;
+        return commit(actionId, kind, beforeRevision, beforeHash, { created: String(action.id) });
+      }
+
+      if (kind === 'create_star') {
+        if (!action.id || objectById(action.id)) throw new Error('star id 缺失或重复');
+        scene.objects.push({
+          id: String(action.id), type: 'star',
+          center: [Number(action.center[0]), Number(action.center[1])],
+          radius: Number(action.radius), points: Number(action.points || 5), fill: String(action.fill),
+        });
+        scene.revision += 1;
+        return commit(actionId, kind, beforeRevision, beforeHash, { created: String(action.id) });
+      }
+
+      if (kind === 'move') {
+        const obj = objectById(String(action.id));
+        if (!obj) throw new Error(`object 不存在: ${action.id}`);
+        const dx = Number(action.dx || 0);
+        const dy = Number(action.dy || 0);
+        if (dx !== 0 || dy !== 0) {
+          obj.center[0] += dx;
+          obj.center[1] += dy;
+          scene.revision += 1;
+        }
+        return commit(actionId, kind, beforeRevision, beforeHash, { id: obj.id, dx, dy });
+      }
+
+      throw new Error(`不支持的 action.kind: ${kind}`);
+    } catch (error) {
+      const event = {
+        action_id: actionId,
+        kind,
+        outcome: 'errored',
+        before_revision: beforeRevision,
+        after_revision: scene.revision,
+        visual_hash_before: beforeHash,
+        visual_hash_after: visualHash(),
+        error: String(error.message || error),
+      };
+      scene.events.push(event);
+      return clone(event);
+    }
+  }
+
+  function verify(spec) {
+    const circle = objectById(spec.circle_id);
+    const star = objectById(spec.star_id);
+    if (!circle || !star) {
+      return { matched: false, reason: 'required object missing', revision: scene.revision };
+    }
+    const dx = star.center[0] - circle.center[0];
+    const dy = star.center[1] - circle.center[1];
+    const centerError = Math.hypot(dx, dy);
+    const contained = centerError + star.radius <= circle.radius;
+    const circleColorOk = circle.fill.toLowerCase() === String(spec.circle_fill).toLowerCase();
+    const starColorOk = star.fill.toLowerCase() === String(spec.star_fill).toLowerCase();
+    const tolerance = Number(spec.center_tolerance_px || 0);
+    return {
+      matched: centerError <= tolerance && contained && circleColorOk && starColorOk,
+      revision: scene.revision,
+      center_delta: [dx, dy],
+      center_error_px: centerError,
+      contained,
+      circle_color_ok: circleColorOk,
+      star_color_ok: starColorOk,
+      visual_hash: visualHash(),
+    };
+  }
+
+  window.agentCanvas = Object.freeze({ observe, act, verify });
+  render();
+})();
+</script>
+</body>
+</html>
