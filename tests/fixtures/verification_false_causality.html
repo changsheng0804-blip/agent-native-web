@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Verification Benchmark — False Causality</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:720px;margin:48px auto;padding:0 20px;background:#f7f7f7;color:#222}.card{background:#fff;border:1px solid #ddd;border-radius:12px;padding:24px}button{font-size:16px;padding:10px 18px;cursor:pointer}.status{margin-top:18px;padding:12px;border-radius:8px;background:#eee}.live{margin-top:12px;color:#555}
+</style>
+</head>
+<body>
+<div class="card">
+<h1>Report</h1>
+<p id="version">Report version: 10</p>
+<button id="refresh">Refresh report</button>
+<div id="status" class="status">Ready</div>
+<div id="live" class="live">Live activity: 0</div>
+</div>
+<script>
+(() => {
+  const button=document.getElementById('refresh');
+  const status=document.getElementById('status');
+  const live=document.getElementById('live');
+  const versionEl=document.getElementById('version');
+  const state={action_seq:0,report_version:10,initial_report_version:10,background_seq:0,events:[]};
+  const clone=v=>JSON.parse(JSON.stringify(v));
+  let interval=null;
+  function startBackground(){
+    if(interval) clearInterval(interval);
+    interval=setInterval(()=>{
+      state.background_seq+=1;
+      state.events.push({type:'background.websocket',background_seq:state.background_seq,report_version:state.report_version});
+      live.textContent='Live activity: '+state.background_seq;
+    },350);
+  }
+  function reset(){
+    Object.assign(state,{action_seq:0,report_version:10,initial_report_version:10,background_seq:0,events:[]});
+    versionEl.textContent='Report version: 10';status.textContent='Ready';live.textContent='Live activity: 0';button.disabled=false;
+    startBackground();return snapshot();
+  }
+  function refresh(){
+    const before=state.report_version;
+    state.action_seq+=1;
+    state.events.push({seq:state.action_seq,type:'refresh_report',before_version:before,after_version:state.report_version,effected:false});
+    status.textContent='Refresh requested';
+  }
+  button.addEventListener('click',refresh);
+  function snapshot(){return clone({task_id:'false-causality',...state,ui_status:status.textContent,ui_live:live.textContent});}
+  function verifier(){
+    const changedByAction=state.report_version>state.initial_report_version;
+    return clone({task_id:'false-causality',intent_id:'refresh_report',status:state.action_seq?(changedByAction?'committed':'unchanged'):'unchanged',terminal:state.action_seq>0,
+      causality:changedByAction?'action_bound':'background_changes_unrelated',
+      evidence:[
+        {source:'simulated_backend.report_store',trust:'authoritative',before_version:state.initial_report_version,after_version:state.report_version},
+        {source:'background.websocket',trust:'evidence',background_event_count:state.background_seq},
+        {source:'ui.status',trust:'untrusted',text:status.textContent}
+      ],
+      why:state.action_seq?(changedByAction?'权威 report.version 已由动作推进。':'页面虽有持续后台变化，但 refresh intent 未改变权威 report.version。'):'尚未执行刷新动作。'});
+  }
+  function hiddenJudge(){
+    const success=state.report_version>state.initial_report_version;
+    return clone({terminal:state.action_seq>0,task_success:success,
+      authoritative_state:{initial_report_version:state.initial_report_version,report_version:state.report_version,background_seq:state.background_seq},
+      duplicate_effect_count:0,last_verifier_status:verifier().status});
+  }
+  window.verificationBench=Object.freeze({reset,snapshot,verifier,hiddenJudge});
+  reset();
+})();
+</script>
+</body>
+</html>

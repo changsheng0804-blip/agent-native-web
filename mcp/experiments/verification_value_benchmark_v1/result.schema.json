@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "verification-value-benchmark-v1.result.schema.json",
+  "title": "Verification Value Benchmark v1 Run",
+  "type": "object",
+  "required": [
+    "run_id", "benchmark_id", "task_id", "arm", "model", "started_at", "elapsed_ms",
+    "claimed_success", "task_success", "false_positive", "premature_completion",
+    "unsafe_duplicate_effect", "computer_use_actions", "retries", "verifier_packets",
+    "gate_blocks", "invalid_run", "invalid_reason", "final_judge", "raw_trace_path"
+  ],
+  "properties": {
+    "run_id": {"type": "string", "minLength": 1},
+    "benchmark_id": {"const": "verification-value-benchmark-v1"},
+    "task_id": {"enum": ["silent-422", "optimistic-rollback", "duplicate-danger", "false-causality"]},
+    "arm": {"enum": ["A", "B", "C"]},
+    "model": {"type": "string", "minLength": 1},
+    "harness_version": {"type": ["string", "null"]},
+    "started_at": {"type": "string", "minLength": 1},
+    "elapsed_ms": {"type": "integer", "minimum": 0},
+    "claimed_success": {"type": "boolean"},
+    "task_success": {"type": "boolean"},
+    "false_positive": {"type": "boolean"},
+    "premature_completion": {"type": "boolean"},
+    "unsafe_duplicate_effect": {"type": "boolean"},
+    "recovery_attempted": {"type": "boolean"},
+    "recovery_success": {"type": ["boolean", "null"]},
+    "computer_use_actions": {"type": "integer", "minimum": 0},
+    "screenshots": {"type": "integer", "minimum": 0},
+    "retries": {"type": "integer", "minimum": 0},
+    "verifier_packets": {"type": "integer", "minimum": 0},
+    "gate_blocks": {"type": "integer", "minimum": 0},
+    "pending_wait_ms": {"type": "integer", "minimum": 0},
+    "tokens_in": {"type": ["integer", "null"], "minimum": 0},
+    "tokens_out": {"type": ["integer", "null"], "minimum": 0},
+    "final_model_text": {"type": ["string", "null"]},
+    "first_success_claim_ms": {"type": ["integer", "null"], "minimum": 0},
+    "invalid_run": {"type": "boolean"},
+    "invalid_reason": {"type": ["string", "null"]},
+    "final_judge": {
+      "type": "object",
+      "required": ["terminal", "task_success", "authoritative_state"],
+      "properties": {
+        "terminal": {"type": "boolean"},
+        "task_success": {"type": "boolean"},
+        "authoritative_state": {"type": "object"},
+        "duplicate_effect_count": {"type": ["integer", "null"], "minimum": 0},
+        "last_verifier_status": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "raw_trace_path": {"type": "string", "minLength": 1}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"invalid_run": {"const": true}}},
+      "then": {"properties": {"invalid_reason": {"type": "string", "minLength": 1}}}
+    },
+    {
+      "if": {"properties": {"invalid_run": {"const": false}}},
+      "then": {"properties": {"invalid_reason": {"type": "null"}}}
+    }
+  ],
+  "additionalProperties": true
+}
