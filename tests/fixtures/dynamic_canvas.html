@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>dynamic_canvas — Phase 0 机制验证夹具</title>
+<style>
+  body { margin: 0; font-family: Consolas, monospace; background: #0d1628; color: #cfe0f2; font-size: 12px; }
+  table { border-collapse: collapse; margin: 8px; }
+  td { width: 12px; height: 12px; padding: 0; border: 0.5px solid rgba(255,255,255,.07); }
+  #info { padding: 6px 10px; }
+</style>
+</head>
+<body>
+<div id="info">dynamic_canvas fixture — 等待 __dc.startPhase0()</div>
+<table id="grid"></table>
+<script>
+/* 动态画布夹具(Phase 0 机制验证,预注册协议 §1)
+ * 依赖:无(纯 DOM,离线可跑)。注入器持有 ground truth(每次 DOM 变更盖 cause 章),
+ * 观察者 = MutationObserver 事件驱动(无轮询,无漏计)。
+ * 预注册判据:docs/实验方案-动态画布实时反馈预注册.md §1 P0.1-P0.5
+ */
+(function () {
+  var COLS = 24, ROWS = 18, BG = "#101a3d";
+  var table = document.getElementById("grid");
+  var tds = [];
+  for (var r = 0; r < ROWS; r++) {
+    var tr = document.createElement("tr"), row = [];
+    for (var c = 0; c < COLS; c++) {
+      var td = document.createElement("td");
+      td.dataset.r = r; td.dataset.c = c;
+      td.style.backgroundColor = BG;
+      tr.appendChild(td); row.push(td);
+    }
+    table.appendChild(tr); tds.push(row);
+  }
+
+  function normColor(col) {
+    if (!col) return "";
+    col = String(col).trim();
+    if (col.charAt(0) === "#") {
+      var h = col.slice(1); if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+      return "rgb(" + parseInt(h.slice(0,2),16) + ", " + parseInt(h.slice(2,4),16) + ", " + parseInt(h.slice(4,6),16) + ")";
+    }
+    return col;
+  }
+
+  // ===== 动作定义(区域互不重叠)=====
+  var ACTIONS = {
+    A1: { color: "#e74c3c", r0: 2,  r1: 9,  c0: 2,  c1: 13 },  // 96 格,无故障
+    A2: { color: "#3498db", r0: 2,  r1: 7,  c0: 16, c1: 23 },  // 48 格,F1 延迟 900ms
+    A3: { color: "#9b59b6", r0: 10, r1: 17, c0: 2,  c1: 11 },  // 80 格,F2 乐观回滚 20 格 @800ms
+    A4: { color: "#e67e22", r0: 10, r1: 15, c0: 14, c1: 23 }   // 60 格,F4 静默丢失 30%
+  };
+  var GATE = { color: "#2ecc71", cells: [] };
+  for (var c = 0; c < 8; c++) GATE.cells.push([0, c]);
+
+  function cellsOf(a) {
+    var out = [];
+    for (var r = a.r0; r <= a.r1; r++) for (var c = a.c0; c <= a.c1; c++) out.push([r, c]);
+    return out;
+  }
+
+  // ===== 注入器(ground truth:每次 DOM 变更盖 cause 章)=====
+  var injLog = [];                 // {ts, r, c, from, to, cause}
+  var pendingDelayed = 0;
+  var driftOn = false, driftTimer = null, driftChanges = 0;
+  var CORRUPT = ["#7a7a7a", "#3f7f3f", "#8f2f2f"];
+
+  function setCell(r, c, color, cause) {
+    var td = tds[r][c];
+    var from = normColor(td.style.backgroundColor);
+    var to = normColor(color);
+    if (from === to) return;                             // 无实际变化,不产生 ground truth
+    td.style.backgroundColor = color;
+    injLog.push({ ts: Date.now(), r: r, c: c, from: from, to: to, cause: cause });
+    if (cause === "drift") driftChanges++;
+  }
+  function paintCells(cells, color, cause) { cells.forEach(function (rc) { setCell(rc[0], rc[1], color, cause); }); }
+
+  var windows = {};                // id → {color, r0,r1,c0,c1, open, lastActivity}
+  function openWindow(id) {
+    var a = ACTIONS[id] || (id === "gate" ? { color: GATE.color, r0: 0, r1: 0, c0: 0, c1: 7 } : null);
+    windows[id] = { color: normColor(a.color), r0: a.r0, r1: a.r1, c0: a.c0, c1: a.c1, open: true, lastActivity: Date.now() };
+  }
+
+  function applyAction(id, faults) {
+    faults = faults || {};
+    var a = ACTIONS[id], cells = cellsOf(a), pre = {};
+    cells.forEach(function (rc) { pre[rc[0] + "_" + rc[1]] = normColor(tds[rc[0]][rc[1]].style.backgroundColor); });
+    var applyList = cells;
+    if (faults.loss) {                                   // F4:确定性丢弃 30%(i%10 ∈ {7,8,9})
+      applyList = cells.filter(function (rc, i) { return (i % 10) < 7; });
+    }
+    openWindow(id);
+    if (faults.delay) {                                  // F1:延迟可见
+      pendingDelayed++;
+      setTimeout(function () { paintCells(applyList, a.color, "action"); pendingDelayed--; }, faults.delay);
+    } else {
+      paintCells(applyList, a.color, "action");
+    }
+    if (faults.rollback) {                               // F2:乐观回滚
+      setTimeout(function () {
+        var shuffled = applyList.slice().sort(function () { return Math.random() - 0.5; });
+        var victims = shuffled.slice(0, faults.rollback.count || 20);
+        victims.forEach(function (rc) { setCell(rc[0], rc[1], pre[rc[0] + "_" + rc[1]], "rollback"); });
+      }, faults.rollback.afterMs || 800);
+    }
+    return { id: id, intended: cells.length, applied: applyList.length };
+  }
+
+  function startDrift() {                                // F3:背景自变(300ms 翻 1 格)
+    if (driftOn) return; driftOn = true;
+    driftTimer = setInterval(function () {
+      if (!driftOn) return;
+      var r = Math.floor(Math.random() * ROWS), c = Math.floor(Math.random() * COLS);
+      var bad = CORRUPT[Math.floor(Math.random() * CORRUPT.length)];
+      setCell(r, c, bad, "drift");
+    }, 300);
+  }
+  function pauseDrift() { driftOn = false; if (driftTimer) { clearInterval(driftTimer); driftTimer = null; } }
+
+  // ===== 闸门(在途锁:未出结果前,同语义动作只允许一次)=====
+  var gate = { attempts: 0, applied: 0, blocked: 0, inFlight: null };
+  function tryAction(id) {
+    gate.attempts++;
+    if (gate.inFlight) { gate.blocked++; return { allowed: false, reason: "in-flight" }; }
+    gate.inFlight = id;
+    openWindow("gate");
+    paintCells(GATE.cells, GATE.color, "action");
+    gate.applied++;
+    return { allowed: true };
+  }
+
+  // ===== 观察者(MutationObserver 事件驱动)=====
+  var observed = [];               // {r, c, to, cls}
+  var regionReopen = { A1: 0, A2: 0, A3: 0, A4: 0 };
+  var agentByRegion = { A1: 0, A2: 0, A3: 0, A4: 0 };
+  var regionOwner = {};
+  Object.keys(ACTIONS).forEach(function (id) {
+    var a = ACTIONS[id];
+    for (var r = a.r0; r <= a.r1; r++) for (var c = a.c0; c <= a.c1; c++) regionOwner[r + "_" + c] = id;
+  });
+  var lastChangeTs = 0, quietTimer = null;
+  var SETTLE_MS = 400;
+  var settledCount = 0, settledFp = 0, latencies = [];
+  var batchCosts = [];
+
+  var mo = new MutationObserver(function (muts) {
+    var bt0 = performance.now();
+    muts.forEach(function (m) {
+      var td = m.target;
+      if (!td.dataset || td.dataset.r === undefined) return;
+      var r = +td.dataset.r, c = +td.dataset.c;
+      var from = normColor((m.oldValue || "").split(":").pop());
+      var to = normColor(td.style.backgroundColor);
+      if (from === to) return;
+      lastChangeTs = performance.now();
+      // 归因:窗口开启 ∧ 在区域内 ∧ 颜色=动作签名 → agent;否则 environment
+      var cls = "environment";
+      for (var id in windows) {
+        var w = windows[id]; if (!w.open) continue;
+        if (r >= w.r0 && r <= w.r1 && c >= w.c0 && c <= w.c1 && to === w.color) {
+          cls = "agent"; w.lastActivity = lastChangeTs; break;
+        }
+      }
+      if (cls === "agent") {
+        var owner = regionOwner[r + "_" + c];
+        if (owner) agentByRegion[owner]++;
+      } else {
+        var owner2 = regionOwner[r + "_" + c];
+        if (owner2 && windows[owner2] && !windows[owner2].open) regionReopen[owner2]++;   // 已结算区域被翻动 = 回滚/侵蚀信号
+      }
+      observed.push({ r: r, c: c, to: to, cls: cls });
+      // settled 重臂:静默 SETTLE_MS 且无在途延迟 → 稳定
+      if (quietTimer) clearTimeout(quietTimer);
+      quietTimer = setTimeout(function () {
+        for (var id in windows) { var w = windows[id];
+          if (w.open && performance.now() - w.lastActivity >= SETTLE_MS) w.open = false; }
+        if (pendingDelayed > 0) return;              // 有延迟未落地,不许宣布稳定(防误报)
+        settledCount++;
+        latencies.push(Math.round(performance.now() - lastChangeTs));
+      }, SETTLE_MS);
+    });
+    batchCosts.push(performance.now() - bt0);
+  });
+  mo.observe(table, { subtree: true, attributes: true, attributeFilter: ["style"], attributeOldValue: true });
+
+  // ===== Phase 0 场景(自驱动)=====
+  function sleep(ms) { return new Promise(function (res) { setTimeout(res, ms); }); }
+  var started = false, done = false, report = null;
+
+  function buildReport() {
+    var injKeys = injLog.map(function (e) { return e.r + "_" + e.c + "_" + e.to; }).sort();
+    var obsKeys = observed.map(function (e) { return e.r + "_" + e.c + "_" + e.to; }).sort();
+    var matched = 0, total = Math.max(injKeys.length, obsKeys.length);
+    for (var i = 0; i < Math.min(injKeys.length, obsKeys.length); i++) if (injKeys[i] === obsKeys[i]) matched++;
+    var accuracy = (injKeys.length === obsKeys.length && matched === injKeys.length) ? 1.0
+      : +(matched / Math.max(1, injKeys.length)).toFixed(4);
+    // 诊断:双方各自独有的键样本(定位归因偏差用)
+    var injSet = {}, obsSet = {};
+    injKeys.forEach(function (k) { injSet[k] = (injSet[k] || 0) + 1; });
+    obsKeys.forEach(function (k) { obsSet[k] = (obsSet[k] || 0) + 1; });
+    var injOnly = [], obsOnly = [];
+    injKeys.forEach(function (k) { if (!(k in obsSet) && injOnly.length < 8) injOnly.push(k); });
+    obsKeys.forEach(function (k) { if (!(k in injSet) && obsOnly.length < 8) obsOnly.push(k); });
+    var injOnlyCount = injKeys.filter(function (k) { return !(k in obsSet); }).length;
+    var obsOnlyCount = obsKeys.filter(function (k) { return !(k in injSet); }).length;
+    var agent = observed.filter(function (e) { return e.cls === "agent"; }).length;
+    var avg = batchCosts.length ? +(batchCosts.reduce(function (a, b) { return a + b; }, 0) / batchCosts.length).toFixed(2) : 0;
+    return {
+      attribution: { total: observed.length, agent: agent,
+                     environment: observed.length - agent, injCount: injLog.length,
+                     matched: matched, accuracy: accuracy },
+      debug: { injOnlyCount: injOnlyCount, obsOnlyCount: obsOnlyCount, injOnly: injOnly, obsOnly: obsOnly },
+      settled: { count: settledCount, falsePositives: settledFp,
+                 maxLatencyMs: latencies.length ? Math.max.apply(null, latencies) : 0 },
+      gate: { attempts: gate.attempts, applied: gate.applied, blocked: gate.blocked },
+      rollback: { injected: 20, detected: regionReopen.A3 },
+      loss: { injected: 60, dropped: 18, applied: 42, observedAgentChanges: agentByRegion.A4 },
+      drift: { changes: driftChanges },
+      cost: { batches: batchCosts.length, avgMs: avg,
+              maxMs: batchCosts.length ? +Math.max.apply(null, batchCosts).toFixed(2) : 0 }
+    };
+  }
+
+  async function runPhase0() {
+    // A1 无故障 → settled
+    applyAction("A1", {});
+    await sleep(1100);
+    // F3 背景自变
+    startDrift();
+    await sleep(800);
+    // A2 F1 延迟可见 900ms
+    applyAction("A2", { delay: 900 });
+    await sleep(2300);
+    // A3 F2 乐观回滚(暂停漂移,防止污染回滚归因——场景设计,非机制限制)
+    pauseDrift();
+    applyAction("A3", { rollback: { count: 20, afterMs: 800 } });
+    await sleep(1900);
+    // A4 F4 静默丢失 30%
+    applyAction("A4", { loss: 0.3 });
+    await sleep(1100);
+    // 闸门:10 次盲重试(在途锁)
+    for (var i = 0; i < 10; i++) tryAction("gate-1");
+    await sleep(700);
+    report = buildReport();
+    document.getElementById("info").textContent =
+      "Phase 0 完成 · 归因准确率 " + report.attribution.accuracy +
+      " · settled " + report.settled.count + " · 回滚 " + report.rollback.detected + "/20";
+    done = true;
+  }
+
+  window.__dc = {
+    startPhase0: function () {
+      if (started) return { started: false, note: "already running" };
+      started = true;
+      document.getElementById("info").textContent = "Phase 0 场景运行中……";
+      runPhase0().catch(function (e) { report = { error: String(e) }; done = true; });
+      return { started: true };
+    },
+    get done() { return done; },
+    get report() { return report; }
+  };
+})();
+</script>
+</body>
+</html>

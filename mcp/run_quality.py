@@ -72,6 +72,7 @@ SCOPES = {
     "test_stray_menu_fp.py": ["judgment", "action", "fp"],
     "test_nav_and_reconcile.py": ["judgment", "navigation", "reconcile"],
     "test_external_facts.py": ["judgment", "observability", "runtime"],
+    "test_dynamic_canvas_phase0.py": ["dynamic-canvas", "observer", "runtime"],
     "test_false_success_demo.py": ["judgment", "demo", "runtime"],
     "test_verdict_mode.py": ["judgment", "ablation", "runtime"],
     "test_receipt.py": ["judgment", "receipt"],
@@ -153,6 +154,7 @@ GROUPS = {
             "test_stray_menu_fp.py",   # A5 假成功守护:无关非模态菜单不得判 progressed
             "test_nav_and_reconcile.py",  # A1/A2 回归:hash 不算导航 + errored 卡进对账
             "test_external_facts.py",  # A6 基准:外部事实五反例(observability 而非 intelligence)
+            "test_dynamic_canvas_phase0.py",  # Phase 0:动态画布观测层三原语(归因/settled/闸门,预注册协议)
             "test_false_success_demo.py",  # B2 守护:假成功对照演示的三个场景持续成立
             "test_verdict_mode.py",    # C1 守护:消融开关三档确实不同 + 无判定泄漏
             "test_receipt.py",         # 小票标准v0.1:全字段/sources/handoff/对账(R1)
