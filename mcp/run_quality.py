@@ -91,6 +91,7 @@ SCOPES = {
     "test_task_runtime_integration.py": ["task-runtime"],
     "test_task_runtime_matrix.py": ["task-runtime"],
     "experiments/test_server_premise.py": ["premise", "timeline"],
+    "experiments/test_three_questions_judge.py": ["experiments", "judgment"],
     "experiments/test_server_timeline.py": ["timeline", "premise"],
     "test_layers.py": ["layers", "query"],
     # real 组
@@ -169,6 +170,7 @@ GROUPS = {
             "test_task_runtime_integration.py", # 任务图浏览器闭环(本地夹具,任务图合入)
             "test_task_runtime_matrix.py",      # 固定覆盖矩阵与非法迁移拦截(任务图合入)
             "experiments/test_server_premise.py",  # 决策前提监视(assume/ack/status 工具层,order_form 夹具)
+            "experiments/test_three_questions_judge.py",  # 三问实验判分器回归(防"仪器"失真)
             "test_layers.py",                # world_layers 图层视图(结构/语义/空间/交互/名字)
         ],
     },

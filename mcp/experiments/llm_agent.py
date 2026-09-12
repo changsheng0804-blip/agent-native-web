@@ -34,13 +34,17 @@ class LlmAgent:
     """最小 LLM agent:每轮调用模型,执行工具,直到完成或步数上限。"""
 
     def __init__(self, session, system_prompt, tools, max_steps=25, verbose=False,
-                 notify=None):
+                 notify=None, api_url=None, model=None, api_key_env=None):
         self.session = session
         self.system_prompt = system_prompt
         self.tools = tools
         self.max_steps = max_steps
         self.verbose = verbose
         self.notify = notify or (lambda: [])   # 返回待注入的环境通知列表
+        # 模型/端点可覆盖(用于 P2 跨模型对照;不传则用模块默认值,行为不变)
+        self.api_url = api_url or API_URL
+        self.model = model or MODEL
+        self.api_key_env = api_key_env or API_KEY_ENV
         self.messages = [{"role": "system", "content": system_prompt}]
         self.steps = 0
         self.tokens_in = 0
@@ -85,14 +89,42 @@ class LlmAgent:
             return {"status": "done", "steps": self.steps, "final": self.final_text}
         return {"status": "max_steps", "steps": self.steps}
 
+    # ── 收尾 ────────────────────────────────────────────
+    async def finalize(self, nudge="请现在直接给出最终答案,不要再调用工具。", attempts=3):
+        """循环结束后强制收尾:去掉工具再问一次。
+
+        用途:模型可能因步数用尽/连续重试而没吐出最终答案,若直接判为"答不出"
+        会把 harness 的预算限制误记成模型能力。三组共用同一收尾规则,公平。
+
+        空回答可能是厂商侧的偶发(返回了 reasoning 但 content 为空),故重试几次;
+        重试对已有答案的运行是空操作,不影响可比性。
+        """
+        saved = self.tools
+        self.tools = []
+        try:
+            for i in range(attempts):
+                self.messages.append({"role": "user", "content": nudge})
+                resp = await self._chat()
+                if resp is None:
+                    continue
+                text = (resp["choices"][0]["message"].get("content") or "").strip()
+                if text:
+                    self.final_text = text
+                    return self.final_text
+        finally:
+            self.tools = saved
+        return self.final_text
+
     # ── LLM 调用 ────────────────────────────────────────
     async def _chat(self):
-        key = os.environ.get(API_KEY_ENV, "")
-        body = {"model": MODEL, "messages": self.messages, "tools": self.tools,
+        key = os.environ.get(self.api_key_env, "")
+        body = {"model": self.model, "messages": self.messages,
                 "max_tokens": MAX_TOKENS}
+        if self.tools:            # 空工具列表要整键省略(部分厂商拒绝空数组)
+            body["tools"] = self.tools
         try:
             r = await httpx.AsyncClient(timeout=LLM_TIMEOUT_S).post(
-                API_URL, headers={"Authorization": f"Bearer {key}"}, json=body)
+                self.api_url, headers={"Authorization": f"Bearer {key}"}, json=body)
             if r.status_code != 200:
                 print(f"  LLM HTTP {r.status_code}: {_truncate(r.text, 200)}", flush=True)
                 return None

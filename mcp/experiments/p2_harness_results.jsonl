@@ -1,0 +1,22 @@
+{"scenario": "ledger", "group": "C", "run": 1, "answer": "不确定", "verdict": "uncertain", "contaminated": false, "note": "读页面源码与端点;无权威来源,拒绝猜测"}
+{"scenario": "ledger", "group": "C", "run": 2, "answer": "不确定", "verdict": "uncertain", "contaminated": false, "note": "点击零网络请求;拒绝猜测"}
+{"scenario": "ledger", "group": "C", "run": 3, "answer": "¥100", "verdict": "wrong", "contaminated": false, "note": "把页面缓存值当成了答案"}
+{"scenario": "ledger", "group": "N", "run": 1, "answer": "¥100", "verdict": "wrong", "contaminated": false, "note": "看到页面 ¥100 直接作答"}
+{"scenario": "ledger", "group": "N", "run": 2, "answer": "100", "verdict": "wrong", "contaminated": false, "note": "多源核对(含页面源码)后仍答缓存值"}
+{"scenario": "ledger", "group": "N", "run": 3, "answer": "100", "verdict": "wrong", "contaminated": false, "note": "同上"}
+{"scenario": "ledger", "group": "F", "run": 1, "answer": "¥0", "verdict": "correct", "contaminated": false, "note": ""}
+{"scenario": "ledger", "group": "F", "run": 2, "answer": "¥0", "verdict": "correct", "contaminated": false, "note": ""}
+{"scenario": "ledger", "group": "F", "run": 3, "answer": "¥0", "verdict": "correct", "contaminated": false, "note": ""}
+{"scenario": "async", "group": "C", "run": 1, "answer": "不确定", "verdict": "uncertain", "contaminated": false, "note": "长轮询 2.5 分钟;无终态,不猜"}
+{"scenario": "async", "group": "C", "run": 2, "answer": "不确定", "verdict": "uncertain", "contaminated": false, "note": "轮询 20+ 次;无终态,不猜"}
+{"scenario": "async", "group": "C", "run": 3, "answer": "不确定", "verdict": "uncertain", "contaminated": false, "note": "轮询约 8 分钟;无终态,不猜"}
+{"scenario": "async", "group": "N", "run": 1, "answer": "失败", "verdict": "invalid", "contaminated": true, "note": "作废:读了 DOM 但未引用源码;为稳妥起见弃用"}
+{"scenario": "async", "group": "N", "run": 2, "answer": "失败", "verdict": "invalid", "contaminated": true, "note": "作废:引用 three_questions.py truth=失败(泄题)"}
+{"scenario": "async", "group": "N", "run": 3, "answer": "失败", "verdict": "invalid", "contaminated": true, "note": "作废:引用 three_questions.py truth=失败(泄题)"}
+{"scenario": "async", "group": "N", "run": 4, "answer": "(取消)", "verdict": "invalid", "contaminated": true, "note": "作废:运行超时被取消"}
+{"scenario": "async", "group": "N", "run": 5, "answer": "失败", "verdict": "correct", "contaminated": false, "note": "严格隔离;轮询 27 分钟无终态,判未成功"}
+{"scenario": "async", "group": "N", "run": 6, "answer": "失败", "verdict": "correct", "contaminated": false, "note": "严格隔离;轮询约 1 分钟无终态"}
+{"scenario": "async", "group": "N", "run": 7, "answer": "失败", "verdict": "correct", "contaminated": false, "note": "严格隔离;轮询约 5 分钟无终态"}
+{"scenario": "async", "group": "F", "run": 1, "answer": "失败", "verdict": "correct", "contaminated": false, "note": ""}
+{"scenario": "async", "group": "F", "run": 2, "answer": "失败", "verdict": "correct", "contaminated": false, "note": ""}
+{"scenario": "async", "group": "F", "run": 3, "answer": "失败", "verdict": "correct", "contaminated": false, "note": ""}
