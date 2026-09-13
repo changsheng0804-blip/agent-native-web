@@ -360,6 +360,21 @@ async def call(session, name, args, timeout=60):
     return json.loads(r.content[0].text)
 
 
+def load_done(out_path):
+    """断点续跑:已成功落盘的 (cell, run) 集合。"""
+    done = set()
+    if Path(out_path).exists():
+        for l in open(out_path, encoding="utf-8"):
+            try:
+                r = json.loads(l)
+            except Exception:
+                continue
+            if r.get("status", "").startswith("crash"):
+                continue
+            done.add((r["policy"], r["arm"], r["env"], r.get("delay_ms", 2500), r["run"]))
+    return done
+
+
 async def run_one(policy, arm, env_name, run_id, out_path, delay_ms=2500):
     cfg = env_cfg(env_name, delay_ms)
     seed = f"{policy}-{arm}-{env_name}-{delay_ms}-{run_id}"
@@ -389,7 +404,7 @@ async def run_one(policy, arm, env_name, run_id, out_path, delay_ms=2500):
                 except asyncio.TimeoutError:
                     pass
                 verify = await env.verify()      # 先 verify(等全部在途落地,含回滚)
-                await env.stop_watcher()         # 再停 watcher——回滚通知不会因策略提前返回而丢失
+                await env.stop_watcher()         # 再停 watcher——回滚通知不因策略提前返回而丢失
                 patience = ([round(env.submit_ts[i + 1] - env.submit_ts[i], 2)
                              for i in range(len(env.submit_ts) - 1)])
                 result = {
@@ -407,9 +422,23 @@ async def run_one(policy, arm, env_name, run_id, out_path, delay_ms=2500):
                     "duration_s": round(time.time() - t0, 1),
                     "events": env.events,
                 }
-                await asyncio.wait_for(session.call_tool("world_close", {"world_id": wid}), timeout=15)
+                try:
+                    await asyncio.wait_for(session.call_tool("world_close", {"world_id": wid}), timeout=15)
+                except Exception:
+                    pass                               # 服务器侧偶发,不影响已采数据
+    except Exception as e:
+        # 单次崩溃不杀整批:记录 crash 状态,由上层续跑
+        result = {"policy": policy, "arm": arm, "env": env_name, "delay_ms": delay_ms,
+                  "run": run_id, "status": f"crash:{type(e).__name__}:{str(e)[:80]}"}
     finally:
         httpd.shutdown()
+
+    if result is None:
+        result = {"policy": policy, "arm": arm, "env": env_name, "delay_ms": delay_ms,
+                  "run": run_id, "status": "crash:no-result"}
+    if result.get("status", "").startswith("crash"):
+        print(f"[{policy}/{arm}/{env_name}#{run_id}] ⚠ {result['status']}", flush=True)
+        return result
 
     with open(out_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(result, ensure_ascii=False) + "\n")
@@ -472,12 +501,17 @@ async def main():
         cells = [(p, arm, env, 2500, N_MAIN) for (p, arm, env) in MAIN_CELLS] + \
                 [("S3", "A0", "B0", d, N_LADDER) for d in LADDER_DELAYS] + \
                 [(p, arm, env, 2500, N_B1X) for (p, arm, env) in B1X_CELLS]
-        total = sum(n for *_, n in cells)
+        done = load_done(OUT)
+        todo = [(p, arm, env, d, n) for p, arm, env, d, n in cells
+                if any((p, arm, env, d, r) not in done for r in range(1, n + 1))]
+        total = sum(n for *_, n in todo)
         i = 0
-        for p, arm, env, d, n in cells:
+        for p, arm, env, d, n in todo:
             for r in range(1, n + 1):
+                if (p, arm, env, d, r) in done:
+                    continue
                 i += 1
-                print(f"── 全量 {i}/{total}: {p}/{arm}/{env}@{d} #{r} ──", flush=True)
+                print(f"── 续跑 {i}/{total}: {p}/{arm}/{env}@{d} #{r} ──", flush=True)
                 await run_one(p, arm, env, r, OUT, delay_ms=d)
         # 冻结数据审计:文件校验和
         sha = hashlib.sha256(Path(OUT).read_bytes()).hexdigest()
