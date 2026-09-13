@@ -1,41 +1,34 @@
 # -*- coding: utf-8 -*-
-"""Phase 1(修订 v1.1):确定性策略 harness——被试是脚本策略,不是 LLM。
+"""Phase 1 v2(评审修订):确定性策略 harness——A1 通知来自观测层,不是环境真相。
 
-协议修订记录 v1.1(2026-09-13):原 LLM 行为实验降级为策略 harness,理由:
-  1) 触发预注册红线 #3(LLM 行为主导 → 实验退化为模型能力评估);
-  2) 行为结论模型相关,违背 B3"不依赖特定模型"原则;
-  3) 零 LLM 成本、大样本、完全可复现。
-其余因素(臂/环境/判据)不变。
+评审(独立模型)确认的三处硬伤,本版修复:
+  F1  A2 未实现:tool_read(slow=True) 从未被调用。→ 改为臂内慢读:
+      arm=="A2" 时 read 自动等待 2.5s,所有策略共享,无需逐策略传参。
+  F2  A1 是环境 oracle:_apply() 直接把环境真相 emit 给策略。→ 通知只来自
+      页面内 MutationObserver 观测层(归因/回滚信号/settled),环境引擎的
+      orders/rollbacks 只用于记分,永不流向策略。
+  F3  假成功指标混淆。→ 拆分为:duplicate(净订单>1) / fs_immediate
+      (声明时区域未满) / fs_deferred(声明时已满但最终审计失败=被环境欺骗) /
+      final_verified(声明∧净订单==1∧终态区域正确)。tool_declare 记录声明时刻快照。
 
-臂(A:反馈机制,同一环境同一策略,仅工具返回与通知不同):
-  A0 静态快照  submit 裸受理;read_region 即时读;无闸门无通知
-  A1 Runtime   submit 结果卡(in-flight);在途闸门;通知 applied/rolled_back/settled
-  A2 朴素补丁  = A0,但 read_region 前固定等待 2.5s(工程补丁,红线 #1 裁决对象)
+另:固定随机种子(每格独立)、region 12×12(与 Phase 0 夹具同尺度,协议已修订)、
+n=20(协议已修订)。
 
-环境(B):
-  B0  单纯延迟 delay_ms
-  B1  延迟 2.5s + 20% 概率回滚(申请后 rollback_ms=1.2s 逆转) + 噪声 2 格/s(目标区外)
-  B1x 延迟 2.5s + 20% 概率回滚(rollback_ms 随机 0.5-6s)——固定等待无法覆盖未知窗口
-  B0<d> 梯子:仅延迟,delay_ms ∈ {1000,3000,6000,10000}
+臂(A:反馈机制,同一环境同一策略,仅工具返回与闸门不同):
+  A0 静态快照  submit 裸受理;read 即时;无窗口无通知无闸门
+  A1 Runtime   submit 结果卡 + 在途闸门 + 观测层通知(applied/rolled_back/settled)
+  A2 朴素补丁  = A0,但 read 前固定等 2.5s
 
-策略(确定性,模拟"决策者耐心档位"的下界):
-  S1 盲重试    提交×5(间隔 1s)→ 声明(不读画面,对应"模型不主动用工具"的下界)
-  S2 等N再查   提交→等 3s→读→满则声明,否则再提交(最多 3 次)
-  S3 读判声明  提交→每 1s 读一次→满则声明;5s 未满则补提交(耐心=5s,最多 3 次)
-  S4 等稳再判  A1:等 settled 通知→读→回滚则补提交;A0/A2:等固定 5s→读→同样判断
-               (同一"谨慎意图":有 Runtime 拿信号,无 Runtime 只能盲等)
-
-语义(与 §7.15 对齐):每次 submit = 一笔订单(副作用在提交时即发生);
-净订单 = 提交数 - 回滚数;净订单 > 1 = 重复下单;declared ∧ ¬verified = 假成功。
+环境(B):B0 延迟2.5s / B1 延迟+20%回滚(1.2s)+噪声2格/s(区外) / B1x 回滚窗口随机0.5-6s
+策略:S1 盲重试(5连发0.5s间隔) / S2 等3s再读 / S3 读判声明(耐心5s) /
+     S4 等稳再判(A1:等观测层settled;A0/A2:盲等固定5s)
 
 用法:
-  python mcp/experiments/run_phase1.py --pilot          # 先导:主格各 2 次
-  python mcp/experiments/run_phase1.py --full           # 全量:主格 n=20 + 梯子 + B1x
-  python mcp/experiments/run_phase1.py --cell S3 A0 B0  # 单格
-  python mcp/experiments/run_phase1.py --summary        # 汇总 phase1_results.jsonl
+  python mcp/experiments/run_phase1.py --pilot / --full / --cell S4 A1 B1 / --summary
 """
 import argparse
 import asyncio
+import hashlib
 import json
 import random
 import socket
@@ -59,11 +52,11 @@ TARGET = "#3498db"
 BG = "#101a3d"
 CORRUPT = ["#7a7a7a", "#3f7f3f", "#8f2f2f", "#c8b23a"]
 
-MAIN_CELLS = [("S1", a, e) for a in ("A0", "A1", "A2") for e in ("B0", "B1")]
+MAIN_CELLS = [(p, a, e) for p in ("S1", "S2", "S3", "S4")
+               for a in ("A0", "A1", "A2") for e in ("B0", "B1")]   # 24 格主格
 LADDER_DELAYS = [1000, 3000, 6000, 10000]
 B1X_CELLS = [("S2", "A0", "B1x"), ("S2", "A2", "B1x"), ("S4", "A0", "B1x"),
              ("S4", "A1", "B1x"), ("S2", "A1", "B1x")]
-S4_CELLS = [("S4", a, e) for a in ("A0", "A1", "A2") for e in ("B0", "B1")]
 
 N_MAIN = 20
 N_LADDER = 20
@@ -84,39 +77,39 @@ def env_cfg(env, delay_ms=2500):
 
 
 class Environment:
-    """环境引擎(真相持有者):延迟/回滚/噪声/订单计数全在 harness 侧,页面是哑渲染器。"""
+    """环境引擎(真相只用于记分)+ 观测层接入(通知只来自页面观测层)。"""
 
-    def __init__(self, session, wid, cfg, arm):
+    def __init__(self, session, wid, cfg, arm, seed):
         self.session = session
         self.wid = wid
         self.cfg = cfg
         self.arm = arm
+        self.seed = seed
+        self.rng = random.Random(seed)       # 独立 RNG:回滚/噪声全部用它(可复现)
         self.orders = 0
         self.landed = 0
         self.rollbacks = 0
         self.in_flight = False
         self.declared = False
+        self.declare_snapshot = None
         self.submit_ts = []
         self.events = []
-        self.notices = []
         self.pending = set()
-        self.noise_on = False
+        self.resolved = {}                   # oid → settled 通知(观测层给出)
+        self.observer_log = []               # 观测层通知审计副本
+        self.closed = False
         self.noise_task = None
+        self.watcher_task = None
         self.region = REGION
-
-    def emit(self, notice):
-        if self.arm == "A1":
-            self.notices.append(notice)
-
-    def drain_notices(self):
-        n = list(self.notices)
-        self.notices.clear()
-        return n
 
     async def _eval(self, expr):
         r = await asyncio.wait_for(
             self.session.call_tool("world_eval", {"world_id": self.wid, "expression": expr}), timeout=30)
         return json.loads(r.content[0].text)["result"]
+
+    async def _obj(self, expr):
+        v = await self._eval(expr)
+        return json.loads(v) if isinstance(v, str) else v
 
     async def render_cells(self, updates):
         lst = json.dumps([{"r": u[0], "c": u[1], "color": u[2]} for u in updates],
@@ -127,31 +120,68 @@ class Environment:
         r0, c0, r1, c1 = self.region
         return [[r, c] for r in range(r0, r1 + 1) for c in range(c0, c1 + 1)]
 
+    # ── 观测层接入:唯一的通知源 ──
+    async def start_observer_watcher(self):
+        if self.arm != "A1":
+            return
+
+        async def _watch():
+            while not self.closed:
+                await asyncio.sleep(0.25)              # 低频轮询(与噪声/策略错开,防 MCP 过载丢事件)
+                try:
+                    ns = await self._obj("__p1.drainNotices()")
+                except Exception:
+                    continue
+                for n in ns or []:
+                    self.observer_log.append(n)
+                    if n.get("type") == "settled":
+                        oid = str(n.get("window"))
+                        self.resolved[oid] = n
+                        if self.in_flight and oid == str(self.orders):
+                            self.in_flight = False       # 结果已由观测层确认,闸门释放
+        self.watcher_task = asyncio.create_task(_watch())
+
+    async def stop_watcher(self):
+        self.closed = True
+        if self.watcher_task:
+            self.watcher_task.cancel()
+        if self.noise_task:
+            self.noise_task.cancel()
+
+    async def wait_settled(self, oid, timeout=15):
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if str(oid) in self.resolved:
+                return self.resolved[str(oid)]
+            await asyncio.sleep(0.15)
+        return None
+
+    def any_rolled_back(self, oid):
+        """settled 之后观测层发出的完整性破坏通知(按窗口 id)。"""
+        return any(n.get("type") == "rolled_back" and str(n.get("window")) == str(oid)
+                   for n in self.observer_log)
+
+    # ── 噪声(只在外围,不进入目标区;语义:干扰归因,不摧毁交付物)──
     async def start_noise(self):
         if not self.cfg["noise_per_sec"]:
             return
-        self.noise_on = True
 
         async def _loop():
             interval = 1.0 / self.cfg["noise_per_sec"]
-            while self.noise_on:
+            while not self.closed:
                 await asyncio.sleep(interval)
-                r = 1 + int(random.random() * 23)
-                c = 1 + int(random.random() * 38)
+                r = 1 + int(self.rng.random() * 23)
+                c = 1 + int(self.rng.random() * 38)
                 if self.region[0] <= r <= self.region[2] and self.region[1] <= c <= self.region[3]:
                     continue
-                bad = CORRUPT[int(random.random() * len(CORRUPT))]
+                bad = CORRUPT[int(self.rng.random() * len(CORRUPT))]
                 try:
                     await self.render_cells([[r, c, bad]])
                 except Exception:
                     pass
         self.noise_task = asyncio.create_task(_loop())
 
-    async def stop_noise(self):
-        self.noise_on = False
-        if self.noise_task:
-            self.noise_task.cancel()
-
+    # ── 动作通道 ──
     async def submit(self):
         self.submit_ts.append(time.time())
         if self.arm == "A1" and self.in_flight:
@@ -162,19 +192,22 @@ class Environment:
         self.events.append({"t": time.time(), "type": "submitted", "order": oid})
         if self.arm == "A1":
             self.in_flight = True
+            # 开观测窗口(只声明"在等这个效果",不携带任何真相)
+            await self._eval(f'__p1.openWindow("{oid}", "{TARGET}", '
+                             f'{self.region[0]}, {self.region[1]}, {self.region[2]}, {self.region[3]})')
         task = asyncio.create_task(self._apply(oid))
         self.pending.add(task)
         task.add_done_callback(self.pending.discard)
         if self.arm == "A1":
             return {"allowed": True, "order_id": oid, "status": "in-flight",
-                    "note": "订单已受理,结果未定。稳定报告将随后推送。"}
+                    "note": "订单已受理,结果未定。稳定报告将由观测层推送。"}
         return {"order_id": oid, "accepted": True}
 
     def _rollback_delay(self):
         v = self.cfg["rollback_ms"]
         if isinstance(v, str) and v.startswith("rand"):
             lo, hi = v[4:].split("_")
-            return int(lo) + int(random.random() * (int(hi) - int(lo)))
+            return int(lo) + int(self.rng.random() * (int(hi) - int(lo)))
         return v
 
     async def _apply(self, oid):
@@ -182,55 +215,58 @@ class Environment:
         await self.render_cells([[r, c, TARGET] for r, c in self.region_cells()])
         self.landed += 1
         self.events.append({"t": time.time(), "type": "applied", "order": oid})
-        self.emit({"type": "applied", "order": oid})
-        rolled = False
-        if random.random() < self.cfg["rollback_prob"]:
+        if self.rng.random() < self.cfg["rollback_prob"]:
             await asyncio.sleep(self._rollback_delay() / 1000)
             await self.render_cells([[r, c, BG] for r, c in self.region_cells()])
             self.rollbacks += 1
-            rolled = True
             self.events.append({"t": time.time(), "type": "rolled_back", "order": oid})
-            self.emit({"type": "rolled_back", "order": oid})
-        await asyncio.sleep(self.cfg["settle_ms"] / 1000)
-        if self.arm == "A1" and self.in_flight:
-            self.in_flight = False
-            self.emit({"type": "settled", "order": oid, "rolled_back": rolled})
+        # 无任何 emit——settled 由观测层静默窗给出,闸门释放由 watcher 完成
 
     async def read_snapshot(self):
         r0, c0, r1, c1 = self.region
-        snap = await self._eval(f"__p1.snapshot({r0},{c0},{r1},{c1},\"{TARGET}\")")
-        if isinstance(snap, str):
-            snap = json.loads(snap)
-        return snap
+        return await self._obj(f"__p1.snapshot({r0},{c0},{r1},{c1},\"{TARGET}\")")
 
     async def tool_submit(self):
         return json.dumps(await self.submit(), ensure_ascii=False)
 
-    async def tool_read(self, slow=False):
-        if slow:
-            await asyncio.sleep(2.5)
+    async def tool_read(self):
+        if self.arm == "A2":
+            await asyncio.sleep(2.5)            # A2 朴素补丁:臂内慢读(评审 F1 修复)
         return json.dumps(await self.read_snapshot(), ensure_ascii=False)
 
     async def tool_declare(self):
         self.declared = True
-        return json.dumps({"recorded": True}, ensure_ascii=False)
+        self.declare_snapshot = await self.read_snapshot()   # 声明时刻快照(评审 F3 修复)
+        return json.dumps({"recorded": True,
+                           "note": "已记录完成声明与当时画面状态。"}, ensure_ascii=False)
 
     async def verify(self):
         while self.pending:
             await asyncio.gather(*list(self.pending))
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(1.0)                # 终态稳定窗(最终审计)
         snap = await self.read_snapshot()
         net = self.orders - self.rollbacks
         region_ok = snap["filled"] == snap["total"] and snap["other"] == 0
-        verified = bool(self.declared and net == 1 and region_ok)
-        return {"orders": self.orders, "rollbacks": self.rollbacks, "net_orders": net,
-                "region_ok": region_ok, "landed": self.landed,
-                "verified_success": verified, "duplicate": net > 1}
+        declare_filled = bool(self.declare_snapshot
+                              and self.declare_snapshot["filled"] == self.declare_snapshot["total"])
+        final_verified = bool(self.declared and net == 1 and region_ok)
+        return {
+            "orders": self.orders, "rollbacks": self.rollbacks, "net_orders": net,
+            "duplicate": net > 1,
+            "declare_filled": declare_filled,
+            "final_verified": final_verified,
+            "fs_immediate": bool(self.declared and not declare_filled),
+            "fs_deferred": bool(self.declared and declare_filled and not final_verified),
+            "rollback_detected": sum(1 for n in self.observer_log
+                                     if n.get("type") == "rolled_back"
+                                     or (n.get("type") == "settled" and n.get("rolled_back"))),
+            "region_ok": region_ok, "landed": self.landed,
+        }
 
 
 # ===== 确定性策略(决策者耐心档位的下界)=====
 async def policy_S1(env):
-    for _ in range(5):                                   # 连续盲重试(§7.15 同款:全部落在在途窗口内)
+    for _ in range(5):                                   # 连续盲重试(全部落在在途窗口内)
         await env.tool_submit()
         await asyncio.sleep(0.5)
     await asyncio.sleep(1.0)
@@ -265,38 +301,33 @@ async def policy_S3(env):
             await env.tool_submit()
             submits += 1
             last_submit = time.time()
-        if time.time() - t0 > 40:                                  # 兜底
+        if time.time() - t0 > 40:
             await env.tool_declare()
             return
 
 
 async def policy_S4(env):
-    """同一谨慎意图:有 Runtime 拿 settled 信号;无 Runtime 只能盲等固定时长。"""
+    """同一谨慎意图:A1 等观测层 settled 信号 + 确认窗;A0/A2 只能盲等固定时长。"""
+    CONFIRM_MS = 1.5
     for _ in range(3):
         await env.tool_submit()
         if env.arm == "A1":
-            waited = 0.0
-            settled = None
-            while waited < 15.0:
-                await asyncio.sleep(0.2)
-                waited += 0.2
-                for n in env.drain_notices():
-                    if n.get("type") == "settled":
-                        settled = n
-                if settled:
-                    break
-            if not settled:
+            n = await env.wait_settled(env.orders, timeout=15)
+            if n is None:
                 await env.tool_declare()
                 return
-            rolled = settled.get("rolled_back", False)
+            rolled = bool(n.get("rolled_back"))
+            t_end = time.time() + CONFIRM_MS          # 确认窗:settled 后再观察,期间完整性破坏则补提交
+            while time.time() < t_end and not rolled:
+                await asyncio.sleep(0.15)
+                rolled = env.any_rolled_back(env.orders)
         else:
-            await asyncio.sleep(5.0)                               # 盲等固定 5s
+            await asyncio.sleep(5.0)
             rolled = False
         snap = json.loads(await env.tool_read())
         if snap["filled"] == snap["total"] and not rolled:
             await env.tool_declare()
             return
-        # 未生效或被回滚 → 补提交(下一轮循环)
     await env.tool_declare()
 
 
@@ -331,6 +362,7 @@ async def call(session, name, args, timeout=60):
 
 async def run_one(policy, arm, env_name, run_id, out_path, delay_ms=2500):
     cfg = env_cfg(env_name, delay_ms)
+    seed = f"{policy}-{arm}-{env_name}-{delay_ms}-{run_id}"
     sock = socket.socket()
     sock.bind(("127.0.0.1", 0))
     port = sock.getsockname()[1]
@@ -348,25 +380,30 @@ async def run_one(policy, arm, env_name, run_id, out_path, delay_ms=2500):
                 d = await call(session, "world_open", {"url": url, "wait_ms": 600})
                 wid = d["world_id"]
 
-                env = Environment(session, wid, cfg, arm)
+                env = Environment(session, wid, cfg, arm, seed)
                 await env.start_noise()
+                await env.start_observer_watcher()
                 t0 = time.time()
                 try:
                     await asyncio.wait_for(POLICIES[policy](env), timeout=60)
                 except asyncio.TimeoutError:
                     pass
-                await env.stop_noise()
+                await env.stop_watcher()
                 verify = await env.verify()
                 patience = ([round(env.submit_ts[i + 1] - env.submit_ts[i], 2)
                              for i in range(len(env.submit_ts) - 1)])
                 result = {
                     "policy": policy, "arm": arm, "env": env_name,
-                    "delay_ms": delay_ms, "run": run_id,
+                    "delay_ms": delay_ms, "run": run_id, "seed": seed,
                     "orders": verify["orders"], "rollbacks": verify["rollbacks"],
                     "net_orders": verify["net_orders"], "duplicate": verify["duplicate"],
-                    "declared": env.declared, "verified_success": verify["verified_success"],
-                    "false_success": bool(env.declared and not verify["verified_success"]),
+                    "declare_filled": verify["declare_filled"],
+                    "final_verified": verify["final_verified"],
+                    "fs_immediate": verify["fs_immediate"],
+                    "fs_deferred": verify["fs_deferred"],
+                    "rollback_detected": verify["rollback_detected"],
                     "region_ok": verify["region_ok"], "patience_s": patience,
+                    "steps": len(env.events),
                     "duration_s": round(time.time() - t0, 1),
                     "events": env.events,
                 }
@@ -378,8 +415,9 @@ async def run_one(policy, arm, env_name, run_id, out_path, delay_ms=2500):
         f.write(json.dumps(result, ensure_ascii=False) + "\n")
     tag = f"[{policy}/{arm}/{env_name}{('@' + str(delay_ms)) if delay_ms != 2500 else ''}#{run_id}]"
     print(f"{tag} orders={result['orders']} net={result['net_orders']} "
-          f"dup={result['duplicate']} declared={result['declared']} "
-          f"verified={result['verified_success']} fs={result['false_success']} "
+          f"dup={result['duplicate']} decl_filled={result['declare_filled']} "
+          f"fs_i={result['fs_immediate']} fs_d={result['fs_deferred']} "
+          f"verified={result['final_verified']} rollDet={result['rollback_detected']}"
           f"({result['duration_s']}s)", flush=True)
     return result
 
@@ -394,32 +432,32 @@ def summarize(out_path):
         key = (r["policy"], r["arm"], r["env"], r.get("delay_ms", 2500))
         cells.setdefault(key, []).append(r)
     print(f"\n共 {len(rows)} 次运行,{len(cells)} 个格(最小 n={min(len(v) for v in cells.values())})\n")
-    print(f"{'格':<24}{'n':>3}{'订单均':>6}{'回滚均':>6}{'重复率':>8}{'假成功率':>10}{'声明率':>8}{'验证率':>8}")
+    hdr = f"{'格':<24}{'n':>3}{'重复率':>8}{'fs即时':>8}{'fs延迟':>8}{'最终验证':>8}{'回滚检出':>8}"
+    print(hdr)
     for key in sorted(cells, key=lambda k: (k[2], k[0], k[1])):
         v = cells[key]
         n = len(v)
         tag = f"{key[0]}/{key[1]}/{key[2]}" + (f"@{key[3]}ms" if key[3] != 2500 else "")
-        print(f"{tag:<24}{n:>3}{sum(r['orders'] for r in v) / n:>6.2f}"
-              f"{sum(r['rollbacks'] for r in v) / n:>6.2f}"
+        print(f"{tag:<24}{n:>3}"
               f"{sum(r['duplicate'] for r in v) / n:>8.2%}"
-              f"{sum(r['false_success'] for r in v) / n:>10.2%}"
-              f"{sum(r['declared'] for r in v) / n:>8.2%}"
-              f"{sum(r['verified_success'] for r in v) / n:>8.2%}")
+              f"{sum(r['fs_immediate'] for r in v) / n:>8.2%}"
+              f"{sum(r['fs_deferred'] for r in v) / n:>8.2%}"
+              f"{sum(r['final_verified'] for r in v) / n:>8.2%}"
+              f"{sum(r['rollback_detected'] for r in v):>6}/{sum(r['rollbacks'] for r in v)}")
 
 
 async def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pilot", action="store_true", help="先导:主格 18 + 梯子 4 + B1x 5,各 2 次")
-    ap.add_argument("--full", action="store_true", help="全量:n=20 × 全部格")
-    ap.add_argument("--cell", nargs=3, metavar=("POLICY", "ARM", "ENV"),
-                    help="单格,如: S3 A0 B0")
+    ap.add_argument("--pilot", action="store_true")
+    ap.add_argument("--full", action="store_true")
+    ap.add_argument("--cell", nargs=3, metavar=("POLICY", "ARM", "ENV"))
     ap.add_argument("--run", type=int, default=1)
-    ap.add_argument("--delay", type=int, default=2500, help="梯子用:延迟 ms")
+    ap.add_argument("--delay", type=int, default=2500)
     ap.add_argument("--summary", action="store_true")
     a = ap.parse_args()
 
     if a.summary:
-        summarize(a.out if hasattr(a, "out") else OUT)
+        summarize(OUT)
         return
     if a.pilot:
         cells = [(p, arm, env, 2500) for (p, arm, env) in MAIN_CELLS] + \
@@ -441,6 +479,9 @@ async def main():
                 i += 1
                 print(f"── 全量 {i}/{total}: {p}/{arm}/{env}@{d} #{r} ──", flush=True)
                 await run_one(p, arm, env, r, OUT, delay_ms=d)
+        # 冻结数据审计:文件校验和
+        sha = hashlib.sha256(Path(OUT).read_bytes()).hexdigest()
+        print(f"结果文件校验和 sha256={sha}", flush=True)
         return
     if not a.cell:
         ap.error("需要 --pilot / --full / --cell / --summary")
