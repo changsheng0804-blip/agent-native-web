@@ -388,8 +388,8 @@ async def run_one(policy, arm, env_name, run_id, out_path, delay_ms=2500):
                     await asyncio.wait_for(POLICIES[policy](env), timeout=60)
                 except asyncio.TimeoutError:
                     pass
-                await env.stop_watcher()
-                verify = await env.verify()
+                verify = await env.verify()      # 先 verify(等全部在途落地,含回滚)
+                await env.stop_watcher()         # 再停 watcher——回滚通知不会因策略提前返回而丢失
                 patience = ([round(env.submit_ts[i + 1] - env.submit_ts[i], 2)
                              for i in range(len(env.submit_ts) - 1)])
                 result = {
