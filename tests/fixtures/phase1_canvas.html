@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>phase1_canvas — 提交语义渲染器</title>
+<style>
+  body { margin: 0; font-family: Consolas, monospace; background: #0d1628; color: #cfe0f2; font-size: 12px; }
+  table { border-collapse: collapse; margin: 8px; }
+  td { width: 10px; height: 10px; padding: 0; border: 0.5px solid rgba(255,255,255,.06); }
+  #info { padding: 4px 10px; }
+</style>
+</head>
+<body>
+<div id="info">phase1_canvas — 哑渲染器(环境逻辑在 harness 侧,页面源码不含实验参数)</div>
+<table id="grid"></table>
+<script>
+/* Phase 1 渲染夹具:只负责"把状态矩阵画出来"和"读回区域外观"。
+ * 故障注入(延迟/回滚/噪声)全部在 harness(Python)侧实现——
+ * 页面源码不含延迟时长/回滚概率等实验参数,防被测 agent 读源码作弊。 */
+(function () {
+  var COLS = 40, ROWS = 25, BG = "#101a3d";
+  var table = document.getElementById("grid");
+  var tds = [];
+  for (var r = 0; r < ROWS; r++) {
+    var tr = document.createElement("tr"), row = [];
+    for (var c = 0; c < COLS; c++) {
+      var td = document.createElement("td");
+      td.style.backgroundColor = BG;
+      tr.appendChild(td); row.push(td);
+    }
+    table.appendChild(tr); tds.push(row);
+  }
+  function normColor(col) {
+    if (!col) return "";
+    col = String(col).trim();
+    if (col.charAt(0) === "#") {
+      var h = col.slice(1); if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+      return "rgb(" + parseInt(h.slice(0,2),16) + ", " + parseInt(h.slice(2,4),16) + ", " + parseInt(h.slice(4,6),16) + ")";
+    }
+    return col;
+  }
+  window.__p1 = {
+    setCells: function (list) {
+      list.forEach(function (u) {
+        if (u.r >= 0 && u.r < ROWS && u.c >= 0 && u.c < COLS) tds[u.r][u.c].style.backgroundColor = u.color;
+      });
+      return true;
+    },
+    snapshot: function (r0, c0, r1, c1, target) {
+      var t = normColor(target), rows = [], filled = 0, other = 0, total = 0;
+      for (var r = r0; r <= r1; r++) {
+        var line = "";
+        for (var c = c0; c <= c1; c++) {
+          var col = normColor(tds[r][c].style.backgroundColor), ch;
+          if (col === t) { ch = "B"; filled++; }
+          else if (col === normColor(BG) || col === "") { ch = "."; }
+          else { ch = "X"; other++; }
+          total++; line += ch;
+        }
+        rows.push(line);
+      }
+      return { filled: filled, other: other, total: total, rows: rows };
+    }
+  };
+  document.getElementById("info").textContent = "phase1_canvas 就绪(40×25)";
+})();
+</script>
+</body>
+</html>
