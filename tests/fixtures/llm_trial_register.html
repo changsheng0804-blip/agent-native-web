@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>新用户注册</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; max-width: 520px; }
+  .status { font-weight: bold; margin-top: 12px; }
+  .ok { color: #1a7f37; }
+  button { padding: 6px 18px; }
+  label { display: block; margin: 8px 0; }
+</style>
+</head>
+<body>
+<h1>新用户注册</h1>
+<p>请填写以下信息完成注册,提交后即可使用完整功能。</p>
+<label>邮箱<br><input id="email" value="demo@example.com" size="32"></label>
+<label>用户名<br><input id="username" value="demo_user" size="32"></label>
+<button id="btn-submit">提交注册</button>
+<div id="status" class="status">尚未提交</div>
+<script>
+  // 乐观 UI:点击立即显示成功;后端实际返回 422(邮箱已注册)。
+  // 与 llm_trial_rig 的页面服务器配合:POST api/register?simulate=422 → HTTP 422。
+  // 页面可见文本不透露任何故障信息(试验台用途:UI-only vs receipt 读法对照)。
+  document.getElementById('btn-submit').addEventListener('click', function () {
+    var st = document.getElementById('status');
+    st.textContent = '✅ 注册成功!';
+    st.className = 'status ok';
+    var xhr = new XMLHttpRequest();
+    try {
+      xhr.open('POST', 'api/register?simulate=422', true);
+      xhr.send();
+    } catch (e) {}
+  });
+</script>
+</body>
+</html>
