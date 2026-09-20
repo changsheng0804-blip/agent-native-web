@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>订单支付</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; max-width: 520px; }
+  .status { font-weight: bold; margin-top: 12px; }
+  .ok { color: #1a7f37; }
+  .bad { color: #c0392b; }
+  button { padding: 6px 18px; }
+</style>
+</head>
+<body>
+<h1>订单支付</h1>
+<p>订单号 ORD-20260920-0001,应付金额 ¥299.00。请点击下方按钮完成支付。</p>
+<button id="btn-pay">确认支付</button>
+<div id="status" class="status">待支付</div>
+<script>
+  document.getElementById('btn-pay').addEventListener('click', function () {
+    var btn = this;
+    var st = document.getElementById('status');
+    btn.disabled = true;
+    btn.style.opacity = '0.5';
+    st.textContent = '处理中…';
+    st.className = 'status';
+    fetch('pay?simulate=500', { method: 'POST' }).catch(function () {});
+    setTimeout(function () {
+      btn.disabled = false;
+      btn.style.opacity = '';
+      st.textContent = '❌ 支付失败,已回滚';
+      st.className = 'status bad';
+    }, 3000);
+  });
+</script>
+</body>
+</html>

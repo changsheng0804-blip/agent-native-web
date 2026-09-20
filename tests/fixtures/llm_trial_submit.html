@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>后台任务提交</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; max-width: 520px; }
+  .status { font-weight: bold; margin-top: 12px; }
+  .ok { color: #1a7f37; }
+  .bad { color: #c0392b; }
+  button { padding: 6px 18px; }
+</style>
+</head>
+<body>
+<h1>后台任务提交</h1>
+<p>提交数据处理任务,系统将在后台执行;执行结果会显示在状态栏。</p>
+<button id="btn-task">提交任务</button>
+<div id="status" class="status">尚未提交</div>
+<script>
+  document.getElementById('btn-task').addEventListener('click', function () {
+    var st = document.getElementById('status');
+    st.textContent = '✅ 已提交,后台执行中…';
+    st.className = 'status ok';
+    fetch('task?simulate=202', { method: 'POST' }).catch(function () {});
+    setTimeout(function () {
+      st.textContent = '❌ 后台任务执行失败';
+      st.className = 'status bad';
+      fetch('task-poll?simulate=500', { method: 'POST' }).catch(function () {});
+    }, 3000);
+  });
+</script>
+</body>
+</html>
