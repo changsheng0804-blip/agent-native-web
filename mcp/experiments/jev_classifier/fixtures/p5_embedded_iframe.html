@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>实名认证</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; }
+  form { max-width: 360px; }
+  input { display: block; width: 100%; margin: 6px 0; padding: 6px; box-sizing: border-box; }
+  button.submit { margin-top: 10px; padding: 8px 24px; cursor: pointer; }
+  #verify-wrap { display: none; margin-top: 18px; }
+  #verify-wrap.show { display: block; }
+  #verify-card { width: 520px; background: #fff; border: 1px solid #ddd; border-radius: 10px; overflow: hidden; }
+  #verify-card iframe { width: 480px; height: 420px; border: none; display: block; margin: 20px auto; }
+</style>
+</head>
+<body>
+  <h1>实名认证</h1>
+  <form id="realname">
+    <input name="idno" type="text" placeholder="身份证号" value="">
+    <button type="submit" class="submit" id="go">提交</button>
+  </form>
+
+  <div id="verify-wrap">
+    <div id="verify-card">
+      <iframe srcdoc="<html><body style='font-family:sans-serif;text-align:center;padding:60px 20px;'><p style='font-size:18px;'>滑动以完成验证</p><div style='margin-top:24px;height:40px;border-radius:20px;background:#eee;line-height:40px;color:#888;'>按住滑块拖动</div></body></html>"></iframe>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('realname').addEventListener('submit', function(e) {
+      e.preventDefault();
+      document.getElementById('verify-wrap').classList.add('show');
+    });
+  </script>
+</body>
+</html>

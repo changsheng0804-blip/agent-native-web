@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>创建账号</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; }
+  form { max-width: 360px; }
+  input { display: block; width: 100%; margin: 6px 0; padding: 6px; box-sizing: border-box; }
+  button.submit { margin-top: 10px; padding: 8px 24px; cursor: pointer; background: #2b6cb0; color: #fff; border: none; }
+  #challenge-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.55); z-index: 9999; display: none; align-items: center; justify-content: center; }
+  #challenge-overlay.show { display: flex; }
+  #challenge-box { width: 400px; height: 450px; background: #fff; border-radius: 8px; overflow: hidden; }
+  #challenge-box iframe { width: 100%; height: 100%; border: none; }
+</style>
+</head>
+<body>
+  <h1>创建账号</h1>
+  <form id="signup">
+    <input name="email" type="email" placeholder="邮箱" value="">
+    <input name="password" type="password" placeholder="密码" value="">
+    <button type="submit" class="submit" id="go">提交</button>
+  </form>
+
+  <div id="challenge-overlay">
+    <div id="challenge-box">
+      <iframe id="challenge-frame" srcdoc="<html><body style='font-family:sans-serif;text-align:center;padding:40px 20px;'><p>请完成验证以继续</p><p><button>我不是机器人</button></p></body></html>"></iframe>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('signup').addEventListener('submit', function(e) {
+      e.preventDefault();
+      document.getElementById('challenge-overlay').classList.add('show');
+    });
+  </script>
+</body>
+</html>

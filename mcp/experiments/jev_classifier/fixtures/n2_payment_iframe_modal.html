@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>订单结算</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; }
+  form { max-width: 360px; }
+  input { display: block; width: 100%; margin: 6px 0; padding: 6px; box-sizing: border-box; }
+  button.submit { margin-top: 10px; padding: 8px 24px; cursor: pointer; background: #d97706; color: #fff; border: none; }
+  #pay-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 9999; display: none; align-items: center; justify-content: center; }
+  #pay-overlay.show { display: flex; }
+  #pay-box { width: 460px; height: 520px; background: #fff; border-radius: 10px; overflow: hidden; }
+  #pay-box iframe { width: 100%; height: 100%; border: none; }
+</style>
+</head>
+<body>
+  <h1>订单结算</h1>
+  <form id="order">
+    <input name="address" type="text" placeholder="收货地址" value="">
+    <button type="submit" class="submit" id="go">提交</button>
+  </form>
+
+  <div id="pay-overlay">
+    <div id="pay-box">
+      <iframe id="pay-frame" srcdoc="<html><body style='font-family:sans-serif;padding:30px;'><h3>安全支付中心</h3><p>订单金额:¥ 199.00</p><p>请选择支付方式完成付款</p><p><label><input type='radio' name='pay'> 银行卡支付</label></p><p><label><input type='radio' name='pay'> 第三方支付</label></p><p style='color:#888;font-size:13px;'>支付由持牌机构提供,本页面不会保存你的卡号</p></body></html>"></iframe>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('order').addEventListener('submit', function(e) {
+      e.preventDefault();
+      document.getElementById('pay-overlay').classList.add('show');
+    });
+  </script>
+</body>
+</html>

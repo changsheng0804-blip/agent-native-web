@@ -1,0 +1,28 @@
+# Jev 分类器对照实验 2026-09-21T13:08:49
+# 模型: typesafe/jev-1.13
+# state 口径: prod
+
+[Part A] 挑战检测夹具…
+
+== Part A 挑战检测(9 夹具,1 校验位不计分) ==
+  p0_sanity_canonical      真值=1 | 启发式=challenged(1)✓ | jev_prob=0.86 ✓ [校验]
+  p1_fullscreen_iframe     真值=1 | 启发式=challenged(1)✓ | jev_prob=0.15 ✗
+  p2_inline_text           真值=1 | 启发式=progressed(0)✗ | jev_prob=0.91 ✓
+  p3_corner_widget         真值=1 | 启发式=unchanged(0)✗ | jev_prob=0.84 ✓
+  p4_fullscreen_text       真值=1 | 启发式=uncertain(0)✗ | jev_prob=0.94 ✓
+  p5_embedded_iframe       真值=1 | 启发式=uncertain(0)✗ | jev_prob=0.07 ✗
+  n1_success               真值=0 | 启发式=uncertain(0)✓ | jev_prob=0.02 ✓
+  n2_payment_iframe_modal  真值=0 | 启发式=challenged(1)✗ | jev_prob=0.12 ✓
+  n3_normal_modal          真值=0 | 启发式=progressed(0)✓ | jev_prob=0.02 ✓
+  n4_fullscreen_announce   真值=0 | 启发式=uncertain(0)✓ | jev_prob=0.03 ✓
+
+  启发式(形状规则): TP/FP/FN/TN = 1/1/4/3  P=0.50 R=0.20 F1=0.29 Acc=0.44
+  Jev 阈值 0.3: TP/FP/FN/TN = 3/0/2/4  P=1.00 R=0.60 F1=0.75 Acc=0.78
+  Jev 阈值 0.4: TP/FP/FN/TN = 3/0/2/4  P=1.00 R=0.60 F1=0.75 Acc=0.78
+  Jev 阈值 0.5: TP/FP/FN/TN = 3/0/2/4  P=1.00 R=0.60 F1=0.75 Acc=0.78
+  Jev 阈值 0.6: TP/FP/FN/TN = 3/0/2/4  P=1.00 R=0.60 F1=0.75 Acc=0.78
+  Jev 阈值 0.7: TP/FP/FN/TN = 3/0/2/4  P=1.00 R=0.60 F1=0.75 Acc=0.78
+  Jev 阈值 0.8: TP/FP/FN/TN = 3/0/2/4  P=1.00 R=0.60 F1=0.75 Acc=0.78
+  Jev 阈值 0.9: TP/FP/FN/TN = 2/0/3/4  P=1.00 R=0.40 F1=0.57 Acc=0.67
+
+== Jev 调用汇总 == 成功 10/10 次;总成本 $0.000371;平均延迟 1004 ms

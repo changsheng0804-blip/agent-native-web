@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>重置密码</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; }
+  form { max-width: 360px; }
+  input { display: block; width: 100%; margin: 6px 0; padding: 6px; box-sizing: border-box; }
+  button.submit { margin-top: 10px; padding: 8px 24px; cursor: pointer; }
+  #ov { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 9999; display: none; align-items: center; justify-content: center; }
+  #ov.show { display: flex; }
+  #ov .panel { width: 420px; background: #fff; border-radius: 8px; padding: 22px; text-align: center; }
+  #slider { margin-top: 18px; height: 40px; border-radius: 20px; background: #eee; line-height: 40px; color: #666; }
+</style>
+</head>
+<body>
+  <h1>重置密码</h1>
+  <form id="reset">
+    <input name="email" type="email" placeholder="注册邮箱" value="">
+    <button type="submit" class="submit" id="go">提交</button>
+  </form>
+
+  <div id="ov">
+    <div class="panel">
+      <h2>请完成人机验证以继续</h2>
+      <p>拖动下方滑块完成拼图验证</p>
+      <div id="slider">按住滑块,拖动到最右边</div>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('reset').addEventListener('submit', function(e) {
+      e.preventDefault();
+      document.getElementById('ov').classList.add('show');
+    });
+  </script>
+</body>
+</html>
