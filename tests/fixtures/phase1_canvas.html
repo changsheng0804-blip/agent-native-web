@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>phase1_canvas — 渲染器 + 观测层</title>
+<style>
+  body { margin: 0; font-family: Consolas, monospace; background: #0d1628; color: #cfe0f2; font-size: 12px; }
+  table { border-collapse: collapse; margin: 8px; }
+  td { width: 10px; height: 10px; padding: 0; border: 0.5px solid rgba(255,255,255,.06); }
+  #info { padding: 4px 10px; }
+</style>
+</head>
+<body>
+<div id="info">phase1_canvas v2 — 渲染器 + MutationObserver 观测层</div>
+<table id="grid"></table>
+<script>
+/* Phase 1 v2 夹具:
+ * 1) 哑渲染器:只负责 setCells(状态) 与 snapshot(读回),不含实验参数;
+ * 2) 观测层(Phase 0 机制移植):MutationObserver 事件驱动,维护动作窗口,
+ *    归因(agent=窗口内且颜色=窗口签名 / environment=其他),回滚信号
+ *    (窗口区域内环境变更),settled(静默 400ms 后关窗)。
+ *    A1 的策略通知只来自这里——不是环境引擎的知情,是观测层的输出。
+ * 环境故障(延迟/回滚/噪声)与记分(orders/rollbacks)仍在 harness 侧。 */
+(function () {
+  var COLS = 40, ROWS = 25, BG = "#101a3d";
+  var table = document.getElementById("grid");
+  var tds = [];
+  for (var r = 0; r < ROWS; r++) {
+    var tr = document.createElement("tr"), row = [];
+    for (var c = 0; c < COLS; c++) {
+      var td = document.createElement("td");
+      td.dataset.r = r; td.dataset.c = c;      // 观察者靠它定位(Phase 0 夹具同款)
+      td.style.backgroundColor = BG;
+      tr.appendChild(td); row.push(td);
+    }
+    table.appendChild(tr); tds.push(row);
+  }
+  function normColor(col) {
+    if (!col) return "";
+    col = String(col).trim();
+    if (col.charAt(0) === "#") {
+      var h = col.slice(1); if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+      return "rgb(" + parseInt(h.slice(0,2),16) + ", " + parseInt(h.slice(2,4),16) + ", " + parseInt(h.slice(4,6),16) + ")";
+    }
+    return col;
+  }
+
+  // ── 观测层(Phase 0 机制)──
+  var windows = {};                 // id → {color, r0,r1,c0,c1, open, lastActivity, sawAgent, rolled}
+  var notices = [];
+  var quietTimer = null;
+  var SETTLE_MS = 400;
+  var lastRbEmit = {};
+  var stats = { mutations: 0, agent: 0, environment: 0, settled: 0, regionReopen: 0 };
+
+  function emit(n) { notices.push(n); }
+  function classify(r, c, to) {
+    for (var id in windows) {
+      var w = windows[id];
+      if (r >= w.r0 && r <= w.r1 && c >= w.c0 && c <= w.c1) {
+        if (!w.open) {
+          // 已结算窗口的完整性破坏(回滚发生在 settle 之后)——单独通知(去重:200ms 内一次)
+          stats.regionReopen++;
+          var now2 = Date.now();
+          if (to !== w.color && (now2 - (lastRbEmit[id] || 0)) > 200) {
+            lastRbEmit[id] = now2;
+            emit({ type: "rolled_back", window: id });
+          }
+          return "environment-post-settle";
+        }
+        if (to === w.color) { w.sawAgent = true; w.lastActivity = Date.now(); stats.agent++; armSettle(); return "agent"; }
+        w.rolled = true; w.lastActivity = Date.now(); stats.environment++; armSettle(); return "environment-in-window";
+      }
+    }
+    stats.environment++;
+    return "environment";           // 区外变化(噪声):不影响窗口静默计时
+  }
+  function armSettle() {
+    if (quietTimer) clearTimeout(quietTimer);
+    quietTimer = setTimeout(function () {
+      var now = Date.now();
+      for (var id in windows) {
+        var w = windows[id];
+        if (!w.open) continue;
+        if (now - w.lastActivity >= SETTLE_MS) {
+          w.open = false; stats.settled++;
+          emit({ type: "settled", window: id, rolled_back: w.rolled && w.sawAgent,
+                 applied: w.sawAgent });
+        }
+      }
+    }, SETTLE_MS);
+  }
+  var mo = new MutationObserver(function (muts) {
+    muts.forEach(function (m) {
+      var td = m.target;
+      if (!td.dataset || td.dataset.r === undefined) return;
+      var r = +td.dataset.r, c = +td.dataset.c;
+      var from = normColor((m.oldValue || "").split(":").pop());
+      var to = normColor(td.style.backgroundColor);
+      if (from === to) return;
+      stats.mutations++;
+      classify(r, c, to);          // armSettle 只在区域内变化时由 classify 触发(噪声不重置)
+    });
+  });
+  mo.observe(table, { subtree: true, attributes: true, attributeFilter: ["style"], attributeOldValue: true });
+
+  window.__p1 = {
+    setCells: function (list) {
+      list.forEach(function (u) {
+        if (u.r >= 0 && u.r < ROWS && u.c >= 0 && u.c < COLS) tds[u.r][u.c].style.backgroundColor = u.color;
+      });
+      return true;
+    },
+    snapshot: function (r0, c0, r1, c1, target) {
+      var t = normColor(target), rows = [], filled = 0, other = 0, total = 0;
+      for (var r = r0; r <= r1; r++) {
+        var line = "";
+        for (var c = c0; c <= c1; c++) {
+          var col = normColor(tds[r][c].style.backgroundColor), ch;
+          if (col === t) { ch = "B"; filled++; }
+          else if (col === normColor(BG) || col === "") { ch = "."; }
+          else { ch = "X"; other++; }
+          total++; line += ch;
+        }
+        rows.push(line);
+      }
+      return { filled: filled, other: other, total: total, rows: rows };
+    },
+    openWindow: function (id, color, r0, c0, r1, c1) {
+      windows[id] = { color: normColor(color), r0: r0, r1: r1, c0: c0, c1: c1,
+                      open: true, lastActivity: Date.now(), sawAgent: false, rolled: false };
+      return true;
+    },
+    clearWindows: function () { windows = {}; return true; },
+    drainNotices: function () { var n = notices; notices = []; return n; },
+    observerStats: function () { return JSON.parse(JSON.stringify(stats)); }
+  };
+  document.getElementById("info").textContent = "phase1_canvas v2 就绪(40×25,观测层已挂载)";
+})();
+</script>
+</body>
+</html>

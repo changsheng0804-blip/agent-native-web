@@ -106,15 +106,18 @@ async def call(session, name, args, timeout=60):
     return json.loads(r.content[0].text)
 
 
-async def run_demo(case_id: str):
+async def run_demo(case_id: str, url: str | None = None):
     case = CASES[case_id]
-    sock = socket.socket()
-    sock.bind(("127.0.0.1", 0))
-    port = sock.getsockname()[1]
-    sock.close()
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    url = f"http://127.0.0.1:{port}/external_facts.html"
+    own_server = url is None
+    httpd = None
+    if own_server:
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{port}/external_facts.html"
 
     result = {"case": case, "url": url}
     try:
@@ -158,7 +161,8 @@ async def run_demo(case_id: str):
 
                 await call(session, "world_close", {"world_id": wid})
     finally:
-        httpd.shutdown()
+        if httpd is not None:
+            httpd.shutdown()
 
     # ---- 读法 C:隐藏裁判 ----
     result["ground_truth"] = GROUND_TRUTH["requests"]
