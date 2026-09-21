@@ -46,6 +46,7 @@ Agent World MCP Server
   world_find     页面元素查找(统一构件解析)
   world_act      语义动作(统一操作入口)
   world_outcome  操作后果卡信道(读取动作结果)
+  world_jev_decide 结构化决策(Jev 决策模型,经 OpenRouter;非页面工具)
 
 运行:python server.py  (stdio 模式,由 MCP 客户端拉起)
 """
@@ -244,6 +245,8 @@ _compact_focused_view,
     _focused_view,
     _t_world_guide,
 )
+
+from aw_jev import _t_world_jev_decide
 server = Server("agent-world")
 
 # ── 世界注册表 ────────────────────────────────────────────────
@@ -351,6 +354,10 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             return _ok({"world_id": world_id_i, "channel": "outcome", "page_outcome": "pending",
                         "action_id": action_id, "accepted": True, "confidence": "high",
                         "why": "动作已排入同一网页世界的有序执行队列"})
+        # Jev 决策是纯网络调用(无 Playwright 线程亲和),不排入单线程执行器,
+        # 避免一次远端决策阻塞页面动作队列;直接走异步 I/O。
+        if name == "world_jev_decide":
+            return await _t_world_jev_decide(arguments)
         # 全部在专用单一 executor 线程执行(Playwright 同步 API 强线程亲和)
         result = await asyncio.get_event_loop().run_in_executor(_pw_executor, _impl_with_status, name, arguments)
         return _apply_verdict_mode_result(result)

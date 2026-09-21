@@ -596,6 +596,29 @@ def build_tool_definitions():
                 "required": ["world_id"],
             },
         ),
+        # ── Jev 结构化决策(经 OpenRouter;纯决策工具,不需要 world_id) ──
+        types.Tool(
+            name="world_jev_decide",
+            description=("结构化决策(Jev System One 模型,经 OpenRouter):给一段 state 和若干类型化问题,"
+                         "返回概率/选项/评分,不生成文本。三种问题类型:noul(是/否,返回成立概率)、"
+                         "choice(多选一,criteria 为 {选项:说明} 字典)、score(有序评分,criteria 为从低到高档位列表)。"
+                         "一次请求可并行问多个问题,响应时间几乎不变。适合动作风险门控、结果归类、模型路由等决策点。"
+                         "需要环境变量 OPENROUTER_API_KEY;缺失或调用失败时返回 ok=false 的结构化说明,调用方可据此降级。"),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "state": {"type": "string", "description": "待判断的上下文(页面摘要/任务描述/候选动作等)"},
+                    "questions": {
+                        "type": "object",
+                        "description": ("问题集 {问题名: {type: noul|choice|score, instructions: 问题说明, "
+                                        "criteria: choice 为 {选项:说明} 字典 / score 为从低到高档位列表}}"),
+                        "additionalProperties": True,
+                    },
+                    "model": {"type": "string", "description": "可选模型覆盖,默认 typesafe/jev-1.13"},
+                },
+                "required": ["state", "questions"],
+            },
+        ),
     ]
 
 

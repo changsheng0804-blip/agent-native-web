@@ -95,6 +95,7 @@ SCOPES = {
     "experiments/test_three_questions_judge.py": ["experiments", "judgment"],
     "experiments/test_server_timeline.py": ["timeline", "premise"],
     "test_layers.py": ["layers", "query"],
+    "test_jev_client.py": ["jev"],
     # real 组
     "test_map.py": ["map", "navigation"],
     "test_map_drill.py": ["map"],
@@ -174,6 +175,7 @@ GROUPS = {
             "experiments/test_server_premise.py",  # 决策前提监视(assume/ack/status 工具层,order_form 夹具)
             "experiments/test_three_questions_judge.py",  # 三问实验判分器回归(防"仪器"失真)
             "test_layers.py",                # world_layers 图层视图(结构/语义/空间/交互/名字)
+            "test_jev_client.py",            # Jev 决策客户端:参数校验/请求构造/响应解析(mock 离线)
         ],
     },
     "real": {
