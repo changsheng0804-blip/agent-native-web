@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>守护模式 — 动的画布上的 Runtime 实时反馈 MVP</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsuites@3.1.0/dist/jsuites.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jspreadsheet@4.5.3/dist/jexcel.css">
+<style>
+  html, body { margin: 0; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #eef0f4; }
+  #titlebar { background: #1e3a5f; color: #fff; padding: 5px 12px; font-size: 13px; }
+  #spreadsheet { padding: 8px; width: 720px; }
+  .jexcel { margin: 0 auto; }
+  .jexcel td { border-color: #dfe3ea !important; }
+  .jexcel tbody tr td { height: 8px !important; line-height: 8px !important; padding: 0 !important; font-size: 0 !important; }
+  .jexcel tbody tr td:first-child { font-size: 8px !important; line-height: 8px !important; }
+  .jexcel thead tr td, .jexcel thead tr th { height: 14px !important; font-size: 9px !important; padding: 0 !important; }
+  .jexcel_content { max-height: none !important; overflow: visible !important; }
+  #panel { position: fixed; top: 10px; right: 10px; width: 340px; background: rgba(13, 22, 40, .96);
+           border: 1px solid #2a3b5f; border-radius: 10px; padding: 12px; color: #cfe0f2;
+           font-size: 12px; z-index: 30; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+  #ptitle { font-weight: bold; font-size: 13px; color: #fff; margin-bottom: 6px; }
+  #pstats { margin: 8px 0; padding: 8px; background: rgba(255,255,255,.06); border-radius: 6px; line-height: 1.7; }
+  #pstats b { color: #9fd49f; }
+  #pstats .warn { color: #ffd774; }
+  #plog { line-height: 1.6; }
+  #plog div { padding: 1px 0; border-bottom: 1px dashed rgba(255,255,255,.08); }
+  .legend { margin-top: 6px; color: #7f94b8; font-size: 10px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div id="titlebar"><b>🛡 守护模式 MVP</b> — 这幅画是"活"的：每秒被侵蚀 5 格，看 Runtime 能否实时发现、归因、修复</div>
+<div id="spreadsheet"></div>
+<div id="panel">
+  <div id="ptitle">🛡 Runtime 实时反馈</div>
+  <div id="pstats">启动中……</div>
+  <div id="plog"></div>
+  <div class="legend">灰色/绿/红斑点 = 环境侵蚀（1秒5格） · 橙色块 = agent 填色 · 面板 = Runtime 的事件流</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/jsuites@3.1.0/dist/jsuites.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspreadsheet@4.5.3/dist/jexcel.min.js"></script>
+<script>
+var COLS = 80, ROWS = 50;
+var headers = [];
+for (var i = 0; i < COLS; i++) {
+  var n = i + 1, label = "";
+  while (n > 0) { var m = (n - 1) % 26; label = String.fromCharCode(65 + m) + label; n = Math.floor((n - 1) / 26); }
+  headers.push(label);
+}
+var data = [];
+for (var r = 0; r < ROWS; r++) { data.push(new Array(COLS).fill("")); }
+var sheet = jexcel(document.getElementById("spreadsheet"), {
+  data: data, colHeaders: headers,
+  colWidths: new Array(COLS).fill(8), rowHeight: 8,
+  tableOverflow: true, minDimensions: [COLS, ROWS]
+});
+window.__sheet = sheet;
+
+// ================= 《星空》v3 构图（目标状态） =================
+var colName = function (c) { var n = c + 1, l = ""; while (n > 0) { var m = (n - 1) % 26; l = String.fromCharCode(65 + m) + l; n = Math.floor((n - 1) / 26); } return l; };
+(function paintStarryNight(s) {
+  var W = 80, H = 50, S = {};
+  var set = function (c, r, col) { if (c >= 0 && c < W && r >= 0 && r < H) S[colName(c) + (r + 1)] = "background-color:" + col; };
+  var skyLerp = function (r) {
+    var stops = [[0, "#101a3d"], [16, "#1b2a5b"], [26, "#22356e"], [33, "#2b3f77"]];
+    for (var i = 1; i < stops.length; i++) { if (r <= stops[i][0]) {
+      var a = stops[i - 1], b = stops[i], t = (r - a[0]) / (b[0] - a[0]);
+      var h = function (x, y) { return Math.round(parseInt(x, 16) + (parseInt(y, 16) - parseInt(x, 16)) * t).toString(16).padStart(2, "0"); };
+      return "#" + h(a[1].slice(1, 3), b[1].slice(1, 3)) + h(a[1].slice(3, 5), b[1].slice(3, 5)) + h(a[1].slice(5, 7), b[1].slice(5, 7)); } }
+    return "#2b3f77"; };
+  for (var r = 0; r < 35; r++) for (var c = 0; c < W; c++) set(c, r, skyLerp(r));
+  var bands = [
+    { base: 16, amp: 2.5, wl: 18, ph: 0.8, main: "#3d66a8", edge: "#6f94cc", half: 1.8 },
+    { base: 24, amp: 3, wl: 13, ph: 0, main: "#3a6b8a", edge: "#6f9ab8", half: 2.0 },
+    { base: 31, amp: 2.2, wl: 15, ph: 1.5, main: "#4a6cb0", edge: "#7f9bd4", half: 1.8 }];
+  for (var bi = 0; bi < bands.length; bi++) { var b = bands[bi];
+    for (var c = 0; c < W; c++) { var cy = b.base + b.amp * Math.sin((c - 12) / b.wl * 2 * Math.PI + b.ph);
+      for (var r = 8; r < 35; r++) { var d = Math.abs(r - cy);
+        if (d <= b.half) set(c, r, b.main); else if (d <= b.half + 1) set(c, r, b.edge); } } }
+  for (var r = 0; r < 20; r++) for (var c = 44; c < 70; c++) {
+    var d2 = Math.pow((c - 57) / 9, 2) + Math.pow((r - 10) / 6.5, 2);
+    if (d2 <= 1) set(c, r, "#f2d049"); else if (d2 <= 1.45) set(c, r, "#d9bd52"); else if (d2 <= 1.9) set(c, r, "#bfa046"); }
+  for (var r = 8; r < 12; r++) for (var c = 53; c < 62; c++) {
+    if (Math.pow((c - 57) / 3.5, 2) + Math.pow((r - 10) / 2.2, 2) <= 1) set(c, r, "#fdf3b0"); }
+  var seed = 42; var rnd = function () { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  var inMoon = function (c, r) { var dx = (c - 57) / 13, dy = (r - 10) / 9; return dx * dx + dy * dy <= 1; };
+  var stars = 0;
+  for (var i = 0; i < 80 && stars < 36; i++) { var sc = Math.floor(rnd() * 44) + 2, sr = Math.floor(rnd() * 9) + 2;
+    if (inMoon(sc, sr) || sc < 16) continue; if (rnd() < 0.85) { set(sc, sr, "#efecc4"); stars++; } }
+  var big = [[10, 6], [24, 4], [38, 5], [6, 10], [30, 8], [44, 3]];
+  for (var bi = 0; bi < big.length; bi++) { var bc = big[bi][0], br = big[bi][1]; if (inMoon(bc, br)) continue;
+    set(bc, br, "#f6f1c8");
+    var arms = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+    for (var ai = 0; ai < arms.length; ai++) set(bc + arms[ai][0], br + arms[ai][1], "#e6dfa8"); }
+  for (var c = 0; c < W; c++) set(c, 35, "#4a5a8a");
+  for (var r = 36; r < 45; r++) for (var c = 26; c < W; c++) set(c, r, "#33405f");
+  for (var c = 26; c < W; c++) { var rh = 38 + Math.round(1.8 * Math.sin(c / 3.7) + 1.2 * Math.sin(c / 1.9 + 2));
+    for (var r = Math.max(36, rh); r <= 40; r++) set(c, r, "#1a2440"); }
+  for (var i = 0; i < 20; i++) { var wc = 28 + Math.floor(rnd() * 48), wr = 41 + Math.floor(rnd() * 3);
+    if (wc < 79) set(wc, wr, "#f7d774"); }
+  for (var r = 30; r <= 36; r++) { set(48, r, "#0f1728"); set(49, r, "#0f1728"); set(50, r, "#0f1728"); set(51, r, "#0f1728"); }
+  for (var r = 28; r <= 29; r++) { set(49, r, "#0c1424"); set(50, r, "#0c1424"); }
+  set(49, 27, "#e8dcaa"); set(50, 27, "#e8dcaa");
+  for (var r = 45; r < 50; r++) for (var c = 0; c < W; c++) { var w = Math.sin(c / 11);
+    if (r >= 45 + Math.round(Math.max(0, w))) set(c, r, r > 47 ? "#18233a" : "#22304a"); }
+  for (var r = 10; r <= 47; r++) { var t = (r - 8) / 39;
+    var cx = 6.5 + 4 * t + 0.9 * Math.sin(t * 6);
+    var hw = 1.4 + 3.2 * Math.sqrt(Math.max(0, t));
+    if (r < 13) hw *= 0.55;
+    for (var c = Math.floor(cx - hw); c <= Math.ceil(cx + hw); c++) {
+      if (Math.abs(c - cx) <= hw * 0.5) set(c, r, "#060d18"); else set(c, r, "#14263a"); } }
+  for (var r = 36; r < 50; r++) for (var c = 0; c < W; c++) { var key = colName(c) + (r + 1);
+    if (!S[key]) S[key] = "background-color:" + (r > 46 ? "#18233a" : "#22304a"); }
+  s.setStyle(S);
+})(sheet);
+
+// ================= Runtime 守护层 =================
+var target = [], last = [];
+for (var r = 0; r < ROWS; r++) { var tr = [], lr = [];
+  for (var c = 0; c < COLS; c++) { var v = sheet.records[r][c].style.backgroundColor || ""; tr.push(v); lr.push(v); }
+  target.push(tr); last.push(lr); }
+
+var corruptionTs = {};        // 每次破坏的精确时刻（注入器盖章）
+function normColor(col) {     // 颜色归一化：#ff8800 → rgb(255, 136, 0)，状态比较必须用同一表示
+  if (!col) return "";
+  if (col[0] === "#") {
+    var h = col.slice(1); if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+    return "rgb(" + parseInt(h.slice(0,2),16) + ", " + parseInt(h.slice(2,4),16) + ", " + parseInt(h.slice(4,6),16) + ")";
+  }
+  return col;
+}
+var myIntended = {};          // agent 在途动作的意图色（回滚检测的依据）
+var rollbackWatch = false;
+var stats = { ero: 0, rep: 0, roll: 0, maxLat: 0, latSum: 0, latN: 0, lastAlarm: "（尚无）" };
+var logs = [];
+function nowStr() { return new Date().toLocaleTimeString("zh-CN", { hour12: false }); }
+function log(s) { logs.unshift(nowStr() + "  " + s); if (logs.length > 9) logs.pop(); renderPanel(); }
+function renderPanel() {
+  var avg = stats.latN ? Math.round(stats.latSum / stats.latN) : 0;
+  document.getElementById("pstats").innerHTML =
+    "环境侵蚀 <b>" + stats.ero + "</b> 格 · 已修复 <b>" + stats.rep + "</b> 格<br>" +
+    "回滚捕获 <b class='warn'>" + stats.roll + "</b> 格 · 检测延迟 平均 <b>" + avg + "ms</b> / 峰值 " + stats.maxLat + "ms" +
+    "<br>🚨 最近事故：<span class='warn'>" + stats.lastAlarm + "</span>";
+  document.getElementById("plog").innerHTML = logs.map(function (l) { return "<div>" + l + "</div>"; }).join("");
+}
+log("✓ 画作完成（4000 格）· 目标状态已存档 · 守护开始");
+
+// ---- 侵蚀器：世界自己在动（每秒破坏 5 格） ----
+setInterval(function () {
+  var n = 0;
+  for (var i = 0; i < 5; i++) {
+    var r = Math.floor(Math.random() * ROWS), c = Math.floor(Math.random() * COLS);
+    var key = r + "_" + c;
+    if (myIntended[key] !== undefined) continue;   // 不碰 agent 在途动作
+    if (!last[r][c]) continue;
+    var bad = ["#7a7a7a", "#3f7f3f", "#8f2f2f", "#c8b23a"][Math.floor(Math.random() * 4)];
+    sheet.records[r][c].style.backgroundColor = bad;
+    corruptionTs[key] = performance.now();
+    n++;
+  }
+  if (n) log("🎞 环境侵蚀了 " + n + " 格……（守护者尚未发现）");
+}, 1000);
+
+// ---- 观察者（每 500ms 对账一次）：diff → 归因 → 修复 ----
+setInterval(function () {
+  var ero = 0, roll = 0, maxLat = 0;
+  for (var r = 0; r < ROWS; r++) for (var c = 0; c < COLS; c++) {
+    var key = r + "_" + c;
+    var cur = sheet.records[r][c].style.backgroundColor || "";
+    if (cur === last[r][c]) continue;              // 无变化
+    if (myIntended[key] !== undefined) {           // 在我有意图的格子上
+      if (cur === myIntended[key]) { last[r][c] = cur; }   // 是我自己填的 → 接受
+      else {                                       // 被别人改了 → 回滚警报
+        roll++;
+        var ts = corruptionTs[key] || performance.now();
+        var lat = Math.round(performance.now() - ts); if (lat > maxLat) maxLat = lat;
+        delete corruptionTs[key];
+        sheet.records[r][c].style.backgroundColor = myIntended[key];
+        last[r][c] = myIntended[key];
+      }
+    } else if (cur !== target[r][c]) {             // 环境侵蚀 → 修复
+      ero++;
+      var ts2 = corruptionTs[key] || performance.now();
+      var lat2 = Math.round(performance.now() - ts2);
+      if (lat2 > maxLat) maxLat = lat2;
+      stats.latSum += lat2; stats.latN++;
+      delete corruptionTs[key];
+      sheet.records[r][c].style.backgroundColor = target[r][c];
+      last[r][c] = target[r][c];
+    } else { last[r][c] = cur; }
+  }
+  if (ero) { stats.ero += ero; stats.rep += ero; log("🛡 发现侵蚀 " + ero + " 格 → 已全部修复 ✓"); }
+  if (roll) { stats.roll += roll; stats.lastAlarm = nowStr() + " 回滚警报：" + roll + " 格被偷偷改掉，已当场补齐"; log("⚠ <b>回滚警报！</b>" + roll + " 格被偷偷改掉 → 已当场补齐 ✓"); }
+  if (maxLat > stats.maxLat) stats.maxLat = maxLat;
+  renderPanel();
+}, 500);
+
+// ---- agent 通道：我可以实时行动并读取同一份反馈 ----
+window.__rt = {
+  stats: function () { var s = JSON.parse(JSON.stringify(stats)); s.avgLat = stats.latN ? Math.round(stats.latSum / stats.latN) : 0; return s; },
+  log: function () { return logs.slice(); },
+  incident: function () {
+    var r0 = 20, r1 = 25, c0 = 40, c1 = 49, color = "#ff8800", n = 0;
+    var patch = {};
+    for (var r = r0; r <= r1; r++) for (var c = c0; c <= c1; c++) {
+      var key = r + "_" + c;
+      myIntended[key] = normColor(color);
+      patch[colName(c) + (r + 1)] = "background-color:" + color;
+      n++;
+    }
+    sheet.setStyle(patch);
+    log("🖌 agent 在区域 [" + r0 + "-" + r1 + " × " + c0 + "-" + c1 + "] 填色 " + n + " 格（橙）");
+    setTimeout(function () {                          // 2 秒后：隐藏回滚
+      var keys = Object.keys(myIntended), m = 0, used = {};
+      while (m < 30) { var k = keys[Math.floor(Math.random() * keys.length)];
+        if (used[k]) continue; used[k] = 1;
+        var rc = k.split("_");
+        sheet.records[+rc[0]][+rc[1]].style.backgroundColor = "#4a4a4a";
+        corruptionTs[k] = performance.now(); m++; }
+      if (m) log("🎬 （注入器）趁你不注意，抹掉了其中 " + m + " 格……");
+    }, 2000);
+    setTimeout(function () {                          // 15 秒后：事故平息，意图并入守护目标
+      for (var k in myIntended) { var rc = k.split("_"); target[+rc[0]][+rc[1]] = myIntended[k]; }
+      myIntended = {};
+      log("✓ 事故平息 · 新状态已并入守护目标");
+    }, 15000);    return { cells: n, region: [r0, c0, r1, c1], note: "2 秒后将有 30 格被静默回滚，观察守护者反应" };
+  }
+};
+renderPanel();
+</script>
+</body>
+</html>
