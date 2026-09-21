@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>会员登录</title>
+<style>
+  body { font-family: sans-serif; padding: 20px; }
+  form { max-width: 360px; }
+  input { display: block; width: 100%; margin: 6px 0; padding: 6px; box-sizing: border-box; }
+  button.submit { margin-top: 10px; padding: 8px 24px; cursor: pointer; }
+  #verify-box { display: none; margin-top: 14px; padding: 10px; border: 1px solid #e2b93b; background: #fffbe6; }
+  #verify-box.show { display: block; }
+</style>
+</head>
+<body>
+  <h1>会员登录</h1>
+  <form id="login">
+    <input name="phone" type="text" placeholder="手机号" value="">
+    <input name="code" type="password" placeholder="密码" value="">
+    <button type="submit" class="submit" id="go">提交</button>
+  </form>
+
+  <div id="verify-box">
+    安全验证:请输入图中 4 位数字验证码以继续
+    <input placeholder="验证码" style="width:120px">
+  </div>
+
+  <script>
+    document.getElementById('login').addEventListener('submit', function(e) {
+      e.preventDefault();
+      document.getElementById('verify-box').classList.add('show');
+    });
+  </script>
+</body>
+</html>

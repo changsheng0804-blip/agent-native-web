@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>结构化视频流 — 随机剧目盲读实验</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jsuites@3.1.0/dist/jsuites.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jspreadsheet@4.5.3/dist/jexcel.css">
+<style>
+  html, body { margin: 0; font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #eef0f4; }
+  #titlebar { background: #1e3a5f; color: #fff; padding: 5px 12px; font-size: 13px; }
+  #spreadsheet { padding: 8px; width: 720px; }
+  .jexcel { margin: 0 auto; }
+  .jexcel td { border-color: #dfe3ea !important; }
+  .jexcel tbody tr td { height: 8px !important; line-height: 8px !important; padding: 0 !important; font-size: 0 !important; }
+  .jexcel tbody tr td:first-child { font-size: 8px !important; line-height: 8px !important; }
+  .jexcel thead tr td, .jexcel thead tr th { height: 14px !important; font-size: 9px !important; padding: 0 !important; }
+  .jexcel_content { max-height: none !important; overflow: visible !important; }
+  #panel { position: fixed; top: 10px; right: 10px; width: 360px; background: rgba(13, 22, 40, .96);
+           border: 1px solid #2a3b5f; border-radius: 10px; padding: 12px; color: #cfe0f2;
+           font-size: 12px; z-index: 30; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
+  #ptitle { font-weight: bold; font-size: 13px; color: #fff; margin-bottom: 6px; }
+  #pstats { margin: 8px 0; padding: 8px; background: rgba(255,255,255,.06); border-radius: 6px; line-height: 1.7; }
+  #pstats b { color: #9fd49f; }
+  #plog div { padding: 1px 0; border-bottom: 1px dashed rgba(255,255,255,.08); line-height: 1.6; }
+  #btns { margin-top: 8px; }
+  #btns button { padding: 5px 12px; background: #2a3b5f; color: #fff; border: 0; border-radius: 6px;
+                 cursor: pointer; font-size: 12px; margin-right: 6px; }
+  .legend { margin-top: 6px; color: #7f94b8; font-size: 10px; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div id="titlebar"><b>🎲 随机剧目盲读实验</b> — 动画参数运行时随机化（连 agent 也不知道），agent 只读事件流报告"看到了什么"</div>
+<div id="spreadsheet"></div>
+<div id="panel">
+  <div id="ptitle">🎬 Runtime 事件字幕</div>
+  <div id="pstats">待开机 —— 点击下方按钮开始随机剧目</div>
+  <div id="plog"></div>
+  <div id="btns">
+    <button onclick="window.__startRandom()">🎲 随机剧目</button>
+    <button onclick="window.__replayLast()">↺ 重播上一剧目</button>
+  </div>
+  <div class="legend">物体数量/颜色/起点/速度/弹跳在开机瞬间随机生成，页面上不显示参数。agent 仅通过 window.__feed 获知画面内容。</div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/jsuites@3.1.0/dist/jsuites.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jspreadsheet@4.5.3/dist/jexcel.min.js"></script>
+<script>
+var COLS = 80, ROWS = 50;
+var headers = [];
+for (var i = 0; i < COLS; i++) {
+  var n = i + 1, label = "";
+  while (n > 0) { var m = (n - 1) % 26; label = String.fromCharCode(65 + m) + label; n = Math.floor((n - 1) / 26); }
+  headers.push(label);
+}
+var data = [];
+for (var r = 0; r < ROWS; r++) { data.push(new Array(COLS).fill("")); }
+var sheet = jexcel(document.getElementById("spreadsheet"), {
+  data: data, colHeaders: headers,
+  colWidths: new Array(COLS).fill(8), rowHeight: 8,
+  tableOverflow: true, minDimensions: [COLS, ROWS]
+});
+window.__sheet = sheet;
+
+var BG = "#101a3d";
+var colName = function (c) { var n = c + 1, l = ""; while (n > 0) { var m = (n - 1) % 26; l = String.fromCharCode(65 + m) + l; n = Math.floor((n - 1) / 26); } return l; };
+
+function paintBG() {
+  var S = {};
+  for (var r = 0; r < ROWS; r++) for (var c = 0; c < COLS; c++) S[colName(c) + (r + 1)] = "background-color:" + BG;
+  sheet.setStyle(S);
+  for (var r = 0; r < ROWS; r++) for (var c = 0; c < COLS; c++) last[r][c] = BG;
+}
+var last = [];
+for (var r = 0; r < ROWS; r++) { var lr = []; for (var c = 0; c < COLS; c++) lr.push(BG); last.push(lr); }
+paintBG();
+
+// ---- 观察者：每 300ms diff，按颜色聚合 ----
+var t0 = Date.now();
+window.__feed = [];
+var eventCount = 0, playing = false;
+var logs = [];
+function log(s) { logs.unshift(s); if (logs.length > 9) logs.pop();
+  document.getElementById("plog").innerHTML = logs.map(function (l) { return "<div>" + l + "</div>"; }).join(""); }
+
+var obs = setInterval(function () {
+  var groups = {};
+  for (var r = 0; r < ROWS; r++) for (var c = 0; c < COLS; c++) {
+    var cur = sheet.records[r][c].style.backgroundColor || "";
+    if (cur === last[r][c]) continue;
+    if (!groups[cur]) groups[cur] = { n: 0, minX: c, maxX: c, minY: r, maxY: r, sx: 0, sy: 0 };
+    var g = groups[cur];
+    g.n++; g.sx += c; g.sy += r;
+    if (c < g.minX) g.minX = c; if (c > g.maxX) g.maxX = c;
+    if (r < g.minY) g.minY = r; if (r > g.maxY) g.maxY = r;
+    last[r][c] = cur;
+  }
+  var names = {};
+  if (window.__cfg) window.__cfg.objects.forEach(function (o) { names[o.color] = o.name; });
+  var t = +((Date.now() - t0) / 1000).toFixed(1);
+  for (var col in groups) {
+    var g = groups[col];
+    var ev = { t: t, 对象: names[col] || (col === BG ? "背景擦除" : col), n: g.n,
+               质心: [+(g.sx / g.n).toFixed(1), +(g.sy / g.n).toFixed(1)],
+               包围盒: [g.minX, g.minY, g.maxX, g.maxY] };
+    window.__feed.push(ev); eventCount++;
+    if (names[col]) log("t=" + t + "s  " + ev.对象 + " " + g.n + " 格 @ 质心(" + ev.质心[0] + "," + ev.质心[1] + ")");
+  }
+  if (playing) document.getElementById("pstats").innerHTML = "播放中 t=" + t + "s · 已产出事件 <b>" + eventCount + "</b> 个";
+}, 300);
+
+// ---- 随机剧目 ----
+function hslToHex(h, s, l) {
+  s /= 100; l /= 100;
+  var f = function (n) { var k = (n + h / 30) % 12; var a = s * Math.min(l, 1 - l);
+    var v = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+    return Math.round(255 * v).toString(16).padStart(2, "0"); };
+  return "#" + f(0) + f(8) + f(4);
+}
+function randomConfig() {
+  var k = 2 + Math.floor(Math.random() * 2);          // 2-3 个物体
+  var colors = [];
+  while (colors.length < k) {
+    var c = hslToHex(Math.floor(Math.random() * 360), 70 + Math.floor(Math.random() * 25), 55 + Math.floor(Math.random() * 12));
+    if (colors.indexOf(c) < 0) colors.push(c);
+  }
+  var objs = [];
+  for (var i = 0; i < k; i++) {
+    var vx = 0, vy = 0;
+    while (vx === 0 && vy === 0) { vx = Math.floor(Math.random() * 7) - 3; vy = Math.floor(Math.random() * 7) - 3; }
+    objs.push({
+      name: "物体" + (i + 1) + "(" + colors[i] + ")",
+      color: colors[i],
+      size: Math.random() < 0.5 ? 3 : 4,
+      x: 6 + Math.floor(Math.random() * (COLS - 16)),
+      y: 5 + Math.floor(Math.random() * (ROWS - 14)),
+      vx: vx, vy: vy,
+      bob: Math.random() < 0.35 ? 2 + Math.floor(Math.random() * 3) : 0,
+      start: 1 + Math.floor(Math.random() * 4)
+    });
+  }
+  return { objects: objs, ticks: 32 };
+}
+
+var balls = [], tick = 0, player = null, lastCfg = null;
+function drawAt(x, y, size, color) { for (var dr = 0; dr < size; dr++) for (var dc = 0; dc < size; dc++) sheet.records[y + dr][x + dc].style.backgroundColor = color; }
+
+function startShow(cfg) {
+  if (playing) return "正在播放中";
+  lastCfg = cfg; balls = []; tick = 0;
+  window.__feed = []; eventCount = 0; t0 = Date.now();
+  for (var r = 0; r < ROWS; r++) for (var c = 0; c < COLS; c++) last[r][c] = BG;
+  paintBG();
+  cfg.objects.forEach(function (o) { balls.push({ color: o.color, size: o.size, x: o.x, y: o.y, px: o.x, py: o.y, vx: o.vx, vy: o.vy, bob: o.bob, start: o.start, drawn: false }); });
+  playing = true;
+  log("🎲 随机剧目开机：" + cfg.objects.length + " 个物体（参数保密，agent 不可见）");
+  player = setInterval(step, 600);
+  return "已开机";
+}
+function step() {
+  tick++;
+  balls.forEach(function (b) {
+    if (tick < b.start) return;
+    if (!b.drawn) { b.px = b.x; b.py = b.y; drawAt(b.px, b.py, b.size, b.color); b.drawn = true; return; }
+    drawAt(b.px, b.py, b.size, BG);                      // 擦旧
+    var nx = b.x + b.vx;
+    if (nx < 0) { nx = -nx; b.vx = -b.vx; }
+    if (nx + b.size > COLS) { nx = 2 * (COLS - b.size) - nx; b.vx = -b.vx; }
+    var ny = b.y + b.vy;
+    if (ny < 0) { ny = -ny; b.vy = -b.vy; }
+    if (ny + b.size > ROWS) { ny = 2 * (ROWS - b.size) - ny; b.vy = -b.vy; }
+    b.x = nx; b.y = ny;
+    var dy = b.bob ? Math.round(b.bob * Math.sin(tick * 0.9)) : 0;
+    b.py = Math.max(0, Math.min(ROWS - b.size, b.y + dy));
+    b.px = b.x;
+    drawAt(b.px, b.py, b.size, b.color);                 // 画新
+  });
+  if (tick >= 32) {
+    clearInterval(player); playing = false;
+    document.getElementById("pstats").innerHTML = "✓ 播放结束 · 共 <b>" + eventCount + "</b> 个结构化事件 · agent 通过 window.__feed 读取";
+    log("✓ 播放结束（约 " + ((Date.now() - t0) / 1000).toFixed(1) + "s）· " + eventCount + " 个事件");
+  }
+}
+window.__startRandom = function () { return startShow(randomConfig()); };
+window.__replayLast = function () { return lastCfg ? startShow(lastCfg) : "还没有剧目"; };
+</script>
+</body>
+</html>
